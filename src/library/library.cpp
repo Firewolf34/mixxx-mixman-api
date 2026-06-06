@@ -21,6 +21,7 @@
 #include "library/mixxxlibraryfeature.h"
 #include "library/recording/recordingfeature.h"
 #include "library/rekordbox/rekordboxfeature.h"
+#include "library/rest/restlibraryfeature.h"
 #include "library/rhythmbox/rhythmboxfeature.h"
 #include "library/serato/seratofeature.h"
 #include "library/sidebarmodel.h"
@@ -71,6 +72,7 @@ Library::Library(
           m_pLibraryControl(make_parented<LibraryControl>(this)),
           m_pLibraryWidget(nullptr),
           m_pMixxxLibraryFeature(nullptr),
+          m_pRestLibraryFeature(nullptr),
           m_pPlaylistFeature(nullptr),
           m_pCrateFeature(nullptr),
           m_pAnalysisFeature(nullptr) {
@@ -97,6 +99,11 @@ Library::Library(
             &Library::exportLibrary,
             Qt::DirectConnection /* signal-to-signal */);
 #endif
+
+    m_pRestLibraryFeature = new mixxx::library::rest::RestLibraryFeature(
+            this,
+            m_pConfig);
+    addFeature(m_pRestLibraryFeature);
 
     addFeature(new AutoDJFeature(this, m_pConfig, pPlayerManager));
 

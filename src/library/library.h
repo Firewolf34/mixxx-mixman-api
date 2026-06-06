@@ -34,6 +34,10 @@ class WLibrarySidebar;
 class WLibrary;
 class QAbstractItemModel;
 
+namespace mixxx::library::rest {
+class RestLibraryFeature;
+} // namespace mixxx::library::rest
+
 #ifdef __ENGINEPRIME__
 namespace mixxx {
 class LibraryExporter;
@@ -170,6 +174,7 @@ class Library: public QObject {
     const static QString m_sAutoDJViewName;
     WLibrary* m_pLibraryWidget;
     MixxxLibraryFeature* m_pMixxxLibraryFeature;
+    mixxx::library::rest::RestLibraryFeature* m_pRestLibraryFeature;
     PlaylistFeature* m_pPlaylistFeature;
     CrateFeature* m_pCrateFeature;
     AnalysisFeature* m_pAnalysisFeature;
