@@ -1,16 +1,16 @@
 # Deck Laptop Flatpak Testing
 
-This workflow is for testing LAN-built Mixxx changes on a Debian laptop connected to DJ hardware. Keep the laptop focused on installing and running artifacts; avoid rebuilding Mixxx there unless you need to debug a laptop-only issue.
+This workflow is for testing LAN-built or GitHub-built Mixxx changes on a Debian laptop connected to DJ hardware. Keep the laptop focused on installing and running artifacts; avoid rebuilding Mixxx there unless you need to debug a laptop-only issue.
 
 ## Build Artifact
 
-Push the test branch to the LAN repo and build the Flatpak on a faster Linux machine:
+Keep the LAN repo as the source of truth:
 
 ```bash
 git push blue codex/rest-library-phase1-2.5.6
 ```
 
-On the build machine:
+For a local Linux build machine:
 
 ```bash
 git fetch blue
@@ -20,7 +20,21 @@ tools/flatpak_buildenv.sh setup --system
 packaging/flatpak/flatpak_build.sh bundle
 ```
 
-Copy the resulting `x86_64` Flatpak artifact to the deck laptop:
+For the GitHub build mirror, add the fork as a remote once:
+
+```bash
+git remote add github https://github.com/Firewolf34/mixxx-mixman-api.git
+```
+
+Then push the branch to GitHub and run the manual workflow:
+
+```bash
+git push github codex/rest-library-phase1-2.5.6
+```
+
+In GitHub, run **Actions > Deck Flatpak Build > Run workflow** for `codex/rest-library-phase1-2.5.6`, then download the `Mixxx-flatpak-x86_64` artifact.
+
+Copy the resulting Flatpak artifact to the deck laptop:
 
 ```bash
 Mixxx.flatpak
