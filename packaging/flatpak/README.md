@@ -64,6 +64,8 @@ The `--manifest <file>` option accepts a custom Flatpak build manifest file as a
 
 The **bundle** command builds Mixxx as a single-file Flatpak user bundle that can be easily installed to multiple systems. This build method is recommended for all Mixxx users.
 
+For repeat testing on a Debian laptop connected to DJ hardware, see [Deck Laptop Flatpak Testing](deck-testing.md).
+
 ## Debug extension build
 
 `packaging/flatpak/flatpak_build.sh debug [--builder] [--manifest <file>]`
