@@ -1,23 +1,37 @@
 # Deck Laptop Flatpak Testing
 
-This workflow is for testing CI-built Mixxx changes on a Debian laptop connected to DJ hardware. Keep the laptop focused on installing and running artifacts; avoid rebuilding Mixxx there unless you need to debug a laptop-only issue.
+This workflow is for testing LAN-built Mixxx changes on a Debian laptop connected to DJ hardware. Keep the laptop focused on installing and running artifacts; avoid rebuilding Mixxx there unless you need to debug a laptop-only issue.
 
 ## Build Artifact
 
-Push the test branch to the fork and wait for the branch build workflow to finish. Download the `x86_64` Flatpak artifact from the successful run:
+Push the test branch to the LAN repo and build the Flatpak on a faster Linux machine:
 
 ```bash
-Mixxx-<git-description>-x86_64.flatpak
+git push blue codex/rest-library-phase1-2.5.6
+```
+
+On the build machine:
+
+```bash
+git fetch blue
+git switch codex/rest-library-phase1-2.5.6
+git pull --ff-only blue codex/rest-library-phase1-2.5.6
+tools/flatpak_buildenv.sh setup --system
+packaging/flatpak/flatpak_build.sh bundle
+```
+
+Copy the resulting `x86_64` Flatpak artifact to the deck laptop:
+
+```bash
+Mixxx.flatpak
 ```
 
 The matching `Debug.flatpak` artifact is only needed when you need debug symbols.
 
-With GitHub CLI, the download loop is:
+If the build machine publishes named artifacts, use the `x86_64` bundle and keep the filename or commit hash with the test notes:
 
 ```bash
-gh run list --repo <fork-owner>/mixxx --branch codex/rest-library-phase1-2.5.6 --limit 5
-gh run download <run-id> --repo <fork-owner>/mixxx -D ~/Downloads/mixxx-artifacts
-find ~/Downloads/mixxx-artifacts -name '*x86_64.flatpak' ! -name '*.Debug.flatpak'
+Mixxx-<git-description>-x86_64.flatpak
 ```
 
 ## Laptop Setup
@@ -32,10 +46,10 @@ Unplug and replug USB controllers after setup so the new udev rules apply.
 
 ## Install And Run
 
-Install a downloaded CI artifact:
+Install a copied Flatpak artifact:
 
 ```bash
-tools/deck_flatpak_deploy.sh install ~/Downloads/mixxx-artifacts/Mixxx-*-x86_64.flatpak
+tools/deck_flatpak_deploy.sh install ~/Downloads/mixxx-artifacts/Mixxx.flatpak
 ```
 
 Launch Mixxx:
@@ -47,7 +61,7 @@ tools/deck_flatpak_deploy.sh run
 For the common one-step deploy loop:
 
 ```bash
-tools/deck_flatpak_deploy.sh install-run ~/Downloads/mixxx-artifacts/Mixxx-*-x86_64.flatpak
+tools/deck_flatpak_deploy.sh install-run ~/Downloads/mixxx-artifacts/Mixxx.flatpak
 ```
 
 Check local setup state with:
@@ -61,7 +75,7 @@ tools/deck_flatpak_deploy.sh status
 - Confirm Mixxx launches from the Flatpak.
 - Confirm audio input and output devices appear.
 - Confirm decks and controllers are detected after reconnecting them.
-- Exercise the feature under test and note the artifact filename or GitHub Actions run ID.
+- Exercise the feature under test and note the artifact filename or source commit.
 - If a behavior differs from a source build, keep the artifact and run output for comparison.
 
 ## Source Build Fallback

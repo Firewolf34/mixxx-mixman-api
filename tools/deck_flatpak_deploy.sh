@@ -1,5 +1,5 @@
 #!/bin/bash
-# Helper for installing CI-produced Mixxx Flatpak bundles on a Debian deck-test laptop.
+# Helper for installing LAN-built Mixxx Flatpak bundles on a Debian deck-test laptop.
 
 if [ -z "$BASH_VERSION" ]; then
     echo "Error: This script must be called as executable: ./deck_flatpak_deploy.sh ..." >&2
@@ -27,7 +27,7 @@ Usage:
 
 Commands:
   setup       Install Flatpak if needed, add Flathub, and install Mixxx USB udev rules.
-  install     Install or replace the user Flatpak from a downloaded CI bundle.
+  install     Install or replace the user Flatpak from a LAN-built bundle.
   install-run Install a bundle, then launch Mixxx.
   run         Launch the installed Flatpak.
   status      Print the local Flatpak and udev setup status.
