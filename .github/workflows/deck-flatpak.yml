@@ -67,8 +67,6 @@ jobs:
         uses: actions/upload-artifact@v7.0.0
         with:
           name: Mixxx-flatpak-x86_64
-          archive: "false"
-          path: |
-            Mixxx.flatpak
-            Mixxx-${{ env.GIT_DESC }}-x86_64.flatpak
+          path: Mixxx.flatpak
+          compression-level: 0
           retention-days: 3

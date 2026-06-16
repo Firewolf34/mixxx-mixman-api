@@ -32,7 +32,7 @@ Then push the branch to GitHub and run the manual workflow:
 git push github codex/rest-library-phase1-2.5.6
 ```
 
-In GitHub, run **Actions > Deck Flatpak Build > Run workflow** for `codex/rest-library-phase1-2.5.6`, then download the `Mixxx-flatpak-x86_64` artifact.
+In GitHub, run **Actions > Deck Flatpak Build > Run workflow** for `codex/rest-library-phase1-2.5.6`, then download the `Mixxx-flatpak-x86_64` artifact. GitHub downloads artifacts as `.zip` files, so extract it first; the file inside is `Mixxx.flatpak`.
 
 Copy the resulting Flatpak artifact to the deck laptop:
 
