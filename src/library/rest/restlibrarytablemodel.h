@@ -59,6 +59,7 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
   private:
     enum Column {
         ColumnCacheState = 0,
+        ColumnQuality,
         ColumnArtist,
         ColumnTitle,
         ColumnAlbum,

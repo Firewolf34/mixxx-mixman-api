@@ -9,6 +9,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QUrlQuery>
+#include <QVariant>
 
 #include "moc_restlibraryclient.cpp"
 #include "track/track.h"
@@ -87,6 +88,37 @@ QString pathForTrackLookup(const QString& pathTemplate, const TrackPointer& pTra
     return path;
 }
 
+QString pathWithQueryItem(QString path, const QString& key, const QString& value) {
+    QUrl url(path);
+    QUrlQuery query(url);
+    query.removeAllQueryItems(key);
+    query.addQueryItem(key, value);
+    url.setQuery(query);
+    return url.toString();
+}
+
+QJsonObject objectForTrackId(const QJsonObject& tracksById, const QString& remoteId) {
+    const QJsonValue value = tracksById.value(remoteId);
+    return value.isObject() ? value.toObject() : QJsonObject();
+}
+
+QStringList readStringArray(const QJsonObject& object, const QString& key) {
+    QStringList result;
+    const QJsonValue value = object.value(key);
+    if (!value.isArray()) {
+        return result;
+    }
+    const QJsonArray values = value.toArray();
+    result.reserve(values.size());
+    for (const QJsonValue& item : values) {
+        const QString stringValue = valueToString(item);
+        if (!stringValue.isEmpty()) {
+            result.append(stringValue);
+        }
+    }
+    return result;
+}
+
 QString responseSnippet(const QByteArray& body) {
     QString snippet = QString::fromUtf8(body.left(kMaxLoggedResponseBytes)).trimmed();
     snippet.replace(QChar('\n'), QChar(' '));
@@ -103,6 +135,10 @@ RestLibraryClient::RestLibraryClient(
           m_pNetworkAccessManager(pNetworkAccessManager) {
     qRegisterMetaType<RestLibraryTrack>("mixxx::library::rest::RestLibraryTrack");
     qRegisterMetaType<QList<RestLibraryTrack>>("QList<mixxx::library::rest::RestLibraryTrack>");
+    qRegisterMetaType<RestLibraryDiagnostics>("mixxx::library::rest::RestLibraryDiagnostics");
+    qRegisterMetaType<QList<RestLibraryPolicyPreset>>(
+            "QList<mixxx::library::rest::RestLibraryPolicyPreset>");
+    qRegisterMetaType<RestLibraryPolicyPath>("mixxx::library::rest::RestLibraryPolicyPath");
 }
 
 void RestLibraryClient::fetchTracks(const RestLibrarySettings& settings) {
@@ -178,6 +214,91 @@ void RestLibraryClient::fetchRecommendations(
                     m_settings.recommendationLimit));
     pReply->setParent(this);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotTrackListFinished);
+}
+
+void RestLibraryClient::fetchMixManDiagnostics(const RestLibrarySettings& settings) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured()) {
+        return;
+    }
+
+    QNetworkReply* pHealthReply = m_pNetworkAccessManager->get(
+            newRequest(config::mixManHealthPath(), 0));
+    pHealthReply->setParent(this);
+    connect(pHealthReply, &QNetworkReply::finished, this, &RestLibraryClient::slotHealthFinished);
+
+    QNetworkReply* pIndexReply = m_pNetworkAccessManager->get(
+            newRequest(config::mixManIndexStatusPath(), 0));
+    pIndexReply->setParent(this);
+    connect(pIndexReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotIndexStatusFinished);
+}
+
+void RestLibraryClient::fetchMixManPolicyPresets(const RestLibrarySettings& settings) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured()) {
+        emit policyPresetsFetched({});
+        return;
+    }
+
+    QNetworkReply* pReply = m_pNetworkAccessManager->get(
+            newRequest(config::mixManPolicyPresetsPath(), 0));
+    pReply->setParent(this);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotPolicyPresetsFinished);
+}
+
+void RestLibraryClient::fetchMixManPolicyPath(
+        const RestLibrarySettings& settings,
+        const QString& remoteId) {
+    clearPendingDetails();
+    m_settings = settings;
+    if (!m_pNetworkAccessManager) {
+        emit fetchFailed(tr("Network access is not available."));
+        return;
+    }
+    if (!m_settings.hasRecommendationsConfigured() || remoteId.trimmed().isEmpty()) {
+        emit mixManPolicyPathFetched({});
+        return;
+    }
+
+    QString path = pathForRemoteId(m_settings.recommendationPathTemplate, remoteId);
+    path = pathWithQueryItem(
+            path,
+            QStringLiteral("candidate_limit"),
+            QString::number(m_settings.recommendationLimit));
+    path = pathWithQueryItem(
+            path,
+            QStringLiteral("planning_depth"),
+            QString::number(m_settings.mixManPathDepth));
+    path = pathWithQueryItem(
+            path,
+            QStringLiteral("admin_approved_only"),
+            m_settings.mixManAdminApprovedOnly ? QStringLiteral("true") : QStringLiteral("false"));
+    if (!m_settings.mixManPolicyPreset.trimmed().isEmpty()) {
+        path = pathWithQueryItem(
+                path,
+                QStringLiteral("policy_preset"),
+                m_settings.mixManPolicyPreset.trimmed());
+    }
+    if (m_settings.mixManTargetEnergyEnabled) {
+        path = pathWithQueryItem(
+                path,
+                QStringLiteral("target_energy"),
+                QString::number(m_settings.mixManTargetEnergyNormalized(), 'f', 2));
+    }
+    if (m_settings.mixManTargetColorEnabled &&
+            !m_settings.mixManTargetColor.trimmed().isEmpty()) {
+        path = pathWithQueryItem(
+                path,
+                QStringLiteral("target_color"),
+                m_settings.mixManTargetColor.trimmed());
+    }
+
+    QNetworkReply* pReply = m_pNetworkAccessManager->get(newRequest(path, 0));
+    pReply->setParent(this);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotPolicyPathFinished);
 }
 
 QNetworkRequest RestLibraryClient::newRequest(const QString& path, int limit) const {
@@ -335,6 +456,105 @@ void RestLibraryClient::slotTrackDetailFinished() {
     finishDetailBatchIfComplete();
 }
 
+void RestLibraryClient::slotHealthFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        return;
+    }
+    pReply->deleteLater();
+
+    RestLibraryDiagnostics diagnostics;
+    diagnostics.healthKnown = true;
+    diagnostics.lastStatusCode = statusCodeFromReply(*pReply);
+    diagnostics.healthOk = isSuccessStatus(diagnostics.lastStatusCode);
+    if (!diagnostics.healthOk) {
+        diagnostics.lastError = tr("MixMan health check failed.");
+    }
+    emit diagnosticsUpdated(diagnostics);
+}
+
+void RestLibraryClient::slotIndexStatusFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        return;
+    }
+    pReply->deleteLater();
+
+    const QByteArray responseBody = pReply->readAll();
+    RestLibraryDiagnostics diagnostics;
+    diagnostics.indexKnown = true;
+    diagnostics.lastStatusCode = statusCodeFromReply(*pReply);
+    if (!isSuccessStatus(diagnostics.lastStatusCode)) {
+        diagnostics.lastError = tr("MixMan index status request failed.");
+        emit diagnosticsUpdated(diagnostics);
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        diagnostics.lastError = tr("MixMan index status was not valid JSON.");
+        emit diagnosticsUpdated(diagnostics);
+        return;
+    }
+
+    diagnostics = parseIndexStatusDocument(document);
+    diagnostics.lastStatusCode = statusCodeFromReply(*pReply);
+    emit diagnosticsUpdated(diagnostics);
+}
+
+void RestLibraryClient::slotPolicyPresetsFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        return;
+    }
+    pReply->deleteLater();
+
+    const QByteArray responseBody = pReply->readAll();
+    const int statusCode = statusCodeFromReply(*pReply);
+    if (!isSuccessStatus(statusCode)) {
+        emit policyPresetsFetched({});
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        emit policyPresetsFetched({});
+        return;
+    }
+    emit policyPresetsFetched(parsePolicyPresetsDocument(document));
+}
+
+void RestLibraryClient::slotPolicyPathFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit fetchFailed(tr("MixMan policy path request failed."));
+        return;
+    }
+    pReply->deleteLater();
+
+    const QByteArray responseBody = pReply->readAll();
+    const int statusCode = statusCodeFromReply(*pReply);
+    if (!isSuccessStatus(statusCode)) {
+        kLogger.warning()
+                << "MixMan policy path request failed"
+                << pReply->request().url().toString(QUrl::RemoveUserInfo)
+                << "status" << statusCode
+                << "body" << responseSnippet(responseBody);
+        emit fetchFailed(tr("MixMan policy path request returned an unsuccessful status."));
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        emit fetchFailed(tr("MixMan policy path response was not valid JSON."));
+        return;
+    }
+    emit mixManPolicyPathFetched(parsePolicyPathDocument(document));
+}
+
 void RestLibraryClient::finishDetailBatchIfComplete() {
     if (m_finishedDetailCount < m_pendingDetails.size()) {
         return;
@@ -399,6 +619,21 @@ RestLibraryTrack RestLibraryClient::parseTrackObjectForTesting(
     return parseTrackObject(object);
 }
 
+RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocumentForTesting(
+        const QJsonDocument& document) {
+    return parsePolicyPathDocument(document);
+}
+
+QList<RestLibraryPolicyPreset> RestLibraryClient::parsePolicyPresetsDocumentForTesting(
+        const QJsonDocument& document) {
+    return parsePolicyPresetsDocument(document);
+}
+
+RestLibraryDiagnostics RestLibraryClient::parseIndexStatusDocumentForTesting(
+        const QJsonDocument& document) {
+    return parseIndexStatusDocument(document);
+}
+
 QList<RestLibraryTrack> RestLibraryClient::parseTrackListDocument(
         const QJsonDocument& document,
         QStringList* pRemoteIds) {
@@ -433,9 +668,10 @@ QList<RestLibraryTrack> RestLibraryClient::parseTrackListDocument(
 
 RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) {
     RestLibraryTrack track;
-    track.remoteId = readString(object, {"id"});
+    const QJsonObject metadata = object.value(QStringLiteral("metadata")).toObject();
+    track.remoteId = readString(object, {"id", "track_id"});
     track.reviewId = readString(object, {"review_id", "hash_id"});
-    track.title = readString(object, {"title", "name"});
+    track.title = readString(object, {"title", "name", "label"});
     track.artist = readString(object, {"artist", "artists"});
     track.album = readString(object, {"album"});
     track.genre = readString(object, {"genre"});
@@ -444,11 +680,47 @@ RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) 
     track.keyText = readString(object, {"key", "musical_key"});
     track.trackNumber = readString(object, {"track_number", "tracknumber"});
     track.label = readString(object, {"label"});
-    track.sourceLabel = readString(object, {"source"});
-    track.audioFileExtension = readString(object, {"extension", "file_extension", "audio_extension"});
+    track.sourceLabel = readString(object, {"source", "mode"});
+    track.audioFileExtension = readString(
+            object,
+            {"extension", "file_extension", "audio_extension", "download_file_extension"});
     track.bpm = readDouble(object, {"bpm"});
+    if (track.bpm <= 0.0) {
+        track.bpm = readDouble(metadata, {"bpm"});
+    }
     track.durationSeconds = readDouble(object, {"duration", "duration_seconds"});
+    if (track.durationSeconds <= 0.0) {
+        track.durationSeconds = readDouble(metadata, {"duration", "duration_seconds"});
+    }
     track.rating = readRating(object);
+    if (track.rating <= 0) {
+        track.rating = readRating(metadata);
+    }
+    if (track.keyText.isEmpty()) {
+        track.keyText = readString(metadata, {"key", "musical_key"});
+    }
+    if (track.genre.isEmpty()) {
+        track.genre = readString(metadata, {"genre"});
+    }
+    if (track.audioFileExtension.isEmpty()) {
+        track.audioFileExtension = readString(metadata, {"download_file_extension"});
+    }
+    track.quality = readDouble(object, {"quality", "quality_score"});
+    if (track.quality <= 0.0) {
+        track.quality = readDouble(metadata, {"quality", "quality_score"});
+    }
+    track.score = readDouble(object, {"score"});
+    track.mode = readString(object, {"mode", "map_mode"});
+    if (track.mode.isEmpty()) {
+        track.mode = readString(metadata, {"mode", "map_mode"});
+    }
+    track.fallbackMode = readString(object, {"fallback_mode"});
+    if (track.fallbackMode.isEmpty()) {
+        track.fallbackMode = readString(metadata, {"fallback_mode"});
+    }
+    track.moveType = readString(object, {"resolved_move_type", "move_type"});
+    track.color = readString(object, {"color", "colour"});
+    track.region = readString(object, {"region", "region_id"});
 
     const QString releaseDate = readString(object, {"release_date", "date"});
     if (!releaseDate.isEmpty()) {
@@ -464,6 +736,151 @@ RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) 
         track.artworkUrl = QUrl(artworkUrl);
     }
     return track;
+}
+
+RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocument(const QJsonDocument& document) {
+    RestLibraryPolicyPath result;
+    if (!document.isObject()) {
+        return result;
+    }
+
+    const QJsonObject root = document.object();
+    const QJsonObject tracksById = root.value(QStringLiteral("tracks_by_id")).toObject();
+    const QJsonObject plan = root.value(QStringLiteral("plan")).toObject();
+    const QJsonObject path = root.value(QStringLiteral("path")).toObject();
+    const QJsonObject pathSource = !path.isEmpty() ? path : plan;
+    result.policyPreset = readString(root, {"policy_preset"});
+    result.resolvedMoveType = readString(root, {"resolved_move_type"});
+    result.recommendationEventId =
+            static_cast<int>(readDouble(root, {"recommendation_event_id"}));
+    result.selectedBranchScore = readDouble(pathSource, {"selected_branch_score"});
+
+    const QJsonArray alternatives = plan.value(QStringLiteral("alternatives")).toArray();
+    result.candidates.reserve(alternatives.size());
+    for (const QJsonValue& value : alternatives) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject recommendation = value.toObject();
+        const QString remoteId = readString(recommendation, {"id", "track_id"});
+        RestLibraryTrack track = parseTrackObject(objectForTrackId(tracksById, remoteId));
+        if (track.remoteId.isEmpty()) {
+            track.remoteId = remoteId;
+        }
+        if (track.remoteId.isEmpty()) {
+            continue;
+        }
+        if (track.title.isEmpty()) {
+            track.title = readString(recommendation, {"title", "label"});
+        }
+        if (track.artist.isEmpty()) {
+            track.artist = readString(recommendation, {"artist"});
+        }
+        track.score = readDouble(recommendation, {"score"});
+        track.quality = track.score;
+        track.recommendationEventId =
+                static_cast<int>(readDouble(recommendation, {"recommendation_event_id"}));
+        track.recommendationItemId =
+                static_cast<int>(readDouble(recommendation, {"recommendation_item_id"}));
+        track.recommendationPosition =
+                static_cast<int>(readDouble(recommendation, {"position"}));
+        track.planned = recommendation.value(QStringLiteral("planned")).toBool(false);
+        track.moveType = readString(recommendation, {"resolved_move_type", "move_type"});
+        track.transitionRisk = readDouble(recommendation, {"transition_risk"});
+        track.targetImprovement = readDouble(recommendation, {"target_distance_improvement"});
+        track.targetDistance = readDouble(recommendation, {"target_distance_after_candidate"});
+        track.region = readString(recommendation, {"region_id"});
+        track.reasonCodes = readStringArray(recommendation, QStringLiteral("reason_codes"));
+
+        const QJsonObject features =
+                recommendation.value(QStringLiteral("candidate_features")).toObject();
+        if (track.transitionRisk <= 0.0) {
+            track.transitionRisk = readDouble(features, {"transition_risk"});
+        }
+        track.transitionFit = readDouble(features, {"transition_fit"});
+        if (track.targetDistance <= 0.0) {
+            track.targetDistance = readDouble(features, {"target_distance"});
+        }
+        if (track.targetImprovement == 0.0) {
+            track.targetImprovement = readDouble(features, {"target_improvement"});
+        }
+        if (track.color.isEmpty()) {
+            const QJsonObject lighting =
+                    recommendation.value(QStringLiteral("lighting_payload")).toObject();
+            track.color = readString(lighting, {"next_track_color"});
+        }
+        if (track.sourceLabel.isEmpty()) {
+            track.sourceLabel = QStringLiteral("MixMan Policy");
+        }
+        result.candidates.append(std::move(track));
+    }
+
+    const QJsonArray steps = pathSource.value(QStringLiteral("steps")).toArray();
+    result.path.reserve(steps.size());
+    for (const QJsonValue& value : steps) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject stepObject = value.toObject();
+        const QString remoteId = readString(stepObject, {"id", "track_id"});
+        const RestLibraryTrack track = parseTrackObject(objectForTrackId(tracksById, remoteId));
+        RestLibraryPathStep step;
+        step.remoteId = track.remoteId.isEmpty() ? remoteId : track.remoteId;
+        step.title = track.title;
+        step.artist = track.artist;
+        step.score = readDouble(stepObject, {"score"});
+        step.position = static_cast<int>(readDouble(stepObject, {"position"}));
+        step.moveType = readString(stepObject, {"resolved_move_type", "move_type"});
+        step.color = track.color;
+        if (step.color.isEmpty()) {
+            const QJsonObject lighting = stepObject.value(QStringLiteral("lighting_payload")).toObject();
+            step.color = readString(lighting, {"next_track_color"});
+        }
+        step.region = readString(stepObject, {"region_id"});
+        if (!step.remoteId.isEmpty()) {
+            result.path.append(std::move(step));
+        }
+    }
+
+    return result;
+}
+
+QList<RestLibraryPolicyPreset> RestLibraryClient::parsePolicyPresetsDocument(
+        const QJsonDocument& document) {
+    QList<RestLibraryPolicyPreset> result;
+    if (!document.isArray()) {
+        return result;
+    }
+    const QJsonArray presets = document.array();
+    result.reserve(presets.size());
+    for (const QJsonValue& value : presets) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject object = value.toObject();
+        RestLibraryPolicyPreset preset;
+        preset.key = readString(object, {"key"});
+        preset.label = readString(object, {"label"});
+        preset.description = readString(object, {"description"});
+        if (!preset.key.isEmpty()) {
+            result.append(std::move(preset));
+        }
+    }
+    return result;
+}
+
+RestLibraryDiagnostics RestLibraryClient::parseIndexStatusDocument(const QJsonDocument& document) {
+    RestLibraryDiagnostics diagnostics;
+    diagnostics.indexKnown = true;
+    if (!document.isObject()) {
+        diagnostics.lastError = QObject::tr("MixMan index status was not a JSON object.");
+        return diagnostics;
+    }
+    const QJsonObject object = document.object();
+    diagnostics.indexReady = object.value(QStringLiteral("ready")).toBool(false);
+    diagnostics.indexCount = static_cast<int>(readDouble(object, {"count"}));
+    diagnostics.indexDimension = static_cast<int>(readDouble(object, {"dim"}));
+    return diagnostics;
 }
 
 QString RestLibraryClient::readString(

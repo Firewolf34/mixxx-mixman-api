@@ -8,6 +8,7 @@
 #include <QPointer>
 #include <QVector>
 
+#include "library/rest/restlibrarymixman.h"
 #include "library/rest/restlibrarysettings.h"
 #include "library/rest/restlibrarytrack.h"
 #include "track/track_decl.h"
@@ -30,11 +31,22 @@ class RestLibraryClient final : public QObject {
     void fetchRecommendations(
             const RestLibrarySettings& settings,
             const QString& remoteId);
+    void fetchMixManDiagnostics(const RestLibrarySettings& settings);
+    void fetchMixManPolicyPresets(const RestLibrarySettings& settings);
+    void fetchMixManPolicyPath(
+            const RestLibrarySettings& settings,
+            const QString& remoteId);
 
     static QList<RestLibraryTrack> parseTrackListDocumentForTesting(
             const QJsonDocument& document);
     static RestLibraryTrack parseTrackObjectForTesting(
             const QJsonObject& object);
+    static RestLibraryPolicyPath parsePolicyPathDocumentForTesting(
+            const QJsonDocument& document);
+    static QList<RestLibraryPolicyPreset> parsePolicyPresetsDocumentForTesting(
+            const QJsonDocument& document);
+    static RestLibraryDiagnostics parseIndexStatusDocumentForTesting(
+            const QJsonDocument& document);
 
   signals:
     void tracksFetched(const QList<mixxx::library::rest::RestLibraryTrack>& tracks);
@@ -42,11 +54,21 @@ class RestLibraryClient final : public QObject {
     void trackLookupMissed(const QString& message);
     void recommendationsFetched(
             const QList<mixxx::library::rest::RestLibraryTrack>& tracks);
+    void diagnosticsUpdated(
+            const mixxx::library::rest::RestLibraryDiagnostics& diagnostics);
+    void policyPresetsFetched(
+            const QList<mixxx::library::rest::RestLibraryPolicyPreset>& presets);
+    void mixManPolicyPathFetched(
+            const mixxx::library::rest::RestLibraryPolicyPath& policyPath);
     void fetchFailed(const QString& message);
 
   private slots:
     void slotTrackListFinished();
     void slotTrackDetailFinished();
+    void slotHealthFinished();
+    void slotIndexStatusFinished();
+    void slotPolicyPresetsFinished();
+    void slotPolicyPathFinished();
 
   private:
     struct PendingDetail {
@@ -72,6 +94,10 @@ class RestLibraryClient final : public QObject {
             const QJsonDocument& document,
             QStringList* pRemoteIds);
     static RestLibraryTrack parseTrackObject(const QJsonObject& object);
+    static RestLibraryPolicyPath parsePolicyPathDocument(const QJsonDocument& document);
+    static QList<RestLibraryPolicyPreset> parsePolicyPresetsDocument(
+            const QJsonDocument& document);
+    static RestLibraryDiagnostics parseIndexStatusDocument(const QJsonDocument& document);
     static QString readString(
             const QJsonObject& object,
             std::initializer_list<QString> keys);

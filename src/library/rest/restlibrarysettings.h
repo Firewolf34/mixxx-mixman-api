@@ -51,15 +51,49 @@ inline const ConfigKey kPageSizeKey(QStringLiteral("[RestLibrary]"), QStringLite
 inline const ConfigKey kRecommendationLimitKey(
         QStringLiteral("[RestLibrary]"),
         QStringLiteral("RecommendationLimit"));
+inline const ConfigKey kUseMixManDefaultsKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("UseMixManDefaults"));
+inline const ConfigKey kMixManPolicyPresetKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManPolicyPreset"));
+inline const ConfigKey kMixManTargetEnergyKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManTargetEnergy"));
+inline const ConfigKey kMixManTargetEnergyEnabledKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManTargetEnergyEnabled"));
+inline const ConfigKey kMixManTargetColorKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManTargetColor"));
+inline const ConfigKey kMixManTargetColorEnabledKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManTargetColorEnabled"));
+inline const ConfigKey kMixManAdminApprovedOnlyKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManAdminApprovedOnly"));
+inline const ConfigKey kMixManPathDepthKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManPathDepth"));
 
 constexpr bool kDefaultEnabled = false;
 constexpr bool kDefaultCacheEnabled = true;
+constexpr bool kDefaultUseMixManDefaults = true;
+constexpr bool kDefaultMixManTargetEnergyEnabled = false;
+constexpr bool kDefaultMixManTargetColorEnabled = false;
+constexpr bool kDefaultMixManAdminApprovedOnly = true;
 constexpr int kDefaultPageSize = 50;
 constexpr int kMinPageSize = 1;
 constexpr int kMaxPageSize = 200;
-constexpr int kDefaultRecommendationLimit = 5;
+constexpr int kDefaultRecommendationLimit = 10;
 constexpr int kMinRecommendationLimit = 1;
 constexpr int kMaxRecommendationLimit = 20;
+constexpr int kDefaultMixManPathDepth = 5;
+constexpr int kMinMixManPathDepth = 1;
+constexpr int kMaxMixManPathDepth = 20;
+constexpr int kDefaultMixManTargetEnergy = 3;
+constexpr int kMinMixManTargetEnergy = 0;
+constexpr int kMaxMixManTargetEnergy = 5;
 constexpr int kDefaultCacheMaxMegabytes = 1024;
 constexpr int kMinCacheMaxMegabytes = 64;
 constexpr int kMaxCacheMaxMegabytes = 1024 * 100;
@@ -71,6 +105,15 @@ constexpr int kMinMaxConcurrentDownloads = 1;
 constexpr int kMaxMaxConcurrentDownloads = 8;
 
 QString defaultCacheDirectoryPath(const UserSettingsPointer& pConfig);
+QString mixManTrackListPath();
+QString mixManTrackDetailPathTemplate();
+QString mixManTrackLookupPathTemplate();
+QString mixManRecommendationPathTemplate();
+QString mixManAudioDownloadPathTemplate();
+QString mixManHealthPath();
+QString mixManConfigPath();
+QString mixManIndexStatusPath();
+QString mixManPolicyPresetsPath();
 
 } // namespace config
 
@@ -81,6 +124,10 @@ class RestLibrarySettings final {
     bool isConfigured() const;
     bool enabled = config::kDefaultEnabled;
     bool cacheEnabled = config::kDefaultCacheEnabled;
+    bool useMixManDefaults = config::kDefaultUseMixManDefaults;
+    bool mixManTargetEnergyEnabled = config::kDefaultMixManTargetEnergyEnabled;
+    bool mixManTargetColorEnabled = config::kDefaultMixManTargetColorEnabled;
+    bool mixManAdminApprovedOnly = config::kDefaultMixManAdminApprovedOnly;
     QUrl baseUrl;
     QString bearerToken;
     QString trackListPath;
@@ -89,8 +136,12 @@ class RestLibrarySettings final {
     QString recommendationPathTemplate;
     QString audioDownloadPathTemplate;
     QString cacheDirectoryPath;
+    QString mixManPolicyPreset;
+    QString mixManTargetColor;
     int pageSize = config::kDefaultPageSize;
     int recommendationLimit = config::kDefaultRecommendationLimit;
+    int mixManPathDepth = config::kDefaultMixManPathDepth;
+    int mixManTargetEnergy = config::kDefaultMixManTargetEnergy;
     int cacheMaxMegabytes = config::kDefaultCacheMaxMegabytes;
     int cacheMaxAgeDays = config::kDefaultCacheMaxAgeDays;
     int maxConcurrentDownloads = config::kDefaultMaxConcurrentDownloads;
@@ -98,6 +149,7 @@ class RestLibrarySettings final {
     bool hasAudioDownloadConfigured() const;
     bool hasTrackLookupConfigured() const;
     bool hasRecommendationsConfigured() const;
+    double mixManTargetEnergyNormalized() const;
 };
 
 } // namespace mixxx::library::rest

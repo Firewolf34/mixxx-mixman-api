@@ -4,6 +4,7 @@
 
 #include <QDir>
 #include <QMenu>
+#include <QStringList>
 
 #include "controllers/keyboard/keyboardeventfilter.h"
 #include "library/library.h"
@@ -28,7 +29,7 @@ const QString kViewName = QStringLiteral("REST Library");
 RestLibraryFeature::RestLibraryFeature(
         Library* pLibrary,
         UserSettingsPointer pConfig)
-        : LibraryFeature(pLibrary, std::move(pConfig), QStringLiteral("network-workgroup")),
+        : LibraryFeature(pLibrary, std::move(pConfig), QStringLiteral("computer")),
           m_pSidebarModel(make_parented<TreeItemModel>(this)),
           m_pTableModel(make_parented<RestLibraryTableModel>(
                   this,
@@ -59,6 +60,18 @@ RestLibraryFeature::RestLibraryFeature(
             &RestLibraryClient::recommendationsFetched,
             this,
             &RestLibraryFeature::slotRecommendationsFetched);
+    connect(&m_client,
+            &RestLibraryClient::diagnosticsUpdated,
+            this,
+            &RestLibraryFeature::slotDiagnosticsUpdated);
+    connect(&m_client,
+            &RestLibraryClient::policyPresetsFetched,
+            this,
+            &RestLibraryFeature::slotPolicyPresetsFetched);
+    connect(&m_client,
+            &RestLibraryClient::mixManPolicyPathFetched,
+            this,
+            &RestLibraryFeature::slotMixManPolicyPathFetched);
     connect(&m_client,
             &RestLibraryClient::fetchFailed,
             this,
@@ -109,6 +122,18 @@ void RestLibraryFeature::bindLibraryWidget(
             &DlgRestLibrary::trackSelected,
             this,
             &RestLibraryFeature::trackSelected);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::policyPresetChanged,
+            this,
+            &RestLibraryFeature::slotPolicyPresetChanged);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::targetEnergyChanged,
+            this,
+            &RestLibraryFeature::slotTargetEnergyChanged);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::targetColorChanged,
+            this,
+            &RestLibraryFeature::slotTargetColorChanged);
     connect(this,
             &RestLibraryFeature::statusTextChanged,
             m_pRestLibraryView,
@@ -122,6 +147,7 @@ void RestLibraryFeature::bindLibraryWidget(
     if (!m_statusText.isEmpty()) {
         emit statusTextChanged(m_statusText);
     }
+    refreshMixManControls(RestLibrarySettings::fromConfig(m_pConfig));
 }
 
 void RestLibraryFeature::activate() {
@@ -160,6 +186,7 @@ void RestLibraryFeature::slotCurrentPlayingTrackChanged(TrackPointer pTrack) {
 
 void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force) {
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    refreshMixManControls(settings);
     if (!settings.isConfigured()) {
         m_cacheManager.abortAll();
         m_pTableModel->setCacheLoadCapabilitiesEnabled(false);
@@ -173,6 +200,10 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
 
     m_cacheManager.abortAll();
     m_pTableModel->setCacheLoadCapabilitiesEnabled(settings.hasAudioDownloadConfigured());
+    if (settings.useMixManDefaults) {
+        m_client.fetchMixManDiagnostics(settings);
+        m_client.fetchMixManPolicyPresets(settings);
+    }
 
     const QString trackLocation = pTrack ? normalizedTrackLocation(pTrack->getLocation()) : QString();
     if (!force && trackLocation == m_lastRequestedTrackLocation) {
@@ -229,6 +260,60 @@ void RestLibraryFeature::slotRecommendationsFetched(const QList<RestLibraryTrack
     setRecommendationTracks(tracks);
 }
 
+void RestLibraryFeature::slotDiagnosticsUpdated(const RestLibraryDiagnostics& diagnostics) {
+    if (diagnostics.healthKnown) {
+        m_diagnostics.healthKnown = true;
+        m_diagnostics.healthOk = diagnostics.healthOk;
+    }
+    if (diagnostics.indexKnown) {
+        m_diagnostics.indexKnown = true;
+        m_diagnostics.indexReady = diagnostics.indexReady;
+        m_diagnostics.indexCount = diagnostics.indexCount;
+        m_diagnostics.indexDimension = diagnostics.indexDimension;
+    }
+    if (diagnostics.lastStatusCode > 0) {
+        m_diagnostics.lastStatusCode = diagnostics.lastStatusCode;
+    }
+    if (diagnostics.healthKnown || diagnostics.indexKnown) {
+        m_diagnostics.lastError = diagnostics.lastError;
+    }
+    updateDiagnosticsText();
+}
+
+void RestLibraryFeature::slotPolicyPresetsFetched(
+        const QList<RestLibraryPolicyPreset>& presets) {
+    if (!m_pRestLibraryView) {
+        return;
+    }
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    m_pRestLibraryView->setPolicyPresets(presets, settings.mixManPolicyPreset);
+}
+
+void RestLibraryFeature::slotMixManPolicyPathFetched(const RestLibraryPolicyPath& policyPath) {
+    setPathSummary(policyPath);
+    setRecommendationTracks(policyPath.candidates);
+}
+
+void RestLibraryFeature::slotPolicyPresetChanged(const QString& presetKey) {
+    if (presetKey.trimmed().isEmpty()) {
+        return;
+    }
+    m_pConfig->setValue(config::kMixManPolicyPresetKey, presetKey.trimmed());
+    slotRefresh();
+}
+
+void RestLibraryFeature::slotTargetEnergyChanged(bool enabled, int energy) {
+    m_pConfig->setValue(config::kMixManTargetEnergyEnabledKey, enabled);
+    m_pConfig->setValue(config::kMixManTargetEnergyKey, energy);
+    slotRefresh();
+}
+
+void RestLibraryFeature::slotTargetColorChanged(bool enabled, const QString& color) {
+    m_pConfig->setValue(config::kMixManTargetColorEnabledKey, enabled);
+    m_pConfig->setValue(config::kMixManTargetColorKey, color.trimmed());
+    slotRefresh();
+}
+
 void RestLibraryFeature::requestRecommendationsForRemoteId(
         const RestLibrarySettings& settings,
         const QString& remoteId) {
@@ -242,6 +327,11 @@ void RestLibraryFeature::requestRecommendationsForRemoteId(
 
     m_currentRemoteId = remoteId;
     clearRecommendations();
+    if (settings.useMixManDefaults) {
+        setStatusText(tr("Loading MixMan policy recommendations."));
+        m_client.fetchMixManPolicyPath(settings, remoteId);
+        return;
+    }
     setStatusText(tr("Loading REST Library recommendations."));
     m_client.fetchRecommendations(settings, remoteId);
 }
@@ -256,6 +346,15 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
             m_cacheStates.insert(track.remoteId, track.cacheState);
         }
     }
+    double qualityTotal = 0.0;
+    int qualityCount = 0;
+    for (const auto& track : tracks) {
+        if (track.quality > 0.0) {
+            qualityTotal += track.quality;
+            ++qualityCount;
+        }
+    }
+    m_averageQuality = qualityCount > 0 ? qualityTotal / qualityCount : 0.0;
     updateReadyStatus();
     if (!settings.hasAudioDownloadConfigured()) {
         return;
@@ -270,6 +369,62 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
         tracksToCache.append(tracks.at(i));
     }
     m_cacheManager.cacheTracks(tracksToCache, settings);
+}
+
+void RestLibraryFeature::refreshMixManControls(const RestLibrarySettings& settings) {
+    if (!m_pRestLibraryView) {
+        return;
+    }
+    m_pRestLibraryView->setMixManTargets(
+            settings.mixManTargetEnergyEnabled,
+            settings.mixManTargetEnergy,
+            settings.mixManTargetColorEnabled,
+            settings.mixManTargetColor);
+}
+
+void RestLibraryFeature::updateDiagnosticsText() {
+    if (!m_pRestLibraryView) {
+        return;
+    }
+    QStringList parts;
+    if (m_diagnostics.healthKnown) {
+        parts.append(m_diagnostics.healthOk ? tr("API online") : tr("API offline"));
+    }
+    if (m_diagnostics.indexKnown) {
+        parts.append(m_diagnostics.indexReady
+                        ? tr("Index ready: %1 tracks").arg(m_diagnostics.indexCount)
+                        : tr("Index building: %1 tracks").arg(m_diagnostics.indexCount));
+    }
+    if (!m_diagnostics.lastError.isEmpty()) {
+        parts.append(m_diagnostics.lastError);
+    }
+    m_pRestLibraryView->setDiagnosticsText(parts.join(QStringLiteral(" | ")));
+}
+
+void RestLibraryFeature::setPathSummary(const RestLibraryPolicyPath& policyPath) {
+    if (!m_pRestLibraryView) {
+        return;
+    }
+    if (policyPath.path.isEmpty()) {
+        m_pRestLibraryView->setPathSummaryText({});
+        return;
+    }
+
+    QStringList labels;
+    const int labelLimit = std::min(3, static_cast<int>(policyPath.path.size()));
+    labels.reserve(labelLimit);
+    for (int i = 0; i < labelLimit; ++i) {
+        const auto& step = policyPath.path.at(i);
+        labels.append(step.title.isEmpty() ? step.remoteId : step.title);
+    }
+    QString summary = tr("Path: %1 step(s)").arg(policyPath.path.size());
+    if (!labels.isEmpty()) {
+        summary += QStringLiteral(" - ") + labels.join(QStringLiteral(" -> "));
+    }
+    if (policyPath.selectedBranchScore > 0.0) {
+        summary += tr(" (%1)").arg(policyPath.selectedBranchScore, 0, 'f', 2);
+    }
+    m_pRestLibraryView->setPathSummaryText(summary);
 }
 
 void RestLibraryFeature::slotFetchFailed(const QString& message) {
@@ -347,6 +502,13 @@ void RestLibraryFeature::updateReadyStatus() {
                               .arg(failedCount));
         return;
     }
+    if (m_averageQuality > 0.0) {
+        setStatusText(tr("%n REST Library recommendation(s). Avg quality %1.",
+                              nullptr,
+                              m_recommendationCount)
+                              .arg(m_averageQuality, 0, 'f', 2));
+        return;
+    }
     setStatusText(tr("%n REST Library recommendation(s).", nullptr, m_recommendationCount));
 }
 
@@ -354,6 +516,10 @@ void RestLibraryFeature::clearRecommendations() {
     m_pTableModel->setTracks({});
     m_cacheStates.clear();
     m_recommendationCount = 0;
+    m_averageQuality = 0.0;
+    if (m_pRestLibraryView) {
+        m_pRestLibraryView->setPathSummaryText({});
+    }
 }
 
 QString RestLibraryFeature::remoteIdForTrack(const TrackPointer& pTrack) const {

@@ -4,6 +4,7 @@
 #include <QList>
 #include <QMetaType>
 #include <QString>
+#include <QStringList>
 #include <QUrl>
 
 namespace mixxx::library::rest {
@@ -38,6 +39,22 @@ struct RestLibraryTrack {
     QString audioFileExtension;
     QString cachedFilePath;
     QString cacheError;
+    double quality = 0.0;
+    double score = 0.0;
+    double transitionFit = 0.0;
+    double transitionRisk = 0.0;
+    double targetDistance = 0.0;
+    double targetImprovement = 0.0;
+    int recommendationEventId = 0;
+    int recommendationItemId = 0;
+    int recommendationPosition = 0;
+    bool planned = false;
+    QString mode;
+    QString fallbackMode;
+    QString moveType;
+    QString color;
+    QString region;
+    QStringList reasonCodes;
     RestLibraryCacheState cacheState = RestLibraryCacheState::Missing;
 };
 

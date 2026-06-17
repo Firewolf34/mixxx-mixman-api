@@ -21,6 +21,9 @@ TEST(DlgRestLibraryTest, ExposesLibraryViewContractAndSignals) {
     const QMetaObject& metaObject = mixxx::library::rest::DlgRestLibrary::staticMetaObject;
     EXPECT_TRUE(hasSignal(metaObject, "refreshRequested()"));
     EXPECT_TRUE(hasSignal(metaObject, "followCurrentTrackChanged(bool)"));
+    EXPECT_TRUE(hasSignal(metaObject, "policyPresetChanged(QString)"));
+    EXPECT_TRUE(hasSignal(metaObject, "targetEnergyChanged(bool,int)"));
+    EXPECT_TRUE(hasSignal(metaObject, "targetColorChanged(bool,QString)"));
     EXPECT_TRUE(hasSignal(metaObject, "loadTrack(TrackPointer)"));
     EXPECT_TRUE(hasSignal(metaObject, "trackSelected(TrackPointer)"));
 }

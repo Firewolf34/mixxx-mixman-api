@@ -24,6 +24,7 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     config()->setValue(restConfig::kBaseUrlKey, QStringLiteral("https://example.com/api"));
     config()->setValue(restConfig::kBearerTokenKeychainAccountKey, uniqueKeychainAccount());
     config()->setValue(restConfig::kLocalDevBearerTokenKey, QStringLiteral("test-token"));
+    config()->setValue(restConfig::kUseMixManDefaultsKey, false);
     config()->setValue(restConfig::kTrackListPathKey, QStringLiteral("/tracks"));
     config()->setValue(restConfig::kTrackDetailPathTemplateKey, QStringLiteral("/tracks/%1"));
     config()->setValue(restConfig::kTrackLookupPathTemplateKey, QStringLiteral("/lookup"));
@@ -35,6 +36,13 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     config()->setValue(restConfig::kCacheDirectoryKey, QStringLiteral("C:/mixxx/rest-cache"));
     config()->setValue(restConfig::kPageSizeKey, 25);
     config()->setValue(restConfig::kRecommendationLimitKey, 7);
+    config()->setValue(restConfig::kMixManPathDepthKey, 8);
+    config()->setValue(restConfig::kMixManPolicyPresetKey, QStringLiteral("explore"));
+    config()->setValue(restConfig::kMixManTargetEnergyEnabledKey, true);
+    config()->setValue(restConfig::kMixManTargetEnergyKey, 4);
+    config()->setValue(restConfig::kMixManTargetColorEnabledKey, true);
+    config()->setValue(restConfig::kMixManTargetColorKey, QStringLiteral("#ff6600"));
+    config()->setValue(restConfig::kMixManAdminApprovedOnlyKey, false);
     config()->setValue(restConfig::kCacheMaxMegabytesKey, 2048);
     config()->setValue(restConfig::kCacheMaxAgeDaysKey, 45);
     config()->setValue(restConfig::kMaxConcurrentDownloadsKey, 4);
@@ -43,6 +51,7 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
 
     EXPECT_TRUE(settings.enabled);
     EXPECT_FALSE(settings.cacheEnabled);
+    EXPECT_FALSE(settings.useMixManDefaults);
     EXPECT_EQ(settings.baseUrl, QUrl(QStringLiteral("https://example.com/api")));
     EXPECT_EQ(settings.bearerToken, QStringLiteral("test-token"));
     EXPECT_EQ(settings.trackListPath, QStringLiteral("/tracks"));
@@ -53,6 +62,14 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     EXPECT_EQ(settings.cacheDirectoryPath, QStringLiteral("C:/mixxx/rest-cache"));
     EXPECT_EQ(settings.pageSize, 25);
     EXPECT_EQ(settings.recommendationLimit, 7);
+    EXPECT_EQ(settings.mixManPathDepth, 8);
+    EXPECT_EQ(settings.mixManPolicyPreset, QStringLiteral("explore"));
+    EXPECT_TRUE(settings.mixManTargetEnergyEnabled);
+    EXPECT_EQ(settings.mixManTargetEnergy, 4);
+    EXPECT_DOUBLE_EQ(settings.mixManTargetEnergyNormalized(), 0.8);
+    EXPECT_TRUE(settings.mixManTargetColorEnabled);
+    EXPECT_EQ(settings.mixManTargetColor, QStringLiteral("#ff6600"));
+    EXPECT_FALSE(settings.mixManAdminApprovedOnly);
     EXPECT_EQ(settings.cacheMaxMegabytes, 2048);
     EXPECT_EQ(settings.cacheMaxAgeDays, 45);
     EXPECT_EQ(settings.maxConcurrentDownloads, 4);
@@ -63,8 +80,20 @@ TEST_F(RestLibrarySettingsTest, UsesDefaultsAndFallbackCacheDirectory) {
 
     EXPECT_EQ(settings.enabled, restConfig::kDefaultEnabled);
     EXPECT_EQ(settings.cacheEnabled, restConfig::kDefaultCacheEnabled);
+    EXPECT_EQ(settings.useMixManDefaults, restConfig::kDefaultUseMixManDefaults);
+    EXPECT_EQ(settings.trackListPath, restConfig::mixManTrackListPath());
+    EXPECT_EQ(settings.trackDetailPathTemplate, restConfig::mixManTrackDetailPathTemplate());
+    EXPECT_EQ(settings.trackLookupPathTemplate, restConfig::mixManTrackLookupPathTemplate());
+    EXPECT_EQ(settings.recommendationPathTemplate, restConfig::mixManRecommendationPathTemplate());
+    EXPECT_EQ(settings.audioDownloadPathTemplate, restConfig::mixManAudioDownloadPathTemplate());
     EXPECT_EQ(settings.pageSize, restConfig::kDefaultPageSize);
     EXPECT_EQ(settings.recommendationLimit, restConfig::kDefaultRecommendationLimit);
+    EXPECT_EQ(settings.mixManPathDepth, restConfig::kDefaultMixManPathDepth);
+    EXPECT_EQ(settings.mixManPolicyPreset, QStringLiteral("dj_assist"));
+    EXPECT_EQ(settings.mixManTargetEnergyEnabled, restConfig::kDefaultMixManTargetEnergyEnabled);
+    EXPECT_EQ(settings.mixManTargetEnergy, restConfig::kDefaultMixManTargetEnergy);
+    EXPECT_EQ(settings.mixManTargetColorEnabled, restConfig::kDefaultMixManTargetColorEnabled);
+    EXPECT_EQ(settings.mixManAdminApprovedOnly, restConfig::kDefaultMixManAdminApprovedOnly);
     EXPECT_EQ(settings.cacheMaxMegabytes, restConfig::kDefaultCacheMaxMegabytes);
     EXPECT_EQ(settings.cacheMaxAgeDays, restConfig::kDefaultCacheMaxAgeDays);
     EXPECT_EQ(settings.maxConcurrentDownloads, restConfig::kDefaultMaxConcurrentDownloads);
@@ -76,6 +105,10 @@ TEST_F(RestLibrarySettingsTest, ClampsNumericValues) {
     config()->setValue(
             restConfig::kRecommendationLimitKey,
             restConfig::kMinRecommendationLimit - 1);
+    config()->setValue(restConfig::kMixManPathDepthKey, restConfig::kMaxMixManPathDepth + 1);
+    config()->setValue(
+            restConfig::kMixManTargetEnergyKey,
+            restConfig::kMinMixManTargetEnergy - 1);
     config()->setValue(
             restConfig::kCacheMaxMegabytesKey,
             restConfig::kMaxCacheMaxMegabytes + 1);
@@ -88,6 +121,8 @@ TEST_F(RestLibrarySettingsTest, ClampsNumericValues) {
 
     EXPECT_EQ(settings.pageSize, restConfig::kMaxPageSize);
     EXPECT_EQ(settings.recommendationLimit, restConfig::kMinRecommendationLimit);
+    EXPECT_EQ(settings.mixManPathDepth, restConfig::kMaxMixManPathDepth);
+    EXPECT_EQ(settings.mixManTargetEnergy, restConfig::kMinMixManTargetEnergy);
     EXPECT_EQ(settings.cacheMaxMegabytes, restConfig::kMaxCacheMaxMegabytes);
     EXPECT_EQ(settings.cacheMaxAgeDays, restConfig::kMinCacheMaxAgeDays);
     EXPECT_EQ(settings.maxConcurrentDownloads, restConfig::kMaxMaxConcurrentDownloads);

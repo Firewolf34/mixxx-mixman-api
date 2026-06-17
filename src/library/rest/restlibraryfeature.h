@@ -45,6 +45,14 @@ class RestLibraryFeature final : public LibraryFeature {
     void slotTrackLookupMissed(const QString& message);
     void slotRecommendationsFetched(
             const QList<mixxx::library::rest::RestLibraryTrack>& tracks);
+    void slotDiagnosticsUpdated(const mixxx::library::rest::RestLibraryDiagnostics& diagnostics);
+    void slotPolicyPresetsFetched(
+            const QList<mixxx::library::rest::RestLibraryPolicyPreset>& presets);
+    void slotMixManPolicyPathFetched(
+            const mixxx::library::rest::RestLibraryPolicyPath& policyPath);
+    void slotPolicyPresetChanged(const QString& presetKey);
+    void slotTargetEnergyChanged(bool enabled, int energy);
+    void slotTargetColorChanged(bool enabled, const QString& color);
     void slotFetchFailed(const QString& message);
     void slotTrackCacheStateChanged(
             const mixxx::library::rest::RestLibraryCacheResult& result);
@@ -55,6 +63,9 @@ class RestLibraryFeature final : public LibraryFeature {
             const RestLibrarySettings& settings,
             const QString& remoteId);
     void setRecommendationTracks(const QList<RestLibraryTrack>& tracks);
+    void refreshMixManControls(const RestLibrarySettings& settings);
+    void updateDiagnosticsText();
+    void setPathSummary(const RestLibraryPolicyPath& policyPath);
     void setStatusText(const QString& statusText);
     void updateReadyStatus();
     void clearRecommendations();
@@ -68,12 +79,14 @@ class RestLibraryFeature final : public LibraryFeature {
     QNetworkAccessManager m_networkAccessManager;
     RestLibraryClient m_client;
     RestLibraryCacheManager m_cacheManager;
+    RestLibraryDiagnostics m_diagnostics;
     QHash<QString, QString> m_cachedPathToRemoteId;
     QHash<QString, RestLibraryCacheState> m_cacheStates;
     QString m_lastRequestedTrackLocation;
     QString m_currentRemoteId;
     QString m_statusText;
     int m_recommendationCount = 0;
+    double m_averageQuality = 0.0;
     bool m_followCurrentTrack = true;
 
   signals:

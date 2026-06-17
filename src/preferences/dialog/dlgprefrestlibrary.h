@@ -26,6 +26,7 @@ class DlgPrefRestLibrary : public DlgPreferencePage {
   private slots:
     void slotBrowseCacheDirectory();
     void slotUpdateCacheControls(bool enabled);
+    void slotUpdateMixManDefaultsControls(bool enabled);
     void slotUpdateValidationState();
 
   private:

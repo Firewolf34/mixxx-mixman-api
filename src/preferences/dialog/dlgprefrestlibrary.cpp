@@ -33,6 +33,9 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pCo
     m_pUi->spinBoxRecommendationLimit->setRange(
             restConfig::kMinRecommendationLimit,
             restConfig::kMaxRecommendationLimit);
+    m_pUi->spinBoxMixManPathDepth->setRange(
+            restConfig::kMinMixManPathDepth,
+            restConfig::kMaxMixManPathDepth);
     m_pUi->spinBoxCacheMaxMegabytes->setRange(
             restConfig::kMinCacheMaxMegabytes,
             restConfig::kMaxCacheMaxMegabytes);
@@ -53,11 +56,16 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pCo
             &QCheckBox::toggled,
             this,
             &DlgPrefRestLibrary::slotUpdateCacheControls);
+    connect(m_pUi->checkBoxUseMixManDefaults,
+            &QCheckBox::toggled,
+            this,
+            &DlgPrefRestLibrary::slotUpdateMixManDefaultsControls);
 
     const auto updateValidation = [this] {
         slotUpdateValidationState();
     };
     connect(m_pUi->checkBoxEnabled, &QCheckBox::toggled, this, updateValidation);
+    connect(m_pUi->checkBoxUseMixManDefaults, &QCheckBox::toggled, this, updateValidation);
     connect(m_pUi->lineEditBaseUrl, &QLineEdit::textChanged, this, updateValidation);
     connect(m_pUi->lineEditTrackListPath, &QLineEdit::textChanged, this, updateValidation);
     connect(m_pUi->lineEditTrackDetailPathTemplate,
@@ -93,6 +101,9 @@ void DlgPrefRestLibrary::slotUpdate() {
     m_pUi->lineEditBearerToken->setText(
             m_pConfig->getValueString(restConfig::kLocalDevBearerTokenKey));
     m_pUi->spinBoxPageSize->setValue(settings.pageSize);
+    m_pUi->checkBoxUseMixManDefaults->setChecked(settings.useMixManDefaults);
+    m_pUi->spinBoxMixManPathDepth->setValue(settings.mixManPathDepth);
+    m_pUi->checkBoxMixManAdminApprovedOnly->setChecked(settings.mixManAdminApprovedOnly);
     m_pUi->lineEditTrackListPath->setText(
             m_pConfig->getValueString(restConfig::kTrackListPathKey));
     m_pUi->lineEditTrackDetailPathTemplate->setText(
@@ -111,6 +122,7 @@ void DlgPrefRestLibrary::slotUpdate() {
     m_pUi->spinBoxMaxConcurrentDownloads->setValue(settings.maxConcurrentDownloads);
 
     slotUpdateCacheControls(settings.cacheEnabled);
+    slotUpdateMixManDefaultsControls(settings.useMixManDefaults);
     slotUpdateValidationState();
 }
 
@@ -131,6 +143,10 @@ void DlgPrefRestLibrary::slotResetToDefaults() {
     m_pUi->lineEditBaseUrl->clear();
     m_pUi->lineEditBearerToken->clear();
     m_pUi->spinBoxPageSize->setValue(restConfig::kDefaultPageSize);
+    m_pUi->checkBoxUseMixManDefaults->setChecked(restConfig::kDefaultUseMixManDefaults);
+    m_pUi->spinBoxMixManPathDepth->setValue(restConfig::kDefaultMixManPathDepth);
+    m_pUi->checkBoxMixManAdminApprovedOnly->setChecked(
+            restConfig::kDefaultMixManAdminApprovedOnly);
     m_pUi->lineEditTrackListPath->clear();
     m_pUi->lineEditTrackDetailPathTemplate->clear();
     m_pUi->lineEditTrackLookupPathTemplate->clear();
@@ -144,6 +160,7 @@ void DlgPrefRestLibrary::slotResetToDefaults() {
     m_pUi->spinBoxMaxConcurrentDownloads->setValue(restConfig::kDefaultMaxConcurrentDownloads);
 
     slotUpdateCacheControls(restConfig::kDefaultCacheEnabled);
+    slotUpdateMixManDefaultsControls(restConfig::kDefaultUseMixManDefaults);
     slotUpdateValidationState();
 }
 
@@ -169,6 +186,10 @@ void DlgPrefRestLibrary::slotUpdateCacheControls(bool enabled) {
     m_pUi->spinBoxMaxConcurrentDownloads->setEnabled(enabled);
 }
 
+void DlgPrefRestLibrary::slotUpdateMixManDefaultsControls(bool enabled) {
+    m_pUi->groupBoxApiPaths->setEnabled(!enabled);
+}
+
 void DlgPrefRestLibrary::slotUpdateValidationState() {
     m_pUi->labelValidationWarning->setVisible(!isInputValid());
 }
@@ -177,11 +198,16 @@ bool DlgPrefRestLibrary::isInputValid() const {
     if (!m_pUi->checkBoxEnabled->isChecked()) {
         return true;
     }
+    const bool useMixManDefaults = m_pUi->checkBoxUseMixManDefaults->isChecked();
     return hasValidBaseUrl() &&
-            !m_pUi->lineEditTrackListPath->text().trimmed().isEmpty() &&
-            hasValidRemoteIdTemplate(m_pUi->lineEditTrackDetailPathTemplate->text()) &&
-            hasValidRemoteIdTemplate(m_pUi->lineEditRecommendationPathTemplate->text()) &&
-            hasValidRemoteIdTemplate(m_pUi->lineEditAudioDownloadPathTemplate->text());
+            (useMixManDefaults ||
+                    (!m_pUi->lineEditTrackListPath->text().trimmed().isEmpty() &&
+                            hasValidRemoteIdTemplate(
+                                    m_pUi->lineEditTrackDetailPathTemplate->text()) &&
+                            hasValidRemoteIdTemplate(
+                                    m_pUi->lineEditRecommendationPathTemplate->text()) &&
+                            hasValidRemoteIdTemplate(
+                                    m_pUi->lineEditAudioDownloadPathTemplate->text())));
 }
 
 bool DlgPrefRestLibrary::hasValidBaseUrl() const {
@@ -198,6 +224,13 @@ void DlgPrefRestLibrary::writeSettings() {
     m_pConfig->setValue(restConfig::kBaseUrlKey, m_pUi->lineEditBaseUrl->text().trimmed());
     m_pConfig->setValue(restConfig::kLocalDevBearerTokenKey, m_pUi->lineEditBearerToken->text());
     m_pConfig->setValue(restConfig::kPageSizeKey, m_pUi->spinBoxPageSize->value());
+    m_pConfig->setValue(
+            restConfig::kUseMixManDefaultsKey,
+            m_pUi->checkBoxUseMixManDefaults->isChecked());
+    m_pConfig->setValue(restConfig::kMixManPathDepthKey, m_pUi->spinBoxMixManPathDepth->value());
+    m_pConfig->setValue(
+            restConfig::kMixManAdminApprovedOnlyKey,
+            m_pUi->checkBoxMixManAdminApprovedOnly->isChecked());
     m_pConfig->setValue(
             restConfig::kTrackListPathKey,
             m_pUi->lineEditTrackListPath->text().trimmed());

@@ -29,11 +29,14 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     config()->setValue(restConfig::kEnabledKey, true);
     config()->setValue(restConfig::kBaseUrlKey, QStringLiteral("https://example.com/api"));
     config()->setValue(restConfig::kLocalDevBearerTokenKey, QStringLiteral("old-token"));
+    config()->setValue(restConfig::kUseMixManDefaultsKey, false);
     config()->setValue(restConfig::kTrackListPathKey, QStringLiteral("/old-tracks"));
     config()->setValue(restConfig::kTrackDetailPathTemplateKey, QStringLiteral("/old/%1"));
     config()->setValue(restConfig::kTrackLookupPathTemplateKey, QStringLiteral("/lookup"));
     config()->setValue(restConfig::kRecommendationPathTemplateKey, QStringLiteral("/old/%1/related"));
     config()->setValue(restConfig::kRecommendationLimitKey, 6);
+    config()->setValue(restConfig::kMixManPathDepthKey, 7);
+    config()->setValue(restConfig::kMixManAdminApprovedOnlyKey, false);
     config()->setValue(restConfig::kAudioDownloadPathTemplateKey, QStringLiteral("/old/%1/audio"));
     config()->setValue(restConfig::kCacheEnabledKey, true);
     config()->setValue(restConfig::kCacheDirectoryKey, QStringLiteral("C:/cache"));
@@ -47,6 +50,10 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     auto* pEnabled = requireChild<QCheckBox>(&page, "checkBoxEnabled");
     auto* pBaseUrl = requireChild<QLineEdit>(&page, "lineEditBaseUrl");
     auto* pToken = requireChild<QLineEdit>(&page, "lineEditBearerToken");
+    auto* pUseMixManDefaults = requireChild<QCheckBox>(&page, "checkBoxUseMixManDefaults");
+    auto* pMixManPathDepth = requireChild<QSpinBox>(&page, "spinBoxMixManPathDepth");
+    auto* pMixManAdminApprovedOnly =
+            requireChild<QCheckBox>(&page, "checkBoxMixManAdminApprovedOnly");
     auto* pTrackList = requireChild<QLineEdit>(&page, "lineEditTrackListPath");
     auto* pTrackDetail = requireChild<QLineEdit>(&page, "lineEditTrackDetailPathTemplate");
     auto* pTrackLookup = requireChild<QLineEdit>(&page, "lineEditTrackLookupPathTemplate");
@@ -63,6 +70,9 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     EXPECT_TRUE(pEnabled->isChecked());
     EXPECT_EQ(pBaseUrl->text(), QStringLiteral("https://example.com/api"));
     EXPECT_EQ(pToken->text(), QStringLiteral("old-token"));
+    EXPECT_FALSE(pUseMixManDefaults->isChecked());
+    EXPECT_EQ(pMixManPathDepth->value(), 7);
+    EXPECT_FALSE(pMixManAdminApprovedOnly->isChecked());
     EXPECT_EQ(pTrackList->text(), QStringLiteral("/old-tracks"));
     EXPECT_EQ(pTrackDetail->text(), QStringLiteral("/old/%1"));
     EXPECT_EQ(pTrackLookup->text(), QStringLiteral("/lookup"));
@@ -77,6 +87,9 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
 
     pBaseUrl->setText(QStringLiteral("https://new.example.test"));
     pToken->setText(QStringLiteral("new-token"));
+    pUseMixManDefaults->setChecked(true);
+    pMixManPathDepth->setValue(5);
+    pMixManAdminApprovedOnly->setChecked(true);
     pTrackList->setText(QStringLiteral("/tracks"));
     pTrackDetail->setText(QStringLiteral("/tracks/%1"));
     pTrackLookup->setText(QStringLiteral("/find?artist=%artist&title=%title"));
@@ -93,6 +106,9 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
 
     EXPECT_EQ(config()->getValueString(restConfig::kBaseUrlKey), QStringLiteral("https://new.example.test"));
     EXPECT_EQ(config()->getValueString(restConfig::kLocalDevBearerTokenKey), QStringLiteral("new-token"));
+    EXPECT_TRUE(config()->getValue(restConfig::kUseMixManDefaultsKey, false));
+    EXPECT_EQ(config()->getValue(restConfig::kMixManPathDepthKey, 0), 5);
+    EXPECT_TRUE(config()->getValue(restConfig::kMixManAdminApprovedOnlyKey, false));
     EXPECT_EQ(config()->getValueString(restConfig::kTrackListPathKey), QStringLiteral("/tracks"));
     EXPECT_EQ(config()->getValueString(restConfig::kTrackDetailPathTemplateKey), QStringLiteral("/tracks/%1"));
     EXPECT_EQ(
@@ -125,6 +141,11 @@ TEST_F(DlgPrefRestLibraryTest, ResetToDefaultsRestoresDefaultValues) {
     EXPECT_EQ(
             requireChild<QSpinBox>(&page, "spinBoxRecommendationLimit")->value(),
             restConfig::kDefaultRecommendationLimit);
+    EXPECT_TRUE(requireChild<QCheckBox>(&page, "checkBoxUseMixManDefaults")->isChecked());
+    EXPECT_EQ(
+            requireChild<QSpinBox>(&page, "spinBoxMixManPathDepth")->value(),
+            restConfig::kDefaultMixManPathDepth);
+    EXPECT_TRUE(requireChild<QCheckBox>(&page, "checkBoxMixManAdminApprovedOnly")->isChecked());
     EXPECT_EQ(
             requireChild<QLineEdit>(&page, "lineEditCacheDirectory")->text(),
             restConfig::defaultCacheDirectoryPath(config()));
@@ -139,6 +160,7 @@ TEST_F(DlgPrefRestLibraryTest, ResetToDefaultsRestoresDefaultValues) {
     EXPECT_EQ(
             config()->getValue(restConfig::kRecommendationLimitKey, 0),
             restConfig::kDefaultRecommendationLimit);
+    EXPECT_TRUE(config()->getValue(restConfig::kUseMixManDefaultsKey, false));
 }
 
 TEST_F(DlgPrefRestLibraryTest, CacheControlsFollowCacheEnabledCheckbox) {
@@ -167,6 +189,7 @@ TEST_F(DlgPrefRestLibraryTest, InvalidEnabledSettingsBlockApply) {
 
     auto* pEnabled = requireChild<QCheckBox>(&page, "checkBoxEnabled");
     auto* pBaseUrl = requireChild<QLineEdit>(&page, "lineEditBaseUrl");
+    auto* pUseMixManDefaults = requireChild<QCheckBox>(&page, "checkBoxUseMixManDefaults");
     auto* pTrackList = requireChild<QLineEdit>(&page, "lineEditTrackListPath");
     auto* pTrackDetail = requireChild<QLineEdit>(&page, "lineEditTrackDetailPathTemplate");
     auto* pRecommendations = requireChild<QLineEdit>(&page, "lineEditRecommendationPathTemplate");
@@ -186,6 +209,11 @@ TEST_F(DlgPrefRestLibraryTest, InvalidEnabledSettingsBlockApply) {
     EXPECT_FALSE(config()->getValue(restConfig::kEnabledKey, false));
 
     pBaseUrl->setText(QStringLiteral("https://example.com"));
+    EXPECT_TRUE(page.okayToClose());
+
+    pUseMixManDefaults->setChecked(false);
+    EXPECT_FALSE(page.okayToClose());
+
     pTrackDetail->setText(QStringLiteral("/tracks/%1"));
     pRecommendations->setText(QStringLiteral("/tracks/%1/recommendations"));
     pAudioDownload->setText(QStringLiteral("/tracks/%1/audio"));

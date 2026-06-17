@@ -55,6 +55,42 @@ QString defaultCacheDirectoryPath(const UserSettingsPointer& pConfig) {
     return QDir(pConfig->getSettingsPath()).filePath(QStringLiteral("rest-library-cache"));
 }
 
+QString mixManTrackListPath() {
+    return QStringLiteral("/tracks");
+}
+
+QString mixManTrackDetailPathTemplate() {
+    return QStringLiteral("/tracks/%1");
+}
+
+QString mixManTrackLookupPathTemplate() {
+    return QStringLiteral("/tracks?artists=%artist&titles=%title");
+}
+
+QString mixManRecommendationPathTemplate() {
+    return QStringLiteral("/recommendations/policy-console/path/%1");
+}
+
+QString mixManAudioDownloadPathTemplate() {
+    return QStringLiteral("/download?track_id=%1");
+}
+
+QString mixManHealthPath() {
+    return QStringLiteral("/health");
+}
+
+QString mixManConfigPath() {
+    return QStringLiteral("/config");
+}
+
+QString mixManIndexStatusPath() {
+    return QStringLiteral("/recommendations/index_status");
+}
+
+QString mixManPolicyPresetsPath() {
+    return QStringLiteral("/recommendations/policy-presets");
+}
+
 } // namespace config
 
 RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& pConfig) {
@@ -64,6 +100,9 @@ RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& p
     }
 
     settings.enabled = pConfig->getValue<bool>(config::kEnabledKey, config::kDefaultEnabled);
+    settings.useMixManDefaults = pConfig->getValue<bool>(
+            config::kUseMixManDefaultsKey,
+            config::kDefaultUseMixManDefaults);
     settings.cacheEnabled = pConfig->getValue<bool>(
             config::kCacheEnabledKey,
             config::kDefaultCacheEnabled);
@@ -77,15 +116,23 @@ RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& p
     if (settings.bearerToken.isEmpty()) {
         settings.bearerToken = pConfig->getValueString(config::kLocalDevBearerTokenKey);
     }
-    settings.trackListPath = pConfig->getValueString(config::kTrackListPathKey);
-    settings.trackDetailPathTemplate = pConfig->getValueString(
-            config::kTrackDetailPathTemplateKey);
-    settings.trackLookupPathTemplate = pConfig->getValueString(
-            config::kTrackLookupPathTemplateKey);
-    settings.recommendationPathTemplate = pConfig->getValueString(
-            config::kRecommendationPathTemplateKey);
-    settings.audioDownloadPathTemplate = pConfig->getValueString(
-            config::kAudioDownloadPathTemplateKey);
+    if (settings.useMixManDefaults) {
+        settings.trackListPath = config::mixManTrackListPath();
+        settings.trackDetailPathTemplate = config::mixManTrackDetailPathTemplate();
+        settings.trackLookupPathTemplate = config::mixManTrackLookupPathTemplate();
+        settings.recommendationPathTemplate = config::mixManRecommendationPathTemplate();
+        settings.audioDownloadPathTemplate = config::mixManAudioDownloadPathTemplate();
+    } else {
+        settings.trackListPath = pConfig->getValueString(config::kTrackListPathKey);
+        settings.trackDetailPathTemplate = pConfig->getValueString(
+                config::kTrackDetailPathTemplateKey);
+        settings.trackLookupPathTemplate = pConfig->getValueString(
+                config::kTrackLookupPathTemplateKey);
+        settings.recommendationPathTemplate = pConfig->getValueString(
+                config::kRecommendationPathTemplateKey);
+        settings.audioDownloadPathTemplate = pConfig->getValueString(
+                config::kAudioDownloadPathTemplateKey);
+    }
     settings.cacheDirectoryPath = pConfig->getValueString(config::kCacheDirectoryKey);
     if (settings.cacheDirectoryPath.trimmed().isEmpty()) {
         settings.cacheDirectoryPath = config::defaultCacheDirectoryPath(pConfig);
@@ -100,6 +147,32 @@ RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& p
                     config::kDefaultRecommendationLimit),
             config::kMinRecommendationLimit,
             config::kMaxRecommendationLimit);
+    settings.mixManPathDepth = std::clamp(
+            pConfig->getValue<int>(
+                    config::kMixManPathDepthKey,
+                    config::kDefaultMixManPathDepth),
+            config::kMinMixManPathDepth,
+            config::kMaxMixManPathDepth);
+    settings.mixManPolicyPreset = pConfig->getValueString(config::kMixManPolicyPresetKey);
+    if (settings.mixManPolicyPreset.trimmed().isEmpty()) {
+        settings.mixManPolicyPreset = QStringLiteral("dj_assist");
+    }
+    settings.mixManTargetEnergyEnabled = pConfig->getValue<bool>(
+            config::kMixManTargetEnergyEnabledKey,
+            config::kDefaultMixManTargetEnergyEnabled);
+    settings.mixManTargetEnergy = std::clamp(
+            pConfig->getValue<int>(
+                    config::kMixManTargetEnergyKey,
+                    config::kDefaultMixManTargetEnergy),
+            config::kMinMixManTargetEnergy,
+            config::kMaxMixManTargetEnergy);
+    settings.mixManTargetColorEnabled = pConfig->getValue<bool>(
+            config::kMixManTargetColorEnabledKey,
+            config::kDefaultMixManTargetColorEnabled);
+    settings.mixManTargetColor = pConfig->getValueString(config::kMixManTargetColorKey);
+    settings.mixManAdminApprovedOnly = pConfig->getValue<bool>(
+            config::kMixManAdminApprovedOnlyKey,
+            config::kDefaultMixManAdminApprovedOnly);
     settings.cacheMaxMegabytes = std::clamp(
             pConfig->getValue<int>(
                     config::kCacheMaxMegabytesKey,
@@ -143,6 +216,11 @@ bool RestLibrarySettings::hasTrackLookupConfigured() const {
 bool RestLibrarySettings::hasRecommendationsConfigured() const {
     return isConfigured() &&
             recommendationPathTemplate.contains(QStringLiteral("%1"));
+}
+
+double RestLibrarySettings::mixManTargetEnergyNormalized() const {
+    return static_cast<double>(mixManTargetEnergy) /
+            static_cast<double>(config::kMaxMixManTargetEnergy);
 }
 
 } // namespace mixxx::library::rest

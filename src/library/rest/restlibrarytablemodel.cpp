@@ -56,6 +56,10 @@ QStringList searchableFields(const RestLibraryTrack& track) {
             track.comment,
             track.keyText,
             track.sourceLabel,
+            track.moveType,
+            track.color,
+            track.region,
+            track.reasonCodes.join(QLatin1Char(' ')),
             track.remoteId};
 }
 
@@ -137,6 +141,22 @@ QVariant RestLibraryTableModel::data(const QModelIndex& index, int role) const {
                 ? tr("Track must be cached locally before it can be loaded.")
                 : QDir::toNativeSeparators(pTrack->cachedFilePath);
     }
+    if (role == Qt::ToolTipRole && index.column() == ColumnQuality) {
+        QStringList details;
+        if (pTrack->score > 0.0) {
+            details.append(tr("Score: %1").arg(pTrack->score, 0, 'f', 2));
+        }
+        if (pTrack->transitionFit > 0.0) {
+            details.append(tr("Transition fit: %1").arg(pTrack->transitionFit, 0, 'f', 2));
+        }
+        if (pTrack->targetDistance > 0.0) {
+            details.append(tr("Target distance: %1").arg(pTrack->targetDistance, 0, 'f', 2));
+        }
+        if (!pTrack->reasonCodes.isEmpty()) {
+            details.append(pTrack->reasonCodes.join(QStringLiteral(", ")));
+        }
+        return details.join(QLatin1Char('\n'));
+    }
     return {};
 }
 
@@ -153,6 +173,8 @@ QVariant RestLibraryTableModel::headerData(
         switch (section) {
         case ColumnCacheState:
             return tr("Cache");
+        case ColumnQuality:
+            return tr("Quality");
         case ColumnArtist:
             return tr("Artist");
         case ColumnTitle:
@@ -180,6 +202,8 @@ QVariant RestLibraryTableModel::headerData(
         switch (section) {
         case ColumnCacheState:
             return 90;
+        case ColumnQuality:
+            return 80;
         case ColumnBpm:
         case ColumnKey:
         case ColumnDuration:
@@ -360,6 +384,9 @@ int RestLibraryTableModel::fieldIndex(const QString& fieldName) const {
     if (fieldName == QStringLiteral("bpm")) {
         return ColumnBpm;
     }
+    if (fieldName == QStringLiteral("quality")) {
+        return ColumnQuality;
+    }
     if (fieldName == QStringLiteral("key")) {
         return ColumnKey;
     }
@@ -414,6 +441,9 @@ QVariant RestLibraryTableModel::valueForColumn(
     switch (column) {
     case ColumnCacheState:
         return cacheStateText(track.cacheState);
+    case ColumnQuality:
+        return track.quality > 0.0 ? QVariant(QString::number(track.quality, 'f', 2))
+                                   : QVariant();
     case ColumnArtist:
         return track.artist;
     case ColumnTitle:

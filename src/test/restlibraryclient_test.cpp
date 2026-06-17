@@ -3,6 +3,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
+#include <QStringList>
 
 #include "library/rest/restlibraryclient.h"
 #include "test/mock_networkaccessmanager.h"
@@ -27,6 +28,23 @@ RestLibrarySettings newRecommendationSettings() {
     settings.trackDetailPathTemplate = QStringLiteral("/configured-detail/%1");
     settings.recommendationPathTemplate = QStringLiteral("/configured-related/%1");
     settings.recommendationLimit = 5;
+    return settings;
+}
+
+RestLibrarySettings newMixManSettings() {
+    RestLibrarySettings settings = newSettings();
+    settings.useMixManDefaults = true;
+    settings.trackLookupPathTemplate = QStringLiteral("/tracks?artists=%artist&titles=%title");
+    settings.recommendationPathTemplate =
+            QStringLiteral("/recommendations/policy-console/path/%1");
+    settings.recommendationLimit = 10;
+    settings.mixManPathDepth = 5;
+    settings.mixManPolicyPreset = QStringLiteral("build_energy");
+    settings.mixManTargetEnergyEnabled = true;
+    settings.mixManTargetEnergy = 4;
+    settings.mixManTargetColorEnabled = true;
+    settings.mixManTargetColor = QStringLiteral("#ff6600");
+    settings.mixManAdminApprovedOnly = true;
     return settings;
 }
 
@@ -75,6 +93,98 @@ TEST(RestLibraryClientTest, ParsesTrackObjectFallbackFields) {
     EXPECT_EQ(track.title, QStringLiteral("Fallback Title"));
     EXPECT_DOUBLE_EQ(track.durationSeconds, 120.0);
     EXPECT_EQ(track.rating, 5);
+}
+
+TEST(RestLibraryClientTest, ParsesMixManIndexStatus) {
+    const QJsonDocument document = QJsonDocument::fromJson(R"json(
+        {"ready": true, "count": 123, "dim": 512}
+    )json");
+
+    const auto diagnostics = RestLibraryClient::parseIndexStatusDocumentForTesting(document);
+
+    EXPECT_TRUE(diagnostics.indexKnown);
+    EXPECT_TRUE(diagnostics.indexReady);
+    EXPECT_EQ(diagnostics.indexCount, 123);
+    EXPECT_EQ(diagnostics.indexDimension, 512);
+}
+
+TEST(RestLibraryClientTest, ParsesMixManPolicyPresets) {
+    const QJsonDocument document = QJsonDocument::fromJson(R"json(
+        [
+          {"key": "party_safe", "label": "Party Safe", "description": "Safer choices"},
+          {"key": "explore", "label": "Explore", "description": "Broader choices"}
+        ]
+    )json");
+
+    const auto presets = RestLibraryClient::parsePolicyPresetsDocumentForTesting(document);
+
+    ASSERT_EQ(presets.size(), 2);
+    EXPECT_EQ(presets.at(0).key, QStringLiteral("party_safe"));
+    EXPECT_EQ(presets.at(0).label, QStringLiteral("Party Safe"));
+    EXPECT_EQ(presets.at(1).key, QStringLiteral("explore"));
+}
+
+TEST(RestLibraryClientTest, ParsesMixManPolicyPath) {
+    const QJsonDocument document = QJsonDocument::fromJson(R"json(
+        {
+          "policy_preset": "build_energy",
+          "resolved_move_type": "bridge",
+          "recommendation_event_id": 77,
+          "tracks_by_id": {
+            "8": {
+              "track_id": 8,
+              "title": "First",
+              "artist": "Ada",
+              "metadata": {"bpm": 124, "quality_score": 0.91}
+            },
+            "9": {
+              "track_id": 9,
+              "title": "Second",
+              "artist": "Ben",
+              "metadata": {"bpm": 126}
+            }
+          },
+          "plan": {
+            "alternatives": [
+              {
+                "track_id": 8,
+                "score": 0.88,
+                "position": 1,
+                "recommendation_event_id": 77,
+                "recommendation_item_id": 701,
+                "reason_codes": ["energy_match"],
+                "candidate_features": {
+                  "transition_fit": 0.72,
+                  "target_distance": 0.15
+                }
+              }
+            ]
+          },
+          "path": {
+            "selected_branch_score": 0.77,
+            "steps": [
+              {"track_id": 8, "score": 0.88, "position": 1},
+              {"track_id": 9, "score": 0.80, "position": 2}
+            ]
+          }
+        }
+    )json");
+
+    const auto path = RestLibraryClient::parsePolicyPathDocumentForTesting(document);
+
+    EXPECT_EQ(path.policyPreset, QStringLiteral("build_energy"));
+    EXPECT_EQ(path.resolvedMoveType, QStringLiteral("bridge"));
+    EXPECT_EQ(path.recommendationEventId, 77);
+    EXPECT_DOUBLE_EQ(path.selectedBranchScore, 0.77);
+    ASSERT_EQ(path.candidates.size(), 1);
+    EXPECT_EQ(path.candidates.at(0).remoteId, QStringLiteral("8"));
+    EXPECT_EQ(path.candidates.at(0).title, QStringLiteral("First"));
+    EXPECT_EQ(path.candidates.at(0).quality, 0.88);
+    EXPECT_EQ(path.candidates.at(0).reasonCodes, QStringList({QStringLiteral("energy_match")}));
+    EXPECT_DOUBLE_EQ(path.candidates.at(0).transitionFit, 0.72);
+    ASSERT_EQ(path.path.size(), 2);
+    EXPECT_EQ(path.path.at(1).remoteId, QStringLiteral("9"));
+    EXPECT_EQ(path.path.at(1).position, 2);
 }
 
 TEST(RestLibraryClientTest, FetchesTrackListWithMockNetworkAccessManager) {
@@ -196,4 +306,35 @@ TEST(RestLibraryClientTest, FetchesRecommendationsWithConfiguredTemplate) {
     ASSERT_EQ(tracks.size(), 2);
     EXPECT_EQ(tracks.at(0).remoteId, QStringLiteral("remote-8"));
     EXPECT_EQ(tracks.at(1).remoteId, QStringLiteral("remote-9"));
+}
+
+TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::mixManPolicyPathFetched);
+    QSignalSpy failedSpy(&client, &RestLibraryClient::fetchFailed);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/recommendations/policy-console/path/source-1"),
+            {{"candidate_limit", "10"},
+                    {"planning_depth", "5"},
+                    {"admin_approved_only", "true"},
+                    {"policy_preset", "build_energy"},
+                    {"target_energy", "0.80"},
+                    {"target_color", "#ff6600"}},
+            200,
+            R"json({
+              "tracks_by_id": {"8": {"track_id": 8, "title": "Policy Track"}},
+              "plan": {"alternatives": [{"track_id": 8, "score": 0.9}]},
+              "path": {"steps": [{"track_id": 8, "score": 0.9, "position": 1}]}
+            })json");
+
+    client.fetchMixManPolicyPath(newMixManSettings(), QStringLiteral("source-1"));
+    pReply->Done();
+
+    ASSERT_EQ(fetchedSpy.count(), 1);
+    EXPECT_EQ(failedSpy.count(), 0);
+    const auto path = qvariant_cast<mixxx::library::rest::RestLibraryPolicyPath>(
+            fetchedSpy.takeFirst().at(0));
+    ASSERT_EQ(path.candidates.size(), 1);
+    EXPECT_EQ(path.candidates.at(0).remoteId, QStringLiteral("8"));
 }
