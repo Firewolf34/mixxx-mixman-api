@@ -35,7 +35,25 @@ class RestLibraryClient final : public QObject {
     void fetchMixManPolicyPresets(const RestLibrarySettings& settings);
     void fetchMixManPolicyPath(
             const RestLibrarySettings& settings,
-            const QString& remoteId);
+            const QString& remoteId,
+            const QString& sessionId = {});
+    void createMixManSession(
+            const RestLibrarySettings& settings,
+            const QString& clientId,
+            const QJsonObject& metadata = {});
+    void publishMixManSessionSnapshot(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const RestLibrarySessionSnapshot& snapshot);
+    void updateMixManSessionIntent(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const RestLibrarySessionIntent& intent);
+    void sendMixManSessionHeartbeat(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const QString& clientId,
+            const QJsonObject& metadata = {});
 
     static QList<RestLibraryTrack> parseTrackListDocumentForTesting(
             const QJsonDocument& document);
@@ -46,6 +64,8 @@ class RestLibraryClient final : public QObject {
     static QList<RestLibraryPolicyPreset> parsePolicyPresetsDocumentForTesting(
             const QJsonDocument& document);
     static RestLibraryDiagnostics parseIndexStatusDocumentForTesting(
+            const QJsonDocument& document);
+    static RestLibrarySession parseSessionDocumentForTesting(
             const QJsonDocument& document);
 
   signals:
@@ -60,6 +80,10 @@ class RestLibraryClient final : public QObject {
             const QList<mixxx::library::rest::RestLibraryPolicyPreset>& presets);
     void mixManPolicyPathFetched(
             const mixxx::library::rest::RestLibraryPolicyPath& policyPath);
+    void mixManSessionCreated(
+            const mixxx::library::rest::RestLibrarySession& session);
+    void mixManSessionWriteStatusUpdated(
+            const mixxx::library::rest::RestLibrarySessionWriteStatus& status);
     void fetchFailed(const QString& message);
 
   private slots:
@@ -69,6 +93,8 @@ class RestLibraryClient final : public QObject {
     void slotIndexStatusFinished();
     void slotPolicyPresetsFinished();
     void slotPolicyPathFinished();
+    void slotSessionCreateFinished();
+    void slotSessionWriteFinished();
 
   private:
     struct PendingDetail {
@@ -83,6 +109,7 @@ class RestLibraryClient final : public QObject {
     };
 
     QNetworkRequest newRequest(const QString& path, int limit) const;
+    QNetworkRequest newJsonRequest(const QString& path) const;
     QNetworkRequest newDetailRequest(const QString& remoteId) const;
     void startDetailRequests(const QStringList& remoteIds);
     void finishDetailBatchIfComplete();
@@ -98,6 +125,7 @@ class RestLibraryClient final : public QObject {
     static QList<RestLibraryPolicyPreset> parsePolicyPresetsDocument(
             const QJsonDocument& document);
     static RestLibraryDiagnostics parseIndexStatusDocument(const QJsonDocument& document);
+    static RestLibrarySession parseSessionDocument(const QJsonDocument& document);
     static QString readString(
             const QJsonObject& object,
             std::initializer_list<QString> keys);

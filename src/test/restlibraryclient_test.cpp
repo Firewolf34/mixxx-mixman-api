@@ -187,6 +187,27 @@ TEST(RestLibraryClientTest, ParsesMixManPolicyPath) {
     EXPECT_EQ(path.path.at(1).position, 2);
 }
 
+TEST(RestLibraryClientTest, ParsesMixManSessionDetail) {
+    const QJsonDocument document = QJsonDocument::fromJson(R"json(
+        {
+          "session": {
+            "id": "session-1",
+            "display_name": "Kitchen Party",
+            "status": "active"
+          },
+          "snapshot": null,
+          "clients": [],
+          "recent_events": []
+        }
+    )json");
+
+    const auto session = RestLibraryClient::parseSessionDocumentForTesting(document);
+
+    EXPECT_EQ(session.id, QStringLiteral("session-1"));
+    EXPECT_EQ(session.displayName, QStringLiteral("Kitchen Party"));
+    EXPECT_EQ(session.status, QStringLiteral("active"));
+}
+
 TEST(RestLibraryClientTest, FetchesTrackListWithMockNetworkAccessManager) {
     MockNetworkAccessManager network;
     RestLibraryClient client(&network);
@@ -320,7 +341,8 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
                     {"admin_approved_only", "true"},
                     {"policy_preset", "build_energy"},
                     {"target_energy", "0.80"},
-                    {"target_color", "#ff6600"}},
+                    {"target_color", "#ff6600"},
+                    {"session_id", "session-1"}},
             200,
             R"json({
               "tracks_by_id": {"8": {"track_id": 8, "title": "Policy Track"}},
@@ -328,7 +350,10 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
               "path": {"steps": [{"track_id": 8, "score": 0.9, "position": 1}]}
             })json");
 
-    client.fetchMixManPolicyPath(newMixManSettings(), QStringLiteral("source-1"));
+    client.fetchMixManPolicyPath(
+            newMixManSettings(),
+            QStringLiteral("source-1"),
+            QStringLiteral("session-1"));
     pReply->Done();
 
     ASSERT_EQ(fetchedSpy.count(), 1);
@@ -337,4 +362,145 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
             fetchedSpy.takeFirst().at(0));
     ASSERT_EQ(path.candidates.size(), 1);
     EXPECT_EQ(path.candidates.at(0).remoteId, QStringLiteral("8"));
+}
+
+TEST(RestLibraryClientTest, CreatesMixManSession) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy createdSpy(&client, &RestLibraryClient::mixManSessionCreated);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pReply = network.ExpectPost(
+            QStringLiteral("/sessions"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"role\":\"policy_console\""),
+                    QStringLiteral("\"source\":\"mixxx\""),
+                    QStringLiteral("\"surface\":\"rest_library\"")},
+            201,
+            R"json({
+              "session": {
+                "id": "session-1",
+                "display_name": "Kitchen Party",
+                "status": "active"
+              },
+              "snapshot": null,
+              "clients": [],
+              "recent_events": []
+            })json");
+
+    client.createMixManSession(newMixManSettings(), QStringLiteral("client-1"));
+    pReply->Done();
+
+    ASSERT_EQ(createdSpy.count(), 1);
+    const auto session = qvariant_cast<mixxx::library::rest::RestLibrarySession>(
+            createdSpy.takeFirst().at(0));
+    EXPECT_EQ(session.id, QStringLiteral("session-1"));
+    ASSERT_EQ(statusSpy.count(), 1);
+    const auto status =
+            qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                    statusSpy.takeFirst().at(0));
+    EXPECT_TRUE(status.success);
+    EXPECT_EQ(status.operation, QStringLiteral("session_create"));
+}
+
+TEST(RestLibraryClientTest, PublishesMixManSessionSnapshot) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pReply = network.ExpectPut(
+            QStringLiteral("/sessions/session-1/snapshot"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"current_track_id\":8"),
+                    QStringLiteral("\"playback_state\":\"playing\""),
+                    QStringLiteral("\"snapshot\""),
+                    QStringLiteral("\"title\":\"Night Train\"")},
+            200,
+            R"json({"session_id":"session-1","snapshot":{}})json");
+
+    mixxx::library::rest::RestLibrarySessionSnapshot snapshot;
+    snapshot.clientId = QStringLiteral("client-1");
+    snapshot.source = QStringLiteral("mixxx");
+    snapshot.surface = QStringLiteral("rest_library");
+    snapshot.currentTrackId = QStringLiteral("8");
+    snapshot.playbackState = QStringLiteral("playing");
+    snapshot.snapshot.insert(QStringLiteral("title"), QStringLiteral("Night Train"));
+
+    client.publishMixManSessionSnapshot(
+            newMixManSettings(),
+            QStringLiteral("session-1"),
+            snapshot);
+    pReply->Done();
+
+    ASSERT_EQ(statusSpy.count(), 1);
+    const auto status =
+            qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                    statusSpy.takeFirst().at(0));
+    EXPECT_TRUE(status.success);
+    EXPECT_EQ(status.operation, QStringLiteral("session_snapshot"));
+}
+
+TEST(RestLibraryClientTest, UpdatesMixManSessionIntent) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pReply = network.ExpectPut(
+            QStringLiteral("/sessions/session-1/intent"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"policy_preset\":\"build_energy\""),
+                    QStringLiteral("\"target_energy\":0.8"),
+                    QStringLiteral("\"target_color\":\"#ff6600\"")},
+            200,
+            R"json({"session_id":"session-1","revision":1})json");
+
+    mixxx::library::rest::RestLibrarySessionIntent intent;
+    intent.clientId = QStringLiteral("client-1");
+    intent.source = QStringLiteral("mixxx");
+    intent.surface = QStringLiteral("rest_library");
+    intent.policyPreset = QStringLiteral("build_energy");
+    intent.targetEnergyEnabled = true;
+    intent.targetEnergy = 0.8;
+    intent.targetColorEnabled = true;
+    intent.targetColor = QStringLiteral("#ff6600");
+
+    client.updateMixManSessionIntent(
+            newMixManSettings(),
+            QStringLiteral("session-1"),
+            intent);
+    pReply->Done();
+
+    ASSERT_EQ(statusSpy.count(), 1);
+    const auto status =
+            qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                    statusSpy.takeFirst().at(0));
+    EXPECT_TRUE(status.success);
+    EXPECT_EQ(status.operation, QStringLiteral("session_intent"));
+}
+
+TEST(RestLibraryClientTest, SendsMixManSessionHeartbeat) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pReply = network.ExpectPost(
+            QStringLiteral("/sessions/session-1/heartbeat"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"status\":\"active\""),
+                    QStringLiteral("\"role\":\"policy_console\"")},
+            200,
+            R"json({"session_id":"session-1","client_id":"client-1"})json");
+
+    client.sendMixManSessionHeartbeat(
+            newMixManSettings(),
+            QStringLiteral("session-1"),
+            QStringLiteral("client-1"));
+    pReply->Done();
+
+    ASSERT_EQ(statusSpy.count(), 1);
+    const auto status =
+            qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                    statusSpy.takeFirst().at(0));
+    EXPECT_TRUE(status.success);
+    EXPECT_EQ(status.operation, QStringLiteral("session_heartbeat"));
 }

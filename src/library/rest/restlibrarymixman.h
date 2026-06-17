@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QList>
 #include <QMap>
+#include <QJsonObject>
 #include <QString>
 
 #include "library/rest/restlibrarytrack.h"
@@ -19,6 +20,42 @@ struct RestLibraryDiagnostics {
     int lastStatusCode = 0;
     int lastLatencyMillis = 0;
     QString lastError;
+};
+
+struct RestLibrarySession {
+    QString id;
+    QString displayName;
+    QString status;
+};
+
+struct RestLibrarySessionWriteStatus {
+    QString operation;
+    bool success = false;
+    int statusCode = 0;
+    QString errorText;
+};
+
+struct RestLibrarySessionSnapshot {
+    QString clientId;
+    QString surface;
+    QString source;
+    QString currentTrackId;
+    QString cue;
+    QString playbackState;
+    QJsonObject snapshot;
+    QJsonObject metadata;
+};
+
+struct RestLibrarySessionIntent {
+    QString clientId;
+    QString source;
+    QString surface;
+    QString policyPreset;
+    QString targetColor;
+    bool targetColorEnabled = false;
+    bool targetEnergyEnabled = false;
+    double targetEnergy = 0.0;
+    QJsonObject metadata;
 };
 
 struct RestLibraryPolicyPreset {
@@ -50,6 +87,8 @@ struct RestLibraryPolicyPath {
 } // namespace mixxx::library::rest
 
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryDiagnostics)
+Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySession)
+Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySessionWriteStatus)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryPolicyPreset)
 Q_DECLARE_METATYPE(QList<mixxx::library::rest::RestLibraryPolicyPreset>)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryPathStep)

@@ -3,8 +3,10 @@
 #include <algorithm>
 
 #include <QDir>
+#include <QJsonObject>
 #include <QMenu>
 #include <QStringList>
+#include <QUuid>
 
 #include "controllers/keyboard/keyboardeventfilter.h"
 #include "library/library.h"
@@ -23,6 +25,7 @@ namespace {
 
 const Logger kLogger("RestLibraryFeature");
 const QString kViewName = QStringLiteral("REST Library");
+constexpr int kSessionHeartbeatIntervalMillis = 30000;
 
 } // namespace
 
@@ -37,6 +40,15 @@ RestLibraryFeature::RestLibraryFeature(
           m_pRefreshAction(make_parented<QAction>(tr("Refresh"), this)),
           m_client(&m_networkAccessManager, this),
           m_cacheManager(&m_networkAccessManager, this) {
+    m_clientId = QStringLiteral("mixxx-%1").arg(
+            QUuid::createUuid().toString(QUuid::Id128));
+    m_sessionHeartbeatTimer.setInterval(kSessionHeartbeatIntervalMillis);
+    m_sessionHeartbeatTimer.setSingleShot(false);
+    connect(&m_sessionHeartbeatTimer,
+            &QTimer::timeout,
+            this,
+            &RestLibraryFeature::slotSessionHeartbeat);
+
     auto pRootItem = TreeItem::newRoot(this);
     m_pSidebarModel->setRootItem(std::move(pRootItem));
 
@@ -72,6 +84,14 @@ RestLibraryFeature::RestLibraryFeature(
             &RestLibraryClient::mixManPolicyPathFetched,
             this,
             &RestLibraryFeature::slotMixManPolicyPathFetched);
+    connect(&m_client,
+            &RestLibraryClient::mixManSessionCreated,
+            this,
+            &RestLibraryFeature::slotMixManSessionCreated);
+    connect(&m_client,
+            &RestLibraryClient::mixManSessionWriteStatusUpdated,
+            this,
+            &RestLibraryFeature::slotMixManSessionWriteStatusUpdated);
     connect(&m_client,
             &RestLibraryClient::fetchFailed,
             this,
@@ -201,8 +221,11 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
     m_cacheManager.abortAll();
     m_pTableModel->setCacheLoadCapabilitiesEnabled(settings.hasAudioDownloadConfigured());
     if (settings.useMixManDefaults) {
+        ensureMixManSession(settings);
         m_client.fetchMixManDiagnostics(settings);
         m_client.fetchMixManPolicyPresets(settings);
+    } else {
+        m_sessionHeartbeatTimer.stop();
     }
 
     const QString trackLocation = pTrack ? normalizedTrackLocation(pTrack->getLocation()) : QString();
@@ -220,6 +243,7 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
 
     const QString remoteId = remoteIdForTrack(pTrack);
     if (!remoteId.isEmpty()) {
+        publishMixManSnapshot(settings, pTrack, remoteId);
         requestRecommendationsForRemoteId(settings, remoteId);
         return;
     }
@@ -244,6 +268,7 @@ void RestLibraryFeature::slotTracksFetched(const QList<RestLibraryTrack>& tracks
 
 void RestLibraryFeature::slotTrackLookupSucceeded(const QString& remoteId) {
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    publishMixManSnapshot(settings, PlayerInfo::instance().getCurrentPlayingTrack(), remoteId);
     requestRecommendationsForRemoteId(settings, remoteId);
 }
 
@@ -294,23 +319,86 @@ void RestLibraryFeature::slotMixManPolicyPathFetched(const RestLibraryPolicyPath
     setRecommendationTracks(policyPath.candidates);
 }
 
+void RestLibraryFeature::slotMixManSessionCreated(const RestLibrarySession& session) {
+    m_mixManSession = session;
+    m_sessionStatusText = session.displayName.isEmpty()
+            ? tr("Publishing session %1").arg(session.id)
+            : tr("Publishing session %1").arg(session.displayName);
+    updateDiagnosticsText();
+
+    if (!m_sessionHeartbeatTimer.isActive()) {
+        m_sessionHeartbeatTimer.start();
+    }
+
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    updateMixManIntent(settings);
+    if (!m_currentRemoteId.isEmpty()) {
+        publishMixManSnapshot(
+                settings,
+                PlayerInfo::instance().getCurrentPlayingTrack(),
+                m_currentRemoteId);
+        requestRecommendationsForRemoteId(settings, m_currentRemoteId);
+    }
+    m_client.sendMixManSessionHeartbeat(
+            settings,
+            m_mixManSession.id,
+            m_clientId,
+            mixManSessionMetadata());
+}
+
+void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
+        const RestLibrarySessionWriteStatus& status) {
+    if (status.operation.isEmpty()) {
+        return;
+    }
+    if (!status.success) {
+        m_sessionStatusText = status.errorText.isEmpty()
+                ? tr("Session publishing failed")
+                : status.errorText;
+        updateDiagnosticsText();
+        return;
+    }
+    if (!m_mixManSession.id.isEmpty()) {
+        m_sessionStatusText = m_mixManSession.displayName.isEmpty()
+                ? tr("Publishing session %1").arg(m_mixManSession.id)
+                : tr("Publishing session %1").arg(m_mixManSession.displayName);
+        updateDiagnosticsText();
+    }
+}
+
+void RestLibraryFeature::slotSessionHeartbeat() {
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    if (!settings.isConfigured() || !settings.useMixManDefaults || m_mixManSession.id.isEmpty()) {
+        m_sessionHeartbeatTimer.stop();
+        return;
+    }
+    m_client.sendMixManSessionHeartbeat(
+            settings,
+            m_mixManSession.id,
+            m_clientId,
+            mixManSessionMetadata());
+}
+
 void RestLibraryFeature::slotPolicyPresetChanged(const QString& presetKey) {
     if (presetKey.trimmed().isEmpty()) {
         return;
     }
     m_pConfig->setValue(config::kMixManPolicyPresetKey, presetKey.trimmed());
+    updateMixManIntent(RestLibrarySettings::fromConfig(m_pConfig));
     slotRefresh();
 }
 
 void RestLibraryFeature::slotTargetEnergyChanged(bool enabled, int energy) {
     m_pConfig->setValue(config::kMixManTargetEnergyEnabledKey, enabled);
     m_pConfig->setValue(config::kMixManTargetEnergyKey, energy);
+    updateMixManIntent(RestLibrarySettings::fromConfig(m_pConfig));
     slotRefresh();
 }
 
 void RestLibraryFeature::slotTargetColorChanged(bool enabled, const QString& color) {
     m_pConfig->setValue(config::kMixManTargetColorEnabledKey, enabled);
     m_pConfig->setValue(config::kMixManTargetColorKey, color.trimmed());
+    updateMixManIntent(RestLibrarySettings::fromConfig(m_pConfig));
     slotRefresh();
 }
 
@@ -329,7 +417,7 @@ void RestLibraryFeature::requestRecommendationsForRemoteId(
     clearRecommendations();
     if (settings.useMixManDefaults) {
         setStatusText(tr("Loading MixMan policy recommendations."));
-        m_client.fetchMixManPolicyPath(settings, remoteId);
+        m_client.fetchMixManPolicyPath(settings, remoteId, m_mixManSession.id);
         return;
     }
     setStatusText(tr("Loading REST Library recommendations."));
@@ -371,6 +459,104 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
     m_cacheManager.cacheTracks(tracksToCache, settings);
 }
 
+void RestLibraryFeature::ensureMixManSession(const RestLibrarySettings& settings) {
+    if (!settings.isConfigured() ||
+            !settings.useMixManDefaults ||
+            m_sessionCreateAttempted ||
+            !m_mixManSession.id.isEmpty()) {
+        return;
+    }
+    m_sessionCreateAttempted = true;
+    m_sessionStatusText = tr("Creating MixMan session");
+    updateDiagnosticsText();
+    m_client.createMixManSession(settings, m_clientId, mixManSessionMetadata());
+}
+
+void RestLibraryFeature::publishMixManSnapshot(
+        const RestLibrarySettings& settings,
+        const TrackPointer& pTrack,
+        const QString& remoteId) {
+    if (!settings.isConfigured() ||
+            !settings.useMixManDefaults ||
+            m_mixManSession.id.isEmpty()) {
+        return;
+    }
+
+    RestLibrarySessionSnapshot snapshot;
+    snapshot.clientId = m_clientId;
+    snapshot.source = QStringLiteral("mixxx");
+    snapshot.surface = QStringLiteral("rest_library");
+    snapshot.currentTrackId = remoteId;
+    snapshot.playbackState = pTrack ? QStringLiteral("playing") : QStringLiteral("idle");
+    snapshot.snapshot = mixManTrackSnapshot(pTrack, remoteId);
+    snapshot.metadata = mixManSessionMetadata();
+    m_client.publishMixManSessionSnapshot(settings, m_mixManSession.id, snapshot);
+}
+
+void RestLibraryFeature::updateMixManIntent(const RestLibrarySettings& settings) {
+    if (!settings.isConfigured() ||
+            !settings.useMixManDefaults ||
+            m_mixManSession.id.isEmpty()) {
+        return;
+    }
+
+    RestLibrarySessionIntent intent;
+    intent.clientId = m_clientId;
+    intent.source = QStringLiteral("mixxx");
+    intent.surface = QStringLiteral("rest_library");
+    intent.policyPreset = settings.mixManPolicyPreset;
+    intent.targetEnergyEnabled = settings.mixManTargetEnergyEnabled;
+    intent.targetEnergy = settings.mixManTargetEnergyNormalized();
+    intent.targetColorEnabled = settings.mixManTargetColorEnabled;
+    intent.targetColor = settings.mixManTargetColor;
+    intent.metadata = mixManSessionMetadata();
+    m_client.updateMixManSessionIntent(settings, m_mixManSession.id, intent);
+}
+
+QJsonObject RestLibraryFeature::mixManSessionMetadata() const {
+    QJsonObject metadata;
+    metadata.insert(QStringLiteral("client"), QStringLiteral("mixxx"));
+    metadata.insert(QStringLiteral("surface"), QStringLiteral("rest_library"));
+    metadata.insert(QStringLiteral("feature"), QStringLiteral("REST Library"));
+    return metadata;
+}
+
+QJsonObject RestLibraryFeature::mixManTrackSnapshot(
+        const TrackPointer& pTrack,
+        const QString& remoteId) const {
+    QJsonObject snapshot;
+    if (!remoteId.trimmed().isEmpty()) {
+        snapshot.insert(QStringLiteral("current_remote_id"), remoteId.trimmed());
+    }
+
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    snapshot.insert(QStringLiteral("policy_preset"), settings.mixManPolicyPreset);
+    if (settings.mixManTargetEnergyEnabled) {
+        snapshot.insert(QStringLiteral("target_energy"), settings.mixManTargetEnergyNormalized());
+    }
+    if (settings.mixManTargetColorEnabled && !settings.mixManTargetColor.trimmed().isEmpty()) {
+        snapshot.insert(QStringLiteral("target_color"), settings.mixManTargetColor.trimmed());
+    }
+
+    if (!pTrack) {
+        return snapshot;
+    }
+
+    QJsonObject track;
+    track.insert(QStringLiteral("title"), pTrack->getTitle());
+    track.insert(QStringLiteral("artist"), pTrack->getArtist());
+    track.insert(QStringLiteral("album"), pTrack->getAlbum());
+    track.insert(QStringLiteral("genre"), pTrack->getGenre());
+    track.insert(QStringLiteral("bpm"), pTrack->getBpm());
+    track.insert(QStringLiteral("key"), pTrack->getKeyText());
+    track.insert(QStringLiteral("duration"), pTrack->getDuration());
+    if (pTrack->getRating() > 0) {
+        track.insert(QStringLiteral("rating"), pTrack->getRating());
+    }
+    snapshot.insert(QStringLiteral("current_track"), track);
+    return snapshot;
+}
+
 void RestLibraryFeature::refreshMixManControls(const RestLibrarySettings& settings) {
     if (!m_pRestLibraryView) {
         return;
@@ -397,6 +583,9 @@ void RestLibraryFeature::updateDiagnosticsText() {
     }
     if (!m_diagnostics.lastError.isEmpty()) {
         parts.append(m_diagnostics.lastError);
+    }
+    if (!m_sessionStatusText.isEmpty()) {
+        parts.append(m_sessionStatusText);
     }
     m_pRestLibraryView->setDiagnosticsText(parts.join(QStringLiteral(" | ")));
 }

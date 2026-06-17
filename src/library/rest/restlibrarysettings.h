@@ -114,6 +114,10 @@ QString mixManHealthPath();
 QString mixManConfigPath();
 QString mixManIndexStatusPath();
 QString mixManPolicyPresetsPath();
+QString mixManSessionsPath();
+QString mixManSessionSnapshotPath(const QString& sessionId);
+QString mixManSessionIntentPath(const QString& sessionId);
+QString mixManSessionHeartbeatPath(const QString& sessionId);
 
 } // namespace config
 

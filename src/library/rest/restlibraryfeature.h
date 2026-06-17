@@ -2,7 +2,9 @@
 
 #include <QAction>
 #include <QHash>
+#include <QJsonObject>
 #include <QNetworkAccessManager>
+#include <QTimer>
 
 #include "library/libraryfeature.h"
 #include "library/rest/restlibrarycachemanager.h"
@@ -50,6 +52,11 @@ class RestLibraryFeature final : public LibraryFeature {
             const QList<mixxx::library::rest::RestLibraryPolicyPreset>& presets);
     void slotMixManPolicyPathFetched(
             const mixxx::library::rest::RestLibraryPolicyPath& policyPath);
+    void slotMixManSessionCreated(
+            const mixxx::library::rest::RestLibrarySession& session);
+    void slotMixManSessionWriteStatusUpdated(
+            const mixxx::library::rest::RestLibrarySessionWriteStatus& status);
+    void slotSessionHeartbeat();
     void slotPolicyPresetChanged(const QString& presetKey);
     void slotTargetEnergyChanged(bool enabled, int energy);
     void slotTargetColorChanged(bool enabled, const QString& color);
@@ -63,6 +70,14 @@ class RestLibraryFeature final : public LibraryFeature {
             const RestLibrarySettings& settings,
             const QString& remoteId);
     void setRecommendationTracks(const QList<RestLibraryTrack>& tracks);
+    void ensureMixManSession(const RestLibrarySettings& settings);
+    void publishMixManSnapshot(
+            const RestLibrarySettings& settings,
+            const TrackPointer& pTrack,
+            const QString& remoteId);
+    void updateMixManIntent(const RestLibrarySettings& settings);
+    QJsonObject mixManSessionMetadata() const;
+    QJsonObject mixManTrackSnapshot(const TrackPointer& pTrack, const QString& remoteId) const;
     void refreshMixManControls(const RestLibrarySettings& settings);
     void updateDiagnosticsText();
     void setPathSummary(const RestLibraryPolicyPath& policyPath);
@@ -80,14 +95,19 @@ class RestLibraryFeature final : public LibraryFeature {
     RestLibraryClient m_client;
     RestLibraryCacheManager m_cacheManager;
     RestLibraryDiagnostics m_diagnostics;
+    RestLibrarySession m_mixManSession;
+    QTimer m_sessionHeartbeatTimer;
     QHash<QString, QString> m_cachedPathToRemoteId;
     QHash<QString, RestLibraryCacheState> m_cacheStates;
     QString m_lastRequestedTrackLocation;
     QString m_currentRemoteId;
+    QString m_clientId;
+    QString m_sessionStatusText;
     QString m_statusText;
     int m_recommendationCount = 0;
     double m_averageQuality = 0.0;
     bool m_followCurrentTrack = true;
+    bool m_sessionCreateAttempted = false;
 
   signals:
     void statusTextChanged(const QString& statusText);

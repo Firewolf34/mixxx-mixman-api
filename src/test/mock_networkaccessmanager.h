@@ -22,6 +22,7 @@
 #include <QMap>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QStringList>
 #include <QUrl>
 
 #include "gmock/gmock.h"
@@ -61,6 +62,18 @@ class MockNetworkAccessManager : public QNetworkAccessManager {
             const QMap<QString, QString>& params, // Required URL parameters.
             int status,                           // Returned HTTP status code.
             const QByteArray& ret_data);          // Returned data.
+    MockNetworkReply* ExpectPost(
+            const QString& contains,
+            const QMap<QString, QString>& params,
+            const QStringList& body_contains,
+            int status,
+            const QByteArray& ret_data);
+    MockNetworkReply* ExpectPut(
+            const QString& contains,
+            const QMap<QString, QString>& params,
+            const QStringList& body_contains,
+            int status,
+            const QByteArray& ret_data);
   protected:
     MOCK_METHOD3(createRequest, QNetworkReply*(Operation, const QNetworkRequest&, QIODevice*));
 };

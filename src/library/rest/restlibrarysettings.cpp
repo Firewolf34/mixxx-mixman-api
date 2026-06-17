@@ -91,6 +91,22 @@ QString mixManPolicyPresetsPath() {
     return QStringLiteral("/recommendations/policy-presets");
 }
 
+QString mixManSessionsPath() {
+    return QStringLiteral("/sessions");
+}
+
+QString mixManSessionSnapshotPath(const QString& sessionId) {
+    return QStringLiteral("/sessions/%1/snapshot").arg(sessionId);
+}
+
+QString mixManSessionIntentPath(const QString& sessionId) {
+    return QStringLiteral("/sessions/%1/intent").arg(sessionId);
+}
+
+QString mixManSessionHeartbeatPath(const QString& sessionId) {
+    return QStringLiteral("/sessions/%1/heartbeat").arg(sessionId);
+}
+
 } // namespace config
 
 RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& pConfig) {

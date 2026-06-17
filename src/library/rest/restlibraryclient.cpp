@@ -23,6 +23,10 @@ const Logger kLogger("RestLibraryClient");
 
 constexpr int kRequestTimeoutMillis = 15000;
 constexpr qsizetype kMaxLoggedResponseBytes = 500;
+const QString kSessionCreateOperation = QStringLiteral("session_create");
+const QString kSessionSnapshotOperation = QStringLiteral("session_snapshot");
+const QString kSessionIntentOperation = QStringLiteral("session_intent");
+const QString kSessionHeartbeatOperation = QStringLiteral("session_heartbeat");
 
 bool isSuccessStatus(int statusCode) {
     return statusCode >= 200 && statusCode < 300;
@@ -126,6 +130,33 @@ QString responseSnippet(const QByteArray& body) {
     return snippet;
 }
 
+QByteArray jsonBody(const QJsonObject& object) {
+    return QJsonDocument(object).toJson(QJsonDocument::Compact);
+}
+
+void insertIfNotEmpty(QJsonObject* pObject, const QString& key, const QString& value) {
+    if (pObject && !value.trimmed().isEmpty()) {
+        pObject->insert(key, value.trimmed());
+    }
+}
+
+void insertIntegerStringIfValid(QJsonObject* pObject, const QString& key, const QString& value) {
+    bool ok = false;
+    const int integerValue = value.toInt(&ok);
+    if (pObject && ok && integerValue > 0) {
+        pObject->insert(key, integerValue);
+    }
+}
+
+QJsonObject baseSessionClientObject(const QString& clientId) {
+    QJsonObject object;
+    insertIfNotEmpty(&object, QStringLiteral("client_id"), clientId);
+    object.insert(QStringLiteral("source"), QStringLiteral("mixxx"));
+    object.insert(QStringLiteral("surface"), QStringLiteral("rest_library"));
+    object.insert(QStringLiteral("role"), QStringLiteral("policy_console"));
+    return object;
+}
+
 } // namespace
 
 RestLibraryClient::RestLibraryClient(
@@ -136,6 +167,9 @@ RestLibraryClient::RestLibraryClient(
     qRegisterMetaType<RestLibraryTrack>("mixxx::library::rest::RestLibraryTrack");
     qRegisterMetaType<QList<RestLibraryTrack>>("QList<mixxx::library::rest::RestLibraryTrack>");
     qRegisterMetaType<RestLibraryDiagnostics>("mixxx::library::rest::RestLibraryDiagnostics");
+    qRegisterMetaType<RestLibrarySession>("mixxx::library::rest::RestLibrarySession");
+    qRegisterMetaType<RestLibrarySessionWriteStatus>(
+            "mixxx::library::rest::RestLibrarySessionWriteStatus");
     qRegisterMetaType<QList<RestLibraryPolicyPreset>>(
             "QList<mixxx::library::rest::RestLibraryPolicyPreset>");
     qRegisterMetaType<RestLibraryPolicyPath>("mixxx::library::rest::RestLibraryPolicyPath");
@@ -251,7 +285,8 @@ void RestLibraryClient::fetchMixManPolicyPresets(const RestLibrarySettings& sett
 
 void RestLibraryClient::fetchMixManPolicyPath(
         const RestLibrarySettings& settings,
-        const QString& remoteId) {
+        const QString& remoteId,
+        const QString& sessionId) {
     clearPendingDetails();
     m_settings = settings;
     if (!m_pNetworkAccessManager) {
@@ -295,10 +330,126 @@ void RestLibraryClient::fetchMixManPolicyPath(
                 QStringLiteral("target_color"),
                 m_settings.mixManTargetColor.trimmed());
     }
+    if (!sessionId.trimmed().isEmpty()) {
+        path = pathWithQueryItem(path, QStringLiteral("session_id"), sessionId.trimmed());
+    }
 
     QNetworkReply* pReply = m_pNetworkAccessManager->get(newRequest(path, 0));
     pReply->setParent(this);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotPolicyPathFinished);
+}
+
+void RestLibraryClient::createMixManSession(
+        const RestLibrarySettings& settings,
+        const QString& clientId,
+        const QJsonObject& metadata) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured()) {
+        RestLibrarySessionWriteStatus status;
+        status.operation = kSessionCreateOperation;
+        status.errorText = tr("Session publishing is not configured.");
+        emit mixManSessionWriteStatusUpdated(status);
+        return;
+    }
+
+    QJsonObject payload = baseSessionClientObject(clientId);
+    payload.insert(QStringLiteral("metadata"), metadata);
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(
+            newJsonRequest(config::mixManSessionsPath()),
+            jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionCreateOperation);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionCreateFinished);
+}
+
+void RestLibraryClient::publishMixManSessionSnapshot(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const RestLibrarySessionSnapshot& snapshot) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty()) {
+        RestLibrarySessionWriteStatus status;
+        status.operation = kSessionSnapshotOperation;
+        status.errorText = tr("MixMan session snapshot could not be published.");
+        emit mixManSessionWriteStatusUpdated(status);
+        return;
+    }
+
+    QJsonObject payload = baseSessionClientObject(snapshot.clientId);
+    insertIfNotEmpty(&payload, QStringLiteral("surface"), snapshot.surface);
+    insertIfNotEmpty(&payload, QStringLiteral("source"), snapshot.source);
+    insertIntegerStringIfValid(&payload, QStringLiteral("current_track_id"), snapshot.currentTrackId);
+    insertIfNotEmpty(&payload, QStringLiteral("cue"), snapshot.cue);
+    insertIfNotEmpty(&payload, QStringLiteral("playback_state"), snapshot.playbackState);
+    payload.insert(QStringLiteral("snapshot"), snapshot.snapshot);
+    if (!snapshot.metadata.isEmpty()) {
+        payload.insert(QStringLiteral("metadata"), snapshot.metadata);
+    }
+
+    QNetworkReply* pReply = m_pNetworkAccessManager->put(
+            newJsonRequest(config::mixManSessionSnapshotPath(sessionId.trimmed())),
+            jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionSnapshotOperation);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
+}
+
+void RestLibraryClient::updateMixManSessionIntent(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const RestLibrarySessionIntent& intent) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty()) {
+        RestLibrarySessionWriteStatus status;
+        status.operation = kSessionIntentOperation;
+        status.errorText = tr("MixMan session intent could not be updated.");
+        emit mixManSessionWriteStatusUpdated(status);
+        return;
+    }
+
+    QJsonObject payload = baseSessionClientObject(intent.clientId);
+    insertIfNotEmpty(&payload, QStringLiteral("source"), intent.source);
+    insertIfNotEmpty(&payload, QStringLiteral("surface"), intent.surface);
+    insertIfNotEmpty(&payload, QStringLiteral("policy_preset"), intent.policyPreset);
+    if (intent.targetEnergyEnabled) {
+        payload.insert(QStringLiteral("target_energy"), intent.targetEnergy);
+    }
+    if (intent.targetColorEnabled && !intent.targetColor.trimmed().isEmpty()) {
+        payload.insert(QStringLiteral("target_color"), intent.targetColor.trimmed());
+    }
+    if (!intent.metadata.isEmpty()) {
+        payload.insert(QStringLiteral("metadata"), intent.metadata);
+    }
+
+    QNetworkReply* pReply = m_pNetworkAccessManager->put(
+            newJsonRequest(config::mixManSessionIntentPath(sessionId.trimmed())),
+            jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionIntentOperation);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
+}
+
+void RestLibraryClient::sendMixManSessionHeartbeat(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const QString& clientId,
+        const QJsonObject& metadata) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty()) {
+        return;
+    }
+
+    QJsonObject payload = baseSessionClientObject(clientId);
+    payload.insert(QStringLiteral("status"), QStringLiteral("active"));
+    if (!metadata.isEmpty()) {
+        payload.insert(QStringLiteral("metadata"), metadata);
+    }
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(
+            newJsonRequest(config::mixManSessionHeartbeatPath(sessionId.trimmed())),
+            jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionHeartbeatOperation);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
 
 QNetworkRequest RestLibraryClient::newRequest(const QString& path, int limit) const {
@@ -320,6 +471,12 @@ QNetworkRequest RestLibraryClient::newRequest(const QString& path, int limit) co
                 QByteArray("Bearer ") + m_settings.bearerToken.toUtf8());
     }
     kLogger.info() << "REST library request" << url.toString(QUrl::RemoveUserInfo);
+    return request;
+}
+
+QNetworkRequest RestLibraryClient::newJsonRequest(const QString& path) const {
+    QNetworkRequest request = newRequest(path, 0);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     return request;
 }
 
@@ -555,6 +712,74 @@ void RestLibraryClient::slotPolicyPathFinished() {
     emit mixManPolicyPathFetched(parsePolicyPathDocument(document));
 }
 
+void RestLibraryClient::slotSessionCreateFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        return;
+    }
+    pReply->deleteLater();
+
+    const QByteArray responseBody = pReply->readAll();
+    RestLibrarySessionWriteStatus status;
+    status.operation = kSessionCreateOperation;
+    status.statusCode = statusCodeFromReply(*pReply);
+    status.success = isSuccessStatus(status.statusCode);
+    if (!status.success) {
+        status.errorText = tr("MixMan session creation failed.");
+        kLogger.warning()
+                << "MixMan session creation failed"
+                << pReply->request().url().toString(QUrl::RemoveUserInfo)
+                << "status" << status.statusCode
+                << "body" << responseSnippet(responseBody);
+        emit mixManSessionWriteStatusUpdated(status);
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        status.success = false;
+        status.errorText = tr("MixMan session response was not valid JSON.");
+        emit mixManSessionWriteStatusUpdated(status);
+        return;
+    }
+
+    RestLibrarySession session = parseSessionDocument(document);
+    if (session.id.isEmpty()) {
+        status.success = false;
+        status.errorText = tr("MixMan session response did not include a session ID.");
+        emit mixManSessionWriteStatusUpdated(status);
+        return;
+    }
+
+    emit mixManSessionCreated(session);
+    emit mixManSessionWriteStatusUpdated(status);
+}
+
+void RestLibraryClient::slotSessionWriteFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        return;
+    }
+    pReply->deleteLater();
+
+    const QByteArray responseBody = pReply->readAll();
+    RestLibrarySessionWriteStatus status;
+    status.operation = pReply->property("operation").toString();
+    status.statusCode = statusCodeFromReply(*pReply);
+    status.success = isSuccessStatus(status.statusCode);
+    if (!status.success) {
+        status.errorText = tr("MixMan session write failed.");
+        kLogger.warning()
+                << "MixMan session write failed"
+                << status.operation
+                << pReply->request().url().toString(QUrl::RemoveUserInfo)
+                << "status" << status.statusCode
+                << "body" << responseSnippet(responseBody);
+    }
+    emit mixManSessionWriteStatusUpdated(status);
+}
+
 void RestLibraryClient::finishDetailBatchIfComplete() {
     if (m_finishedDetailCount < m_pendingDetails.size()) {
         return;
@@ -632,6 +857,11 @@ QList<RestLibraryPolicyPreset> RestLibraryClient::parsePolicyPresetsDocumentForT
 RestLibraryDiagnostics RestLibraryClient::parseIndexStatusDocumentForTesting(
         const QJsonDocument& document) {
     return parseIndexStatusDocument(document);
+}
+
+RestLibrarySession RestLibraryClient::parseSessionDocumentForTesting(
+        const QJsonDocument& document) {
+    return parseSessionDocument(document);
 }
 
 QList<RestLibraryTrack> RestLibraryClient::parseTrackListDocument(
@@ -881,6 +1111,21 @@ RestLibraryDiagnostics RestLibraryClient::parseIndexStatusDocument(const QJsonDo
     diagnostics.indexCount = static_cast<int>(readDouble(object, {"count"}));
     diagnostics.indexDimension = static_cast<int>(readDouble(object, {"dim"}));
     return diagnostics;
+}
+
+RestLibrarySession RestLibraryClient::parseSessionDocument(const QJsonDocument& document) {
+    RestLibrarySession session;
+    if (!document.isObject()) {
+        return session;
+    }
+    const QJsonObject root = document.object();
+    const QJsonObject sessionObject = root.value(QStringLiteral("session")).isObject()
+            ? root.value(QStringLiteral("session")).toObject()
+            : root;
+    session.id = readString(sessionObject, {"id", "session_id"});
+    session.displayName = readString(sessionObject, {"display_name", "name"});
+    session.status = readString(sessionObject, {"status"});
+    return session;
 }
 
 QString RestLibraryClient::readString(

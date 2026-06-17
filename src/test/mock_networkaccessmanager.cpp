@@ -74,10 +74,64 @@ class RequestForUrlMatcher : public MatcherInterface<const QNetworkRequest&> {
     QMap<QString, QString> m_expected_params;
 };
 
+class BodyContainsMatcher : public MatcherInterface<QIODevice*> {
+  public:
+    explicit BodyContainsMatcher(const QStringList& expected)
+            : m_expected(expected) {
+    }
+
+    bool Matches(QIODevice* device) const {
+        if (m_expected.isEmpty()) {
+            return true;
+        }
+        if (!device) {
+            return false;
+        }
+
+        const qint64 oldPosition = device->isSequential() ? -1 : device->pos();
+        const QByteArray body = device->readAll();
+        if (oldPosition >= 0) {
+            device->seek(oldPosition);
+        }
+        const QString bodyText = QString::fromUtf8(body);
+        for (const QString& expected : m_expected) {
+            if (!bodyText.contains(expected)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool MatchAndExplain(QIODevice* device, MatchResultListener* listener) const override {
+        if (!device) {
+            *listener << "which is null";
+            return Matches(device);
+        }
+        const qint64 oldPosition = device->isSequential() ? -1 : device->pos();
+        const QByteArray body = device->readAll();
+        if (oldPosition >= 0) {
+            device->seek(oldPosition);
+        }
+        *listener << "which has body " << body.constData();
+        return Matches(device);
+    }
+
+    void DescribeTo(::std::ostream* os) const override {
+        *os << "body contains expected fragments";
+    }
+
+  private:
+    QStringList m_expected;
+};
+
 inline Matcher<const QNetworkRequest&> RequestForUrl(
         const QString& contains,
         const QMap<QString, QString>& params) {
     return MakeMatcher(new RequestForUrlMatcher(contains, params));
+}
+
+inline Matcher<QIODevice*> BodyContains(const QStringList& expected) {
+    return MakeMatcher(new BodyContainsMatcher(expected));
 }
 
 MockNetworkReply* MockNetworkAccessManager::ExpectGet(
@@ -92,6 +146,42 @@ MockNetworkReply* MockNetworkAccessManager::ExpectGet(
             createRequest(GetOperation,
                     RequestForUrl(contains, expected_params),
                     nullptr))
+            .WillOnce(Return(reply));
+
+    return reply;
+}
+
+MockNetworkReply* MockNetworkAccessManager::ExpectPost(
+        const QString& contains,
+        const QMap<QString, QString>& expected_params,
+        const QStringList& expected_body,
+        int status,
+        const QByteArray& data) {
+    MockNetworkReply* reply = new MockNetworkReply(data);
+    reply->setAttribute(QNetworkRequest::HttpStatusCodeAttribute, status);
+
+    EXPECT_CALL(*this,
+            createRequest(PostOperation,
+                    RequestForUrl(contains, expected_params),
+                    BodyContains(expected_body)))
+            .WillOnce(Return(reply));
+
+    return reply;
+}
+
+MockNetworkReply* MockNetworkAccessManager::ExpectPut(
+        const QString& contains,
+        const QMap<QString, QString>& expected_params,
+        const QStringList& expected_body,
+        int status,
+        const QByteArray& data) {
+    MockNetworkReply* reply = new MockNetworkReply(data);
+    reply->setAttribute(QNetworkRequest::HttpStatusCodeAttribute, status);
+
+    EXPECT_CALL(*this,
+            createRequest(PutOperation,
+                    RequestForUrl(contains, expected_params),
+                    BodyContains(expected_body)))
             .WillOnce(Return(reply));
 
     return reply;
