@@ -1004,6 +1004,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/recording/dlgrecording.ui
   src/library/recording/recordingfeature.cpp
   src/library/rekordbox/rekordboxfeature.cpp
+  src/library/rest/dlgrestlibrary.cpp
+  src/library/rest/dlgrestlibrary.ui
   src/library/rest/restlibrarycachemanager.cpp
   src/library/rest/restlibraryclient.cpp
   src/library/rest/restlibraryfeature.cpp
@@ -2214,6 +2216,7 @@ if(BUILD_TESTING)
     src/test/restlibraryclient_test.cpp
     src/test/restlibrarysettings_test.cpp
     src/test/restlibrarytablemodel_test.cpp
+    src/test/dlgrestlibrary_test.cpp
     src/test/rescalertest.cpp
     src/test/rgbcolor_test.cpp
     src/test/samplebuffertest.cpp

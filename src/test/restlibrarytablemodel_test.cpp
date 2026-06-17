@@ -50,12 +50,14 @@ TEST_F(RestLibraryTableModelTest, EnablesLoadCapabilitiesWhenCacheIsConfigured) 
     RestLibraryTableModel model(nullptr, trackCollectionManager());
 
     EXPECT_FALSE(model.hasCapabilities(TrackModel::Capability::LoadToDeck));
+    EXPECT_FALSE(model.hasCapabilities(TrackModel::Capability::AddToAutoDJ));
 
     model.setCacheLoadCapabilitiesEnabled(true);
 
     EXPECT_TRUE(model.hasCapabilities(TrackModel::Capability::LoadToDeck));
     EXPECT_TRUE(model.hasCapabilities(TrackModel::Capability::LoadToPreviewDeck));
     EXPECT_TRUE(model.hasCapabilities(TrackModel::Capability::LoadToSampler));
+    EXPECT_TRUE(model.hasCapabilities(TrackModel::Capability::AddToAutoDJ));
 }
 
 TEST_F(RestLibraryTableModelTest, ReadyRowsExposeLocalTrackLocation) {
@@ -84,6 +86,19 @@ TEST_F(RestLibraryTableModelTest, ReadyRowsExposeLocalTrackLocation) {
             model.getTrackLocation(model.index(0, 0)),
             QDir::fromNativeSeparators(filePath));
     EXPECT_TRUE(model.getTrack(model.index(0, 0)));
+    EXPECT_TRUE(model.getTrackId(model.index(0, 0)).isValid());
+}
+
+TEST_F(RestLibraryTableModelTest, UncachedRowsDoNotExposeTrackIdsForAutoDJ) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setCacheLoadCapabilitiesEnabled(true);
+    model.setTracks({newTrack(
+            QStringLiteral("1"),
+            QStringLiteral("Beta"),
+            QStringLiteral("Second"))});
+
+    EXPECT_TRUE(model.hasCapabilities(TrackModel::Capability::AddToAutoDJ));
+    EXPECT_FALSE(model.getTrackId(model.index(0, 0)).isValid());
 }
 
 TEST_F(RestLibraryTableModelTest, SearchFiltersVisibleRows) {

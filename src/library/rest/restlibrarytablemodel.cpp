@@ -292,7 +292,8 @@ TrackModel::Capabilities RestLibraryTableModel::getCapabilities() const {
     if (m_cacheLoadCapabilitiesEnabled) {
         capabilities |= Capability::LoadToDeck |
                 Capability::LoadToPreviewDeck |
-                Capability::LoadToSampler;
+                Capability::LoadToSampler |
+                Capability::AddToAutoDJ;
     }
     return capabilities;
 }

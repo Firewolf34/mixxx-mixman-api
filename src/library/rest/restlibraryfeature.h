@@ -14,6 +14,8 @@
 
 namespace mixxx::library::rest {
 
+class DlgRestLibrary;
+
 class RestLibraryFeature final : public LibraryFeature {
     Q_OBJECT
 
@@ -36,6 +38,7 @@ class RestLibraryFeature final : public LibraryFeature {
 
   private slots:
     void slotRefresh();
+    void slotFollowCurrentTrackChanged(bool follow);
     void slotCurrentPlayingTrackChanged(TrackPointer pTrack);
     void slotTracksFetched(const QList<mixxx::library::rest::RestLibraryTrack>& tracks);
     void slotTrackLookupSucceeded(const QString& remoteId);
@@ -52,18 +55,29 @@ class RestLibraryFeature final : public LibraryFeature {
             const RestLibrarySettings& settings,
             const QString& remoteId);
     void setRecommendationTracks(const QList<RestLibraryTrack>& tracks);
+    void setStatusText(const QString& statusText);
+    void updateReadyStatus();
+    void clearRecommendations();
     QString remoteIdForTrack(const TrackPointer& pTrack) const;
     static QString normalizedTrackLocation(const QString& location);
 
     parented_ptr<TreeItemModel> m_pSidebarModel;
     parented_ptr<RestLibraryTableModel> m_pTableModel;
     parented_ptr<QAction> m_pRefreshAction;
+    DlgRestLibrary* m_pRestLibraryView = nullptr;
     QNetworkAccessManager m_networkAccessManager;
     RestLibraryClient m_client;
     RestLibraryCacheManager m_cacheManager;
     QHash<QString, QString> m_cachedPathToRemoteId;
+    QHash<QString, RestLibraryCacheState> m_cacheStates;
     QString m_lastRequestedTrackLocation;
     QString m_currentRemoteId;
+    QString m_statusText;
+    int m_recommendationCount = 0;
+    bool m_followCurrentTrack = true;
+
+  signals:
+    void statusTextChanged(const QString& statusText);
 };
 
 } // namespace mixxx::library::rest

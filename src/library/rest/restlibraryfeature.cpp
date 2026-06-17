@@ -5,19 +5,23 @@
 #include <QDir>
 #include <QMenu>
 
+#include "controllers/keyboard/keyboardeventfilter.h"
 #include "library/library.h"
+#include "library/rest/dlgrestlibrary.h"
 #include "library/rest/restlibrarysettings.h"
 #include "library/treeitem.h"
 #include "mixer/playerinfo.h"
 #include "moc_restlibraryfeature.cpp"
 #include "track/track.h"
 #include "util/logger.h"
+#include "widget/wlibrary.h"
 
 namespace mixxx::library::rest {
 
 namespace {
 
 const Logger kLogger("RestLibraryFeature");
+const QString kViewName = QStringLiteral("REST Library");
 
 } // namespace
 
@@ -66,7 +70,7 @@ RestLibraryFeature::RestLibraryFeature(
 }
 
 QVariant RestLibraryFeature::title() {
-    return tr("Recommendations");
+    return tr("REST Library");
 }
 
 TreeItemModel* RestLibraryFeature::sidebarModel() const {
@@ -76,17 +80,56 @@ TreeItemModel* RestLibraryFeature::sidebarModel() const {
 void RestLibraryFeature::bindLibraryWidget(
         WLibrary* pLibraryWidget,
         KeyboardEventFilter* pKeyboard) {
-    Q_UNUSED(pLibraryWidget);
-    Q_UNUSED(pKeyboard);
+    m_pRestLibraryView = new DlgRestLibrary(
+            pLibraryWidget,
+            m_pConfig,
+            m_pLibrary,
+            m_pTableModel,
+            pKeyboard);
+    m_pRestLibraryView->installEventFilter(pKeyboard);
+    pLibraryWidget->registerView(kViewName, m_pRestLibraryView);
+
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::refreshRequested,
+            this,
+            &RestLibraryFeature::slotRefresh);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::followCurrentTrackChanged,
+            this,
+            &RestLibraryFeature::slotFollowCurrentTrackChanged);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::loadTrack,
+            this,
+            &RestLibraryFeature::loadTrack);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::loadTrackToPlayer,
+            this,
+            &RestLibraryFeature::loadTrackToPlayer);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::trackSelected,
+            this,
+            &RestLibraryFeature::trackSelected);
+    connect(this,
+            &RestLibraryFeature::statusTextChanged,
+            m_pRestLibraryView,
+            &DlgRestLibrary::setStatusText);
+
     connect(&PlayerInfo::instance(),
             &PlayerInfo::currentPlayingTrackChanged,
             this,
             &RestLibraryFeature::slotCurrentPlayingTrackChanged);
+
+    if (!m_statusText.isEmpty()) {
+        emit statusTextChanged(m_statusText);
+    }
 }
 
 void RestLibraryFeature::activate() {
     emit saveModelState();
-    emit showTrackModel(m_pTableModel);
+    emit switchToView(kViewName);
+    if (m_pRestLibraryView) {
+        emit restoreSearch(m_pRestLibraryView->currentSearch());
+    }
     emit enableCoverArtDisplay(false);
     slotRefresh();
 }
@@ -101,7 +144,17 @@ void RestLibraryFeature::slotRefresh() {
     refreshForTrack(PlayerInfo::instance().getCurrentPlayingTrack(), true);
 }
 
+void RestLibraryFeature::slotFollowCurrentTrackChanged(bool follow) {
+    m_followCurrentTrack = follow;
+    if (m_followCurrentTrack) {
+        slotRefresh();
+    }
+}
+
 void RestLibraryFeature::slotCurrentPlayingTrackChanged(TrackPointer pTrack) {
+    if (!m_followCurrentTrack) {
+        return;
+    }
     refreshForTrack(pTrack, false);
 }
 
@@ -110,9 +163,10 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
     if (!settings.isConfigured()) {
         m_cacheManager.abortAll();
         m_pTableModel->setCacheLoadCapabilitiesEnabled(false);
-        m_pTableModel->setTracks({});
+        clearRecommendations();
         m_lastRequestedTrackLocation.clear();
         m_currentRemoteId.clear();
+        setStatusText(tr("REST Library is not configured."));
         kLogger.info() << "REST library is not configured";
         return;
     }
@@ -128,7 +182,8 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
 
     if (!pTrack) {
         m_currentRemoteId.clear();
-        m_pTableModel->setTracks({});
+        clearRecommendations();
+        setStatusText(tr("No current track. Play or select a track to load recommendations."));
         return;
     }
 
@@ -140,13 +195,15 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
 
     if (settings.hasTrackLookupConfigured()) {
         m_currentRemoteId.clear();
-        m_pTableModel->setTracks({});
+        clearRecommendations();
+        setStatusText(tr("Looking up the current track in the REST Library."));
         m_client.lookupTrack(settings, pTrack);
         return;
     }
 
     m_currentRemoteId.clear();
-    m_pTableModel->setTracks({});
+    clearRecommendations();
+    setStatusText(tr("Current track is not mapped to a REST Library track."));
     kLogger.info() << "Current track is not mapped to a REST library remote id";
 }
 
@@ -161,7 +218,10 @@ void RestLibraryFeature::slotTrackLookupSucceeded(const QString& remoteId) {
 
 void RestLibraryFeature::slotTrackLookupMissed(const QString& message) {
     m_currentRemoteId.clear();
-    m_pTableModel->setTracks({});
+    clearRecommendations();
+    setStatusText(message.isEmpty()
+                    ? tr("Current track was not found in the REST Library.")
+                    : message);
     kLogger.info() << message;
 }
 
@@ -174,19 +234,29 @@ void RestLibraryFeature::requestRecommendationsForRemoteId(
         const QString& remoteId) {
     if (!settings.hasRecommendationsConfigured()) {
         m_currentRemoteId.clear();
-        m_pTableModel->setTracks({});
+        clearRecommendations();
+        setStatusText(tr("REST Library recommendations are not configured."));
         kLogger.info() << "REST library recommendations are not configured";
         return;
     }
 
     m_currentRemoteId = remoteId;
-    m_pTableModel->setTracks({});
+    clearRecommendations();
+    setStatusText(tr("Loading REST Library recommendations."));
     m_client.fetchRecommendations(settings, remoteId);
 }
 
 void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& tracks) {
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
     m_pTableModel->setTracks(tracks);
+    m_cacheStates.clear();
+    m_recommendationCount = tracks.size();
+    for (const auto& track : tracks) {
+        if (!track.remoteId.isEmpty()) {
+            m_cacheStates.insert(track.remoteId, track.cacheState);
+        }
+    }
+    updateReadyStatus();
     if (!settings.hasAudioDownloadConfigured()) {
         return;
     }
@@ -203,7 +273,10 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
 }
 
 void RestLibraryFeature::slotFetchFailed(const QString& message) {
-    m_pTableModel->setTracks({});
+    clearRecommendations();
+    setStatusText(message.isEmpty()
+                    ? tr("REST Library request failed.")
+                    : message);
     kLogger.warning() << message;
 }
 
@@ -214,7 +287,73 @@ void RestLibraryFeature::slotTrackCacheStateChanged(const RestLibraryCacheResult
                 normalizedTrackLocation(result.cachedFilePath),
                 result.remoteId);
     }
+    const bool isDisplayedTrack =
+            !result.remoteId.isEmpty() && m_cacheStates.contains(result.remoteId);
+    if (isDisplayedTrack) {
+        m_cacheStates.insert(result.remoteId, result.cacheState);
+    }
     m_pTableModel->updateTrackCacheState(result);
+    if (isDisplayedTrack) {
+        updateReadyStatus();
+    }
+}
+
+void RestLibraryFeature::setStatusText(const QString& statusText) {
+    if (m_statusText == statusText) {
+        return;
+    }
+    m_statusText = statusText;
+    emit statusTextChanged(m_statusText);
+}
+
+void RestLibraryFeature::updateReadyStatus() {
+    if (m_recommendationCount == 0) {
+        setStatusText(tr("No REST Library recommendations found."));
+        return;
+    }
+
+    int readyCount = 0;
+    int downloadingCount = 0;
+    int failedCount = 0;
+    for (auto it = m_cacheStates.cbegin(); it != m_cacheStates.cend(); ++it) {
+        switch (it.value()) {
+        case RestLibraryCacheState::Ready:
+            ++readyCount;
+            break;
+        case RestLibraryCacheState::Downloading:
+            ++downloadingCount;
+            break;
+        case RestLibraryCacheState::Failed:
+            ++failedCount;
+            break;
+        case RestLibraryCacheState::Missing:
+        case RestLibraryCacheState::Stale:
+            break;
+        }
+    }
+
+    if (downloadingCount > 0) {
+        setStatusText(tr("%n REST Library recommendation(s). Caching %1 download(s).",
+                              nullptr,
+                              m_recommendationCount)
+                              .arg(downloadingCount));
+        return;
+    }
+    if (readyCount > 0 || failedCount > 0) {
+        setStatusText(tr("%n REST Library recommendation(s). %1 cached, %2 failed.",
+                              nullptr,
+                              m_recommendationCount)
+                              .arg(readyCount)
+                              .arg(failedCount));
+        return;
+    }
+    setStatusText(tr("%n REST Library recommendation(s).", nullptr, m_recommendationCount));
+}
+
+void RestLibraryFeature::clearRecommendations() {
+    m_pTableModel->setTracks({});
+    m_cacheStates.clear();
+    m_recommendationCount = 0;
 }
 
 QString RestLibraryFeature::remoteIdForTrack(const TrackPointer& pTrack) const {
