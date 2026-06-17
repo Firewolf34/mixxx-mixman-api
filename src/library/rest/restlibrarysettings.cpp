@@ -21,39 +21,6 @@ namespace {
 
 const Logger kLogger("RestLibrarySettings");
 
-const ConfigKey kEnabledKey("[RestLibrary]", "Enabled");
-const ConfigKey kBaseUrlKey("[RestLibrary]", "BaseUrl");
-const ConfigKey kBearerTokenKeychainAccountKey("[RestLibrary]", "BearerTokenKeychainAccount");
-const ConfigKey kLocalDevBearerTokenKey("[RestLibrary]", "LocalDevBearerToken");
-const ConfigKey kTrackListPathKey("[RestLibrary]", "TrackListPath");
-const ConfigKey kTrackDetailPathTemplateKey("[RestLibrary]", "TrackDetailPathTemplate");
-const ConfigKey kTrackLookupPathTemplateKey("[RestLibrary]", "TrackLookupPathTemplate");
-const ConfigKey kRecommendationPathTemplateKey("[RestLibrary]", "RecommendationPathTemplate");
-const ConfigKey kAudioDownloadPathTemplateKey("[RestLibrary]", "AudioDownloadPathTemplate");
-const ConfigKey kCacheEnabledKey("[RestLibrary]", "CacheEnabled");
-const ConfigKey kCacheDirectoryKey("[RestLibrary]", "CacheDirectory");
-const ConfigKey kCacheMaxMegabytesKey("[RestLibrary]", "CacheMaxMegabytes");
-const ConfigKey kCacheMaxAgeDaysKey("[RestLibrary]", "CacheMaxAgeDays");
-const ConfigKey kMaxConcurrentDownloadsKey("[RestLibrary]", "MaxConcurrentDownloads");
-const ConfigKey kPageSizeKey("[RestLibrary]", "PageSize");
-const ConfigKey kRecommendationLimitKey("[RestLibrary]", "RecommendationLimit");
-
-constexpr int kDefaultPageSize = 50;
-constexpr int kMinPageSize = 1;
-constexpr int kMaxPageSize = 200;
-constexpr int kDefaultRecommendationLimit = 5;
-constexpr int kMinRecommendationLimit = 1;
-constexpr int kMaxRecommendationLimit = 20;
-constexpr int kDefaultCacheMaxMegabytes = 1024;
-constexpr int kMinCacheMaxMegabytes = 64;
-constexpr int kMaxCacheMaxMegabytes = 1024 * 100;
-constexpr int kDefaultCacheMaxAgeDays = 30;
-constexpr int kMinCacheMaxAgeDays = 1;
-constexpr int kMaxCacheMaxAgeDays = 365;
-constexpr int kDefaultMaxConcurrentDownloads = 2;
-constexpr int kMinMaxConcurrentDownloads = 1;
-constexpr int kMaxMaxConcurrentDownloads = 8;
-
 const QString kDefaultKeychainAccount = QStringLiteral("default");
 
 QString readBearerTokenFromKeychain(const QString& account) {
@@ -79,57 +46,78 @@ QString readBearerTokenFromKeychain(const QString& account) {
 
 } // namespace
 
+namespace config {
+
+QString defaultCacheDirectoryPath(const UserSettingsPointer& pConfig) {
+    if (!pConfig) {
+        return {};
+    }
+    return QDir(pConfig->getSettingsPath()).filePath(QStringLiteral("rest-library-cache"));
+}
+
+} // namespace config
+
 RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& pConfig) {
     RestLibrarySettings settings;
     if (!pConfig) {
         return settings;
     }
 
-    settings.enabled = pConfig->getValue<bool>(kEnabledKey, false);
-    settings.cacheEnabled = pConfig->getValue<bool>(kCacheEnabledKey, true);
-    settings.baseUrl = QUrl(pConfig->getValueString(kBaseUrlKey));
-    QString keychainAccount = pConfig->getValueString(kBearerTokenKeychainAccountKey);
+    settings.enabled = pConfig->getValue<bool>(config::kEnabledKey, config::kDefaultEnabled);
+    settings.cacheEnabled = pConfig->getValue<bool>(
+            config::kCacheEnabledKey,
+            config::kDefaultCacheEnabled);
+    settings.baseUrl = QUrl(pConfig->getValueString(config::kBaseUrlKey));
+    QString keychainAccount = pConfig->getValueString(
+            config::kBearerTokenKeychainAccountKey);
     if (keychainAccount.trimmed().isEmpty()) {
         keychainAccount = kDefaultKeychainAccount;
     }
     settings.bearerToken = readBearerTokenFromKeychain(keychainAccount);
     if (settings.bearerToken.isEmpty()) {
-        settings.bearerToken = pConfig->getValueString(kLocalDevBearerTokenKey);
+        settings.bearerToken = pConfig->getValueString(config::kLocalDevBearerTokenKey);
     }
-    settings.trackListPath = pConfig->getValueString(kTrackListPathKey);
-    settings.trackDetailPathTemplate = pConfig->getValueString(kTrackDetailPathTemplateKey);
-    settings.trackLookupPathTemplate = pConfig->getValueString(kTrackLookupPathTemplateKey);
-    settings.recommendationPathTemplate = pConfig->getValueString(kRecommendationPathTemplateKey);
-    settings.audioDownloadPathTemplate = pConfig->getValueString(kAudioDownloadPathTemplateKey);
-    settings.cacheDirectoryPath = pConfig->getValueString(kCacheDirectoryKey);
+    settings.trackListPath = pConfig->getValueString(config::kTrackListPathKey);
+    settings.trackDetailPathTemplate = pConfig->getValueString(
+            config::kTrackDetailPathTemplateKey);
+    settings.trackLookupPathTemplate = pConfig->getValueString(
+            config::kTrackLookupPathTemplateKey);
+    settings.recommendationPathTemplate = pConfig->getValueString(
+            config::kRecommendationPathTemplateKey);
+    settings.audioDownloadPathTemplate = pConfig->getValueString(
+            config::kAudioDownloadPathTemplateKey);
+    settings.cacheDirectoryPath = pConfig->getValueString(config::kCacheDirectoryKey);
     if (settings.cacheDirectoryPath.trimmed().isEmpty()) {
-        settings.cacheDirectoryPath = QDir(pConfig->getSettingsPath())
-                                              .filePath(QStringLiteral("rest-library-cache"));
+        settings.cacheDirectoryPath = config::defaultCacheDirectoryPath(pConfig);
     }
     settings.pageSize = std::clamp(
-            pConfig->getValue<int>(kPageSizeKey, kDefaultPageSize),
-            kMinPageSize,
-            kMaxPageSize);
+            pConfig->getValue<int>(config::kPageSizeKey, config::kDefaultPageSize),
+            config::kMinPageSize,
+            config::kMaxPageSize);
     settings.recommendationLimit = std::clamp(
-            pConfig->getValue<int>(kRecommendationLimitKey, kDefaultRecommendationLimit),
-            kMinRecommendationLimit,
-            kMaxRecommendationLimit);
+            pConfig->getValue<int>(
+                    config::kRecommendationLimitKey,
+                    config::kDefaultRecommendationLimit),
+            config::kMinRecommendationLimit,
+            config::kMaxRecommendationLimit);
     settings.cacheMaxMegabytes = std::clamp(
             pConfig->getValue<int>(
-                    kCacheMaxMegabytesKey,
-                    kDefaultCacheMaxMegabytes),
-            kMinCacheMaxMegabytes,
-            kMaxCacheMaxMegabytes);
+                    config::kCacheMaxMegabytesKey,
+                    config::kDefaultCacheMaxMegabytes),
+            config::kMinCacheMaxMegabytes,
+            config::kMaxCacheMaxMegabytes);
     settings.cacheMaxAgeDays = std::clamp(
-            pConfig->getValue<int>(kCacheMaxAgeDaysKey, kDefaultCacheMaxAgeDays),
-            kMinCacheMaxAgeDays,
-            kMaxCacheMaxAgeDays);
+            pConfig->getValue<int>(
+                    config::kCacheMaxAgeDaysKey,
+                    config::kDefaultCacheMaxAgeDays),
+            config::kMinCacheMaxAgeDays,
+            config::kMaxCacheMaxAgeDays);
     settings.maxConcurrentDownloads = std::clamp(
             pConfig->getValue<int>(
-                    kMaxConcurrentDownloadsKey,
-                    kDefaultMaxConcurrentDownloads),
-            kMinMaxConcurrentDownloads,
-            kMaxMaxConcurrentDownloads);
+                    config::kMaxConcurrentDownloadsKey,
+                    config::kDefaultMaxConcurrentDownloads),
+            config::kMinMaxConcurrentDownloads,
+            config::kMaxMaxConcurrentDownloads);
     return settings;
 }
 

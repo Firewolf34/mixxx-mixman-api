@@ -1,0 +1,296 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>DlgPrefRestLibraryDlg</class>
+ <widget class="QWidget" name="DlgPrefRestLibraryDlg">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>640</width>
+    <height>620</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>REST Library Preferences</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QCheckBox" name="checkBoxEnabled">
+     <property name="text">
+      <string>Enable REST Library</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="labelValidationWarning">
+     <property name="styleSheet">
+      <string notr="true">color: #bb0000; font-weight: bold;</string>
+     </property>
+     <property name="text">
+      <string>When enabled, enter a valid base URL, a track list path, and include %1 in remote ID templates.</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxConnection">
+     <property name="title">
+      <string>Connection</string>
+     </property>
+     <layout class="QFormLayout" name="formLayoutConnection">
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelBaseUrl">
+        <property name="text">
+         <string>Base URL:</string>
+        </property>
+        <property name="buddy">
+         <cstring>lineEditBaseUrl</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLineEdit" name="lineEditBaseUrl">
+        <property name="placeholderText">
+         <string>https://example.com</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelBearerToken">
+        <property name="text">
+         <string>Bearer token:</string>
+        </property>
+        <property name="buddy">
+         <cstring>lineEditBearerToken</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="lineEditBearerToken"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxApiPaths">
+     <property name="title">
+      <string>API Paths</string>
+     </property>
+     <layout class="QFormLayout" name="formLayoutApiPaths">
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelTrackListPath">
+        <property name="text">
+         <string>Track list path:</string>
+        </property>
+        <property name="buddy">
+         <cstring>lineEditTrackListPath</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLineEdit" name="lineEditTrackListPath">
+        <property name="placeholderText">
+         <string>/tracks</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelPageSize">
+        <property name="text">
+         <string>Page size:</string>
+        </property>
+        <property name="buddy">
+         <cstring>spinBoxPageSize</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="spinBoxPageSize"/>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelTrackDetailPathTemplate">
+        <property name="text">
+         <string>Track detail path template:</string>
+        </property>
+        <property name="buddy">
+         <cstring>lineEditTrackDetailPathTemplate</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QLineEdit" name="lineEditTrackDetailPathTemplate">
+        <property name="placeholderText">
+         <string>/tracks/%1</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="labelTrackLookupPathTemplate">
+        <property name="text">
+         <string>Track lookup path template:</string>
+        </property>
+        <property name="buddy">
+         <cstring>lineEditTrackLookupPathTemplate</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QLineEdit" name="lineEditTrackLookupPathTemplate">
+        <property name="placeholderText">
+         <string>/lookup?artist=%artist&amp;title=%title</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="labelRecommendationPathTemplate">
+        <property name="text">
+         <string>Recommendation path template:</string>
+        </property>
+        <property name="buddy">
+         <cstring>lineEditRecommendationPathTemplate</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QLineEdit" name="lineEditRecommendationPathTemplate">
+        <property name="placeholderText">
+         <string>/tracks/%1/recommendations</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0">
+       <widget class="QLabel" name="labelRecommendationLimit">
+        <property name="text">
+         <string>Recommendation limit:</string>
+        </property>
+        <property name="buddy">
+         <cstring>spinBoxRecommendationLimit</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="1">
+       <widget class="QSpinBox" name="spinBoxRecommendationLimit"/>
+      </item>
+      <item row="6" column="0">
+       <widget class="QLabel" name="labelAudioDownloadPathTemplate">
+        <property name="text">
+         <string>Audio download path template:</string>
+        </property>
+        <property name="buddy">
+         <cstring>lineEditAudioDownloadPathTemplate</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="1">
+       <widget class="QLineEdit" name="lineEditAudioDownloadPathTemplate">
+        <property name="placeholderText">
+         <string>/tracks/%1/audio</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxCache">
+     <property name="title">
+      <string>Cache</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayoutCache">
+      <item row="0" column="0" colspan="3">
+       <widget class="QCheckBox" name="checkBoxCacheEnabled">
+        <property name="text">
+         <string>Cache downloaded audio</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelCacheDirectory">
+        <property name="text">
+         <string>Directory:</string>
+        </property>
+        <property name="buddy">
+         <cstring>lineEditCacheDirectory</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="lineEditCacheDirectory"/>
+      </item>
+      <item row="1" column="2">
+       <widget class="QPushButton" name="pushButtonBrowseCacheDirectory">
+        <property name="text">
+         <string>Browse...</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelCacheMaxMegabytes">
+        <property name="text">
+         <string>Maximum size:</string>
+        </property>
+        <property name="buddy">
+         <cstring>spinBoxCacheMaxMegabytes</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1" colspan="2">
+       <widget class="QSpinBox" name="spinBoxCacheMaxMegabytes">
+        <property name="suffix">
+         <string> MB</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="labelCacheMaxAgeDays">
+        <property name="text">
+         <string>Maximum age:</string>
+        </property>
+        <property name="buddy">
+         <cstring>spinBoxCacheMaxAgeDays</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1" colspan="2">
+       <widget class="QSpinBox" name="spinBoxCacheMaxAgeDays">
+        <property name="suffix">
+         <string> days</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="labelMaxConcurrentDownloads">
+        <property name="text">
+         <string>Concurrent downloads:</string>
+        </property>
+        <property name="buddy">
+         <cstring>spinBoxMaxConcurrentDownloads</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1" colspan="2">
+       <widget class="QSpinBox" name="spinBoxMaxConcurrentDownloads"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

@@ -38,6 +38,7 @@
 #include "preferences/dialog/dlgprefkey.h"
 #include "preferences/dialog/dlgprefrecord.h"
 #include "preferences/dialog/dlgprefreplaygain.h"
+#include "preferences/dialog/dlgprefrestlibrary.h"
 
 #ifdef __MODPLUG__
 #include "preferences/dialog/dlgprefmodplug.h"
@@ -113,6 +114,12 @@ DlgPreferences::DlgPreferences(
     addPageWidget(PreferencesPage(plibraryPage,
                           new QTreeWidgetItem(contentsTreeWidget, QTreeWidgetItem::Type)),
             tr("Library"),
+            "ic_preferences_library.svg");
+
+    addPageWidget(PreferencesPage(
+                          new DlgPrefRestLibrary(this, m_pConfig),
+                          new QTreeWidgetItem(contentsTreeWidget, QTreeWidgetItem::Type)),
+            tr("REST Library"),
             "ic_preferences_library.svg");
 
     QTreeWidgetItem* pControllerRootItem =

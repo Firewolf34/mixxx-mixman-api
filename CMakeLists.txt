@@ -1108,6 +1108,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/preferences/dialog/dlgprefrecorddlg.ui
   src/preferences/dialog/dlgprefreplaygain.cpp
   src/preferences/dialog/dlgprefreplaygaindlg.ui
+  src/preferences/dialog/dlgprefrestlibrary.cpp
+  src/preferences/dialog/dlgprefrestlibrarydlg.ui
   src/preferences/dialog/dlgprefsound.cpp
   src/preferences/dialog/dlgprefsounddlg.ui
   src/preferences/dialog/dlgprefsounditem.cpp
@@ -2166,6 +2168,7 @@ if(BUILD_TESTING)
     src/test/directorydaotest.cpp
     src/test/duration_test.cpp
     src/test/durationutiltest.cpp
+    src/test/dlgprefrestlibrary_test.cpp
     #TODO: write useful tests for refactored effects system
     #src/test/effectchainslottest.cpp
     src/test/enginebufferscalelineartest.cpp
@@ -2209,6 +2212,7 @@ if(BUILD_TESTING)
     src/test/replaygaintest.cpp
     src/test/restlibrarycachemanager_test.cpp
     src/test/restlibraryclient_test.cpp
+    src/test/restlibrarysettings_test.cpp
     src/test/restlibrarytablemodel_test.cpp
     src/test/rescalertest.cpp
     src/test/rgbcolor_test.cpp
