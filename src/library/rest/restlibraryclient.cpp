@@ -21,6 +21,7 @@ namespace {
 const Logger kLogger("RestLibraryClient");
 
 constexpr int kRequestTimeoutMillis = 15000;
+constexpr qsizetype kMaxLoggedResponseBytes = 500;
 
 bool isSuccessStatus(int statusCode) {
     return statusCode >= 200 && statusCode < 300;
@@ -84,6 +85,13 @@ QString pathForTrackLookup(const QString& pathTemplate, const TrackPointer& pTra
             percentEncode(QString::number(qRound(pTrack->getDuration()))));
     path.replace(QStringLiteral("%location"), percentEncode(pTrack->getLocation()));
     return path;
+}
+
+QString responseSnippet(const QByteArray& body) {
+    QString snippet = QString::fromUtf8(body.left(kMaxLoggedResponseBytes)).trimmed();
+    snippet.replace(QChar('\n'), QChar(' '));
+    snippet.replace(QChar('\r'), QChar(' '));
+    return snippet;
 }
 
 } // namespace
@@ -190,6 +198,7 @@ QNetworkRequest RestLibraryClient::newRequest(const QString& path, int limit) co
                 "Authorization",
                 QByteArray("Bearer ") + m_settings.bearerToken.toUtf8());
     }
+    kLogger.info() << "REST library request" << url.toString(QUrl::RemoveUserInfo);
     return request;
 }
 
@@ -205,17 +214,28 @@ void RestLibraryClient::slotTrackListFinished() {
     }
     pReply->deleteLater();
 
+    const QByteArray responseBody = pReply->readAll();
     const int statusCode = statusCodeFromReply(*pReply);
     if (!isSuccessStatus(statusCode)) {
+        kLogger.warning()
+                << "REST library request failed"
+                << pReply->request().url().toString(QUrl::RemoveUserInfo)
+                << "status" << statusCode
+                << "network error" << pReply->error()
+                << pReply->errorString()
+                << "body" << responseSnippet(responseBody);
         emitFailureForCurrentPurpose(
                 tr("Remote library request returned an unsuccessful status."));
         return;
     }
 
     QJsonParseError parseError;
-    const QJsonDocument document = QJsonDocument::fromJson(pReply->readAll(), &parseError);
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
     if (parseError.error != QJsonParseError::NoError) {
-        kLogger.warning() << "Failed to parse remote library JSON response";
+        kLogger.warning()
+                << "Failed to parse remote library JSON response from"
+                << pReply->request().url().toString(QUrl::RemoveUserInfo)
+                << "body" << responseSnippet(responseBody);
         emitFailureForCurrentPurpose(tr("Remote library response was not valid JSON."));
         return;
     }
@@ -272,16 +292,28 @@ void RestLibraryClient::slotTrackDetailFinished() {
     pReply->deleteLater();
     ++m_finishedDetailCount;
 
+    const QByteArray responseBody = pReply->readAll();
     const int statusCode = statusCodeFromReply(*pReply);
     if (!isSuccessStatus(statusCode)) {
+        kLogger.warning()
+                << "REST library track detail request failed"
+                << pReply->request().url().toString(QUrl::RemoveUserInfo)
+                << "status" << statusCode
+                << "network error" << pReply->error()
+                << pReply->errorString()
+                << "body" << responseSnippet(responseBody);
         m_detailBatchFailed = true;
         finishDetailBatchIfComplete();
         return;
     }
 
     QJsonParseError parseError;
-    const QJsonDocument document = QJsonDocument::fromJson(pReply->readAll(), &parseError);
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        kLogger.warning()
+                << "REST library track detail response was not a JSON object from"
+                << pReply->request().url().toString(QUrl::RemoveUserInfo)
+                << "body" << responseSnippet(responseBody);
         m_detailBatchFailed = true;
         finishDetailBatchIfComplete();
         return;

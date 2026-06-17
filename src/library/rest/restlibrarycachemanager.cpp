@@ -9,6 +9,7 @@
 #include <QRegularExpression>
 
 #include "moc_restlibrarycachemanager.cpp"
+#include "util/logger.h"
 
 namespace mixxx::library::rest {
 
@@ -17,12 +18,22 @@ namespace {
 constexpr int kDownloadTimeoutMillis = 30000;
 constexpr qsizetype kCacheHashLength = 24;
 
+const Logger kLogger("RestLibraryCacheManager");
+
 bool isSuccessStatus(int statusCode) {
     return statusCode >= 200 && statusCode < 300;
 }
 
 int statusCodeFromReply(const QNetworkReply& reply) {
     return reply.attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+}
+
+QString responseSnippet(const QByteArray& body) {
+    constexpr qsizetype kMaxLoggedResponseBytes = 500;
+    QString snippet = QString::fromUtf8(body.left(kMaxLoggedResponseBytes)).trimmed();
+    snippet.replace(QChar('\n'), QChar(' '));
+    snippet.replace(QChar('\r'), QChar(' '));
+    return snippet;
 }
 
 } // namespace
@@ -171,6 +182,9 @@ QNetworkRequest RestLibraryCacheManager::newDownloadRequest(
                 "Authorization",
                 QByteArray("Bearer ") + m_settings.bearerToken.toUtf8());
     }
+    kLogger.info()
+            << "REST library audio download request"
+            << request.url().toString(QUrl::RemoveUserInfo);
     return request;
 }
 
@@ -230,12 +244,25 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
 
     const QString remoteId = pDownload->track.remoteId;
     const int statusCode = pReply ? statusCodeFromReply(*pReply) : 0;
+    const QByteArray remainingBody = pReply ? pReply->readAll() : QByteArray();
     const bool success = pReply &&
             pReply->error() == QNetworkReply::NoError &&
             isSuccessStatus(statusCode) &&
             pDownload->bytesWritten > 0;
 
     if (!success) {
+        if (pReply) {
+            kLogger.warning()
+                    << "REST library audio download failed"
+                    << pReply->request().url().toString(QUrl::RemoveUserInfo)
+                    << "status" << statusCode
+                    << "network error" << pReply->error()
+                    << pReply->errorString()
+                    << "bytes written" << pDownload->bytesWritten
+                    << "body" << responseSnippet(remainingBody);
+        } else {
+            kLogger.warning() << "REST library audio download failed without a reply";
+        }
         QFile::remove(pDownload->tempFilePath);
         emitState(
                 remoteId,
