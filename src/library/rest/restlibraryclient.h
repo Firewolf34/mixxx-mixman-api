@@ -143,6 +143,8 @@ class RestLibraryClient final : public QObject {
     QList<RestLibraryTrack> m_pendingTracks;
     QVector<PendingDetail> m_pendingDetails;
     int m_finishedDetailCount = 0;
+    int m_trackListRequestGeneration = 0;
+    int m_policyPathRequestGeneration = 0;
     bool m_detailBatchFailed = false;
 };
 

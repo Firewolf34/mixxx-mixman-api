@@ -27,6 +27,7 @@ const QString kSessionCreateOperation = QStringLiteral("session_create");
 const QString kSessionSnapshotOperation = QStringLiteral("session_snapshot");
 const QString kSessionIntentOperation = QStringLiteral("session_intent");
 const QString kSessionHeartbeatOperation = QStringLiteral("session_heartbeat");
+const char* kRequestGenerationProperty = "requestGeneration";
 
 bool isSuccessStatus(int statusCode) {
     return statusCode >= 200 && statusCode < 300;
@@ -176,6 +177,7 @@ RestLibraryClient::RestLibraryClient(
 }
 
 void RestLibraryClient::fetchTracks(const RestLibrarySettings& settings) {
+    const int requestGeneration = ++m_trackListRequestGeneration;
     clearPendingDetails();
     m_settings = settings;
     m_requestPurpose = RequestPurpose::Tracks;
@@ -195,12 +197,14 @@ void RestLibraryClient::fetchTracks(const RestLibrarySettings& settings) {
     QNetworkReply* pReply = m_pNetworkAccessManager->get(
             newRequest(m_settings.trackListPath, m_settings.pageSize));
     pReply->setParent(this);
+    pReply->setProperty(kRequestGenerationProperty, requestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotTrackListFinished);
 }
 
 void RestLibraryClient::lookupTrack(
         const RestLibrarySettings& settings,
         const TrackPointer& pTrack) {
+    const int requestGeneration = ++m_trackListRequestGeneration;
     clearPendingDetails();
     m_settings = settings;
     m_requestPurpose = RequestPurpose::TrackLookup;
@@ -220,12 +224,14 @@ void RestLibraryClient::lookupTrack(
     QNetworkReply* pReply = m_pNetworkAccessManager->get(
             newRequest(pathForTrackLookup(m_settings.trackLookupPathTemplate, pTrack), 1));
     pReply->setParent(this);
+    pReply->setProperty(kRequestGenerationProperty, requestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotTrackListFinished);
 }
 
 void RestLibraryClient::fetchRecommendations(
         const RestLibrarySettings& settings,
         const QString& remoteId) {
+    const int requestGeneration = ++m_trackListRequestGeneration;
     clearPendingDetails();
     m_settings = settings;
     m_requestPurpose = RequestPurpose::Recommendations;
@@ -247,6 +253,7 @@ void RestLibraryClient::fetchRecommendations(
                     pathForRemoteId(m_settings.recommendationPathTemplate, remoteId),
                     m_settings.recommendationLimit));
     pReply->setParent(this);
+    pReply->setProperty(kRequestGenerationProperty, requestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotTrackListFinished);
 }
 
@@ -289,6 +296,7 @@ void RestLibraryClient::fetchMixManPolicyPath(
         const QString& sessionId,
         const QString& previousTrackId,
         const QStringList& recentTrackIds) {
+    const int requestGeneration = ++m_policyPathRequestGeneration;
     clearPendingDetails();
     m_settings = settings;
     if (!m_pNetworkAccessManager) {
@@ -356,6 +364,7 @@ void RestLibraryClient::fetchMixManPolicyPath(
 
     QNetworkReply* pReply = m_pNetworkAccessManager->get(newRequest(path, 0));
     pReply->setParent(this);
+    pReply->setProperty(kRequestGenerationProperty, requestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotPolicyPathFinished);
 }
 
@@ -511,7 +520,13 @@ void RestLibraryClient::slotTrackListFinished() {
         emit fetchFailed(tr("Remote library request failed."));
         return;
     }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_trackListRequestGeneration;
     pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
 
     const QByteArray responseBody = pReply->readAll();
     const int statusCode = statusCodeFromReply(*pReply);
@@ -576,6 +591,7 @@ void RestLibraryClient::startDetailRequests(const QStringList& remoteIds) {
     for (int i = 0; i < requestCount; ++i) {
         QNetworkReply* pReply = m_pNetworkAccessManager->get(newDetailRequest(remoteIds.at(i)));
         pReply->setParent(this);
+        pReply->setProperty(kRequestGenerationProperty, m_trackListRequestGeneration);
         m_pendingDetails.push_back(PendingDetail{
                 QPointer<QNetworkReply>(pReply),
                 remoteIds.at(i)});
@@ -588,7 +604,13 @@ void RestLibraryClient::slotTrackDetailFinished() {
     if (!pReply) {
         return;
     }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_trackListRequestGeneration;
     pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
     ++m_finishedDetailCount;
 
     const QByteArray responseBody = pReply->readAll();
@@ -710,7 +732,13 @@ void RestLibraryClient::slotPolicyPathFinished() {
         emit fetchFailed(tr("MixMan policy path request failed."));
         return;
     }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_policyPathRequestGeneration;
     pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
 
     const QByteArray responseBody = pReply->readAll();
     const int statusCode = statusCodeFromReply(*pReply);

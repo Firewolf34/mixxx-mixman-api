@@ -257,6 +257,39 @@ TEST(RestLibraryClientTest, FetchesTrackListWithMockNetworkAccessManager) {
     EXPECT_EQ(tracks.at(0).remoteId, QStringLiteral("7"));
 }
 
+TEST(RestLibraryClientTest, IgnoresStaleTrackListReplyAfterNewerRequest) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::tracksFetched);
+    QSignalSpy failedSpy(&client, &RestLibraryClient::fetchFailed);
+    RestLibrarySettings oldSettings = newSettings();
+    oldSettings.trackListPath = QStringLiteral("/configured-list-old");
+    RestLibrarySettings currentSettings = newSettings();
+    currentSettings.trackListPath = QStringLiteral("/configured-list-current");
+    MockNetworkReply* pOldReply = network.ExpectGet(
+            QStringLiteral("/configured-list-old"),
+            {{"limit", "5"}},
+            200,
+            R"json([{"id": 1, "title": "Old Track"}])json");
+    MockNetworkReply* pCurrentReply = network.ExpectGet(
+            QStringLiteral("/configured-list-current"),
+            {{"limit", "5"}},
+            200,
+            R"json([{"id": 2, "title": "Current Track"}])json");
+
+    client.fetchTracks(oldSettings);
+    client.fetchTracks(currentSettings);
+    pCurrentReply->Done();
+    pOldReply->Done();
+
+    ASSERT_EQ(fetchedSpy.count(), 1);
+    EXPECT_EQ(failedSpy.count(), 0);
+    const auto tracks = qvariant_cast<QList<mixxx::library::rest::RestLibraryTrack>>(
+            fetchedSpy.takeFirst().at(0));
+    ASSERT_EQ(tracks.size(), 1);
+    EXPECT_EQ(tracks.at(0).remoteId, QStringLiteral("2"));
+}
+
 TEST(RestLibraryClientTest, ReportsAuthOrValidationFailure) {
     MockNetworkAccessManager network;
     RestLibraryClient client(&network);
@@ -393,6 +426,41 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
             fetchedSpy.takeFirst().at(0));
     ASSERT_EQ(path.candidates.size(), 1);
     EXPECT_EQ(path.candidates.at(0).remoteId, QStringLiteral("8"));
+}
+
+TEST(RestLibraryClientTest, IgnoresStaleMixManPolicyPathReplyAfterNewerRequest) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::mixManPolicyPathFetched);
+    QSignalSpy failedSpy(&client, &RestLibraryClient::fetchFailed);
+    MockNetworkReply* pOldReply = network.ExpectGet(
+            QStringLiteral("/recommendations/policy-console/path/1"),
+            {{"candidate_limit", "10"}},
+            200,
+            R"json({
+              "tracks_by_id": {"1": {"track_id": 1, "title": "Old Policy Track"}},
+              "plan": {"alternatives": [{"track_id": 1, "score": 0.1}]}
+            })json");
+    MockNetworkReply* pCurrentReply = network.ExpectGet(
+            QStringLiteral("/recommendations/policy-console/path/2"),
+            {{"candidate_limit", "10"}},
+            200,
+            R"json({
+              "tracks_by_id": {"2": {"track_id": 2, "title": "Current Policy Track"}},
+              "plan": {"alternatives": [{"track_id": 2, "score": 0.9}]}
+            })json");
+
+    client.fetchMixManPolicyPath(newMixManSettings(), QStringLiteral("1"));
+    client.fetchMixManPolicyPath(newMixManSettings(), QStringLiteral("2"));
+    pCurrentReply->Done();
+    pOldReply->Done();
+
+    ASSERT_EQ(fetchedSpy.count(), 1);
+    EXPECT_EQ(failedSpy.count(), 0);
+    const auto path = qvariant_cast<mixxx::library::rest::RestLibraryPolicyPath>(
+            fetchedSpy.takeFirst().at(0));
+    ASSERT_EQ(path.candidates.size(), 1);
+    EXPECT_EQ(path.candidates.at(0).remoteId, QStringLiteral("2"));
 }
 
 TEST(RestLibraryClientTest, CreatesMixManSession) {

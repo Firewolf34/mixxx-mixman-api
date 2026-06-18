@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QMenu>
 #include <QStringList>
+#include <QUrl>
 #include <QUuid>
 
 #include "controllers/keyboard/keyboardeventfilter.h"
@@ -27,6 +28,7 @@ namespace {
 
 const Logger kLogger("RestLibraryFeature");
 const QString kViewName = QStringLiteral("REST Library");
+const QString kSessionCreateOperation = QStringLiteral("session_create");
 constexpr int kSessionHeartbeatIntervalMillis = 30000;
 constexpr qsizetype kMaxRecentRemoteIds = 20;
 
@@ -211,6 +213,7 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
     refreshMixManControls(settings);
     if (!settings.isConfigured()) {
+        resetMixManSessionState();
         m_cacheManager.abortAll();
         m_pTableModel->setCacheLoadCapabilitiesEnabled(false);
         clearRecommendations();
@@ -224,11 +227,16 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
     m_cacheManager.abortAll();
     m_pTableModel->setCacheLoadCapabilitiesEnabled(settings.hasAudioDownloadConfigured());
     if (settings.useMixManDefaults) {
+        const QString sessionConfigKey = mixManSessionConfigKey(settings);
+        if (m_mixManSessionConfigKey != sessionConfigKey) {
+            resetMixManSessionState();
+            m_mixManSessionConfigKey = sessionConfigKey;
+        }
         ensureMixManSession(settings);
         m_client.fetchMixManDiagnostics(settings);
         m_client.fetchMixManPolicyPresets(settings);
     } else {
-        m_sessionHeartbeatTimer.stop();
+        resetMixManSessionState();
     }
 
     const QString trackLocation = pTrack ? normalizedTrackLocation(pTrack->getLocation()) : QString();
@@ -246,6 +254,7 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
 
     const QString remoteId = remoteIdForTrack(pTrack);
     if (!remoteId.isEmpty()) {
+        rememberRemoteId(remoteId);
         publishMixManSnapshot(settings, pTrack, remoteId);
         requestRecommendationsForRemoteId(settings, remoteId);
         return;
@@ -271,6 +280,7 @@ void RestLibraryFeature::slotTracksFetched(const QList<RestLibraryTrack>& tracks
 
 void RestLibraryFeature::slotTrackLookupSucceeded(const QString& remoteId) {
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    rememberRemoteId(remoteId);
     publishMixManSnapshot(settings, PlayerInfo::instance().getCurrentPlayingTrack(), remoteId);
     requestRecommendationsForRemoteId(settings, remoteId);
 }
@@ -355,6 +365,11 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
         return;
     }
     if (!status.success) {
+        if (status.operation == kSessionCreateOperation) {
+            m_sessionCreateAttempted = false;
+            m_mixManSession = {};
+            m_sessionHeartbeatTimer.stop();
+        }
         m_sessionStatusText = status.errorText.isEmpty()
                 ? tr("Session publishing failed")
                 : status.errorText;
@@ -504,6 +519,19 @@ void RestLibraryFeature::ensureMixManSession(const RestLibrarySettings& settings
     m_sessionStatusText = tr("Creating MixMan session");
     updateDiagnosticsText();
     m_client.createMixManSession(settings, m_clientId, mixManSessionMetadata());
+}
+
+void RestLibraryFeature::resetMixManSessionState() {
+    m_mixManSession = {};
+    m_sessionCreateAttempted = false;
+    m_sessionStatusText.clear();
+    m_mixManSessionConfigKey.clear();
+    m_sessionHeartbeatTimer.stop();
+    updateDiagnosticsText();
+}
+
+QString RestLibraryFeature::mixManSessionConfigKey(const RestLibrarySettings& settings) const {
+    return settings.baseUrl.toString(QUrl::RemoveUserInfo);
 }
 
 void RestLibraryFeature::publishMixManSnapshot(

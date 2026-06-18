@@ -74,6 +74,8 @@ class RestLibraryFeature final : public LibraryFeature {
     QStringList recentRemoteIdsForRequest(const QString& remoteId) const;
     void setRecommendationTracks(const QList<RestLibraryTrack>& tracks);
     void ensureMixManSession(const RestLibrarySettings& settings);
+    void resetMixManSessionState();
+    QString mixManSessionConfigKey(const RestLibrarySettings& settings) const;
     void publishMixManSnapshot(
             const RestLibrarySettings& settings,
             const TrackPointer& pTrack,
@@ -106,6 +108,7 @@ class RestLibraryFeature final : public LibraryFeature {
     QString m_currentRemoteId;
     QString m_previousRemoteId;
     QStringList m_recentRemoteIds;
+    QString m_mixManSessionConfigKey;
     QString m_clientId;
     QString m_sessionStatusText;
     QString m_statusText;
