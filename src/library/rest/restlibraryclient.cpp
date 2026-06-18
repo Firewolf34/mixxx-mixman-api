@@ -79,6 +79,19 @@ QString pathForRemoteId(const QString& pathTemplate, const QString& remoteId) {
     return path;
 }
 
+QString positiveIntegerString(const QString& value) {
+    const QString trimmedValue = value.trimmed();
+    if (trimmedValue.isEmpty()) {
+        return {};
+    }
+    bool ok = false;
+    const qlonglong integerValue = trimmedValue.toLongLong(&ok);
+    if (!ok || integerValue <= 0 || QString::number(integerValue) != trimmedValue) {
+        return {};
+    }
+    return QString::number(integerValue);
+}
+
 QString pathForTrackLookup(const QString& pathTemplate, const TrackPointer& pTrack) {
     QString path = pathTemplate;
     if (!pTrack) {
@@ -258,6 +271,7 @@ void RestLibraryClient::fetchRecommendations(
 }
 
 void RestLibraryClient::fetchMixManDiagnostics(const RestLibrarySettings& settings) {
+    const int requestGeneration = ++m_mixManDiagnosticsRequestGeneration;
     m_settings = settings;
     if (!m_pNetworkAccessManager || !m_settings.isConfigured()) {
         return;
@@ -266,11 +280,13 @@ void RestLibraryClient::fetchMixManDiagnostics(const RestLibrarySettings& settin
     QNetworkReply* pHealthReply = m_pNetworkAccessManager->get(
             newRequest(config::mixManHealthPath(), 0));
     pHealthReply->setParent(this);
+    pHealthReply->setProperty(kRequestGenerationProperty, requestGeneration);
     connect(pHealthReply, &QNetworkReply::finished, this, &RestLibraryClient::slotHealthFinished);
 
     QNetworkReply* pIndexReply = m_pNetworkAccessManager->get(
             newRequest(config::mixManIndexStatusPath(), 0));
     pIndexReply->setParent(this);
+    pIndexReply->setProperty(kRequestGenerationProperty, requestGeneration);
     connect(pIndexReply,
             &QNetworkReply::finished,
             this,
@@ -278,6 +294,7 @@ void RestLibraryClient::fetchMixManDiagnostics(const RestLibrarySettings& settin
 }
 
 void RestLibraryClient::fetchMixManPolicyPresets(const RestLibrarySettings& settings) {
+    const int requestGeneration = ++m_policyPresetsRequestGeneration;
     m_settings = settings;
     if (!m_pNetworkAccessManager || !m_settings.isConfigured()) {
         emit policyPresetsFetched({});
@@ -287,6 +304,7 @@ void RestLibraryClient::fetchMixManPolicyPresets(const RestLibrarySettings& sett
     QNetworkReply* pReply = m_pNetworkAccessManager->get(
             newRequest(config::mixManPolicyPresetsPath(), 0));
     pReply->setParent(this);
+    pReply->setProperty(kRequestGenerationProperty, requestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotPolicyPresetsFinished);
 }
 
@@ -308,7 +326,13 @@ void RestLibraryClient::fetchMixManPolicyPath(
         return;
     }
 
-    QString path = pathForRemoteId(m_settings.recommendationPathTemplate, remoteId);
+    const QString normalizedRemoteId = positiveIntegerString(remoteId);
+    if (normalizedRemoteId.isEmpty()) {
+        emit fetchFailed(tr("MixMan track IDs must be positive integers."));
+        return;
+    }
+
+    QString path = pathForRemoteId(m_settings.recommendationPathTemplate, normalizedRemoteId);
     path = pathWithQueryItem(
             path,
             QStringLiteral("candidate_limit"),
@@ -343,16 +367,19 @@ void RestLibraryClient::fetchMixManPolicyPath(
     if (!sessionId.trimmed().isEmpty()) {
         path = pathWithQueryItem(path, QStringLiteral("session_id"), sessionId.trimmed());
     }
-    if (!previousTrackId.trimmed().isEmpty()) {
+    const QString normalizedPreviousTrackId = positiveIntegerString(previousTrackId);
+    if (!normalizedPreviousTrackId.isEmpty()) {
         path = pathWithQueryItem(
                 path,
                 QStringLiteral("previous_track_id"),
-                previousTrackId.trimmed());
+                normalizedPreviousTrackId);
     }
     QStringList normalizedRecentTrackIds;
     for (const QString& recentTrackId : recentTrackIds) {
-        if (!recentTrackId.trimmed().isEmpty()) {
-            normalizedRecentTrackIds.append(recentTrackId.trimmed());
+        const QString normalizedRecentTrackId = positiveIntegerString(recentTrackId);
+        if (!normalizedRecentTrackId.isEmpty() &&
+                !normalizedRecentTrackIds.contains(normalizedRecentTrackId)) {
+            normalizedRecentTrackIds.append(normalizedRecentTrackId);
         }
     }
     if (!normalizedRecentTrackIds.isEmpty()) {
@@ -372,6 +399,7 @@ void RestLibraryClient::createMixManSession(
         const RestLibrarySettings& settings,
         const QString& clientId,
         const QJsonObject& metadata) {
+    const int requestGeneration = ++m_sessionRequestGeneration;
     m_settings = settings;
     if (!m_pNetworkAccessManager || !m_settings.isConfigured()) {
         RestLibrarySessionWriteStatus status;
@@ -388,6 +416,7 @@ void RestLibraryClient::createMixManSession(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionCreateOperation);
+    pReply->setProperty(kRequestGenerationProperty, requestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionCreateFinished);
 }
 
@@ -420,6 +449,7 @@ void RestLibraryClient::publishMixManSessionSnapshot(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionSnapshotOperation);
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
 
@@ -456,6 +486,7 @@ void RestLibraryClient::updateMixManSessionIntent(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionIntentOperation);
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
 
@@ -479,7 +510,15 @@ void RestLibraryClient::sendMixManSessionHeartbeat(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionHeartbeatOperation);
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
+}
+
+void RestLibraryClient::invalidateMixManRequests() {
+    ++m_mixManDiagnosticsRequestGeneration;
+    ++m_policyPresetsRequestGeneration;
+    ++m_policyPathRequestGeneration;
+    ++m_sessionRequestGeneration;
 }
 
 QNetworkRequest RestLibraryClient::newRequest(const QString& path, int limit) const {
@@ -661,7 +700,13 @@ void RestLibraryClient::slotHealthFinished() {
     if (!pReply) {
         return;
     }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_mixManDiagnosticsRequestGeneration;
     pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
 
     RestLibraryDiagnostics diagnostics;
     diagnostics.healthKnown = true;
@@ -678,7 +723,13 @@ void RestLibraryClient::slotIndexStatusFinished() {
     if (!pReply) {
         return;
     }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_mixManDiagnosticsRequestGeneration;
     pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
 
     const QByteArray responseBody = pReply->readAll();
     RestLibraryDiagnostics diagnostics;
@@ -708,7 +759,13 @@ void RestLibraryClient::slotPolicyPresetsFinished() {
     if (!pReply) {
         return;
     }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_policyPresetsRequestGeneration;
     pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
 
     const QByteArray responseBody = pReply->readAll();
     const int statusCode = statusCodeFromReply(*pReply);
@@ -766,7 +823,13 @@ void RestLibraryClient::slotSessionCreateFinished() {
     if (!pReply) {
         return;
     }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_sessionRequestGeneration;
     pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
 
     const QByteArray responseBody = pReply->readAll();
     RestLibrarySessionWriteStatus status;
@@ -810,7 +873,13 @@ void RestLibraryClient::slotSessionWriteFinished() {
     if (!pReply) {
         return;
     }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_sessionRequestGeneration;
     pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
 
     const QByteArray responseBody = pReply->readAll();
     RestLibrarySessionWriteStatus status;

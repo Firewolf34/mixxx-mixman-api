@@ -187,7 +187,16 @@ void DlgPrefRestLibrary::slotUpdateCacheControls(bool enabled) {
 }
 
 void DlgPrefRestLibrary::slotUpdateMixManDefaultsControls(bool enabled) {
-    m_pUi->groupBoxApiPaths->setEnabled(!enabled);
+    m_pUi->labelTrackListPath->setEnabled(!enabled);
+    m_pUi->lineEditTrackListPath->setEnabled(!enabled);
+    m_pUi->labelTrackDetailPathTemplate->setEnabled(!enabled);
+    m_pUi->lineEditTrackDetailPathTemplate->setEnabled(!enabled);
+    m_pUi->labelTrackLookupPathTemplate->setEnabled(!enabled);
+    m_pUi->lineEditTrackLookupPathTemplate->setEnabled(!enabled);
+    m_pUi->labelRecommendationPathTemplate->setEnabled(!enabled);
+    m_pUi->lineEditRecommendationPathTemplate->setEnabled(!enabled);
+    m_pUi->labelAudioDownloadPathTemplate->setEnabled(!enabled);
+    m_pUi->lineEditAudioDownloadPathTemplate->setEnabled(!enabled);
 }
 
 void DlgPrefRestLibrary::slotUpdateValidationState() {

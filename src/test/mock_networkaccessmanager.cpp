@@ -146,7 +146,8 @@ MockNetworkReply* MockNetworkAccessManager::ExpectGet(
             createRequest(GetOperation,
                     RequestForUrl(contains, expected_params),
                     nullptr))
-            .WillOnce(Return(reply));
+            .WillOnce(Return(reply))
+            .RetiresOnSaturation();
 
     return reply;
 }
@@ -164,7 +165,8 @@ MockNetworkReply* MockNetworkAccessManager::ExpectPost(
             createRequest(PostOperation,
                     RequestForUrl(contains, expected_params),
                     BodyContains(expected_body)))
-            .WillOnce(Return(reply));
+            .WillOnce(Return(reply))
+            .RetiresOnSaturation();
 
     return reply;
 }
@@ -182,7 +184,8 @@ MockNetworkReply* MockNetworkAccessManager::ExpectPut(
             createRequest(PutOperation,
                     RequestForUrl(contains, expected_params),
                     BodyContains(expected_body)))
-            .WillOnce(Return(reply));
+            .WillOnce(Return(reply))
+            .RetiresOnSaturation();
 
     return reply;
 }

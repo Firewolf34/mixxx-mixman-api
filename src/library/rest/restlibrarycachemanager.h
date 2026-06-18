@@ -12,6 +12,7 @@
 #include "library/rest/restlibrarytrack.h"
 
 class QFile;
+class QFileInfo;
 class QNetworkAccessManager;
 class QNetworkRequest;
 
@@ -69,6 +70,9 @@ class RestLibraryCacheManager final : public QObject {
     void startDownload(const RestLibraryTrack& track);
     void finishDownload(QNetworkReply* pReply);
     ActiveDownload* activeDownloadForReply(QNetworkReply* pReply);
+    void pruneExpiredCachedFiles(const QList<RestLibraryTrack>& tracks);
+    void pruneCacheSize(const QString& preservedFilePath = {});
+    QList<QFileInfo> cachedFileInfos() const;
     QString existingCachedFilePath(const QString& remoteId) const;
     QString finalCachedFilePath(
             const RestLibraryTrack& track,
@@ -82,6 +86,7 @@ class RestLibraryCacheManager final : public QObject {
     void removeActiveDownload(const QString& remoteId);
 
     static QString cacheFileStem(const QString& remoteId);
+    static bool isCacheFileName(const QString& fileName);
     static QString normalizedExtension(QString extension);
     static QString extensionFromContentDisposition(const QByteArray& contentDisposition);
     static QString extensionFromContentType(const QByteArray& contentType);

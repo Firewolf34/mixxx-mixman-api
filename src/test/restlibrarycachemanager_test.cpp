@@ -2,9 +2,11 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QIODevice>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QDateTime>
 
 #include "library/rest/restlibrarycachemanager.h"
 #include "test/mock_networkaccessmanager.h"
@@ -40,6 +42,22 @@ RestLibrarySettings newSettings(const QString& cachePath) {
 
 RestLibraryCacheResult lastResult(const QSignalSpy& spy) {
     return qvariant_cast<RestLibraryCacheResult>(spy.at(spy.count() - 1).at(0));
+}
+
+QString cacheFilePath(const QString& cachePath, const QString& remoteId) {
+    return QDir(cachePath).filePath(
+            RestLibraryCacheManager::cacheFileStemForTesting(remoteId) + QStringLiteral(".mp3"));
+}
+
+void writeCacheFile(
+        const QString& cachePath,
+        const QString& remoteId,
+        qint64 size,
+        const QDateTime& modified = QDateTime::currentDateTimeUtc()) {
+    QFile file(cacheFilePath(cachePath, remoteId));
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_TRUE(file.resize(size));
+    ASSERT_TRUE(file.setFileTime(modified, QFileDevice::FileModificationTime));
 }
 
 } // namespace
@@ -100,6 +118,56 @@ TEST(RestLibraryCacheManagerTest, ReconcilesExistingCachedFile) {
     EXPECT_EQ(result.cachedFilePath, QDir::fromNativeSeparators(filePath));
 }
 
+TEST(RestLibraryCacheManagerTest, ExpiresOldCachedFileAndReportsStale) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString remoteId = QStringLiteral("42");
+    writeCacheFile(
+            tempDir.path(),
+            remoteId,
+            4,
+            QDateTime::currentDateTimeUtc().addDays(-2));
+    RestLibrarySettings settings = newSettings(tempDir.path());
+    settings.cacheMaxAgeDays = 1;
+    RestLibraryCacheManager manager(nullptr);
+    QSignalSpy spy(
+            &manager,
+            &RestLibraryCacheManager::trackCacheStateChanged);
+
+    manager.reconcileTracks({newTrack(remoteId)}, settings);
+
+    ASSERT_EQ(spy.count(), 1);
+    const auto result = qvariant_cast<RestLibraryCacheResult>(spy.takeFirst().at(0));
+    EXPECT_EQ(result.remoteId, remoteId);
+    EXPECT_EQ(result.cacheState, RestLibraryCacheState::Stale);
+    EXPECT_FALSE(QFile::exists(cacheFilePath(tempDir.path(), remoteId)));
+}
+
+TEST(RestLibraryCacheManagerTest, PrunesOldestCachedFilesToFitSizeLimit) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    writeCacheFile(
+            tempDir.path(),
+            QStringLiteral("1"),
+            700 * 1024,
+            QDateTime::currentDateTimeUtc().addSecs(-20));
+    writeCacheFile(
+            tempDir.path(),
+            QStringLiteral("2"),
+            700 * 1024,
+            QDateTime::currentDateTimeUtc().addSecs(-10));
+    RestLibrarySettings settings = newSettings(tempDir.path());
+    settings.cacheMaxMegabytes = 1;
+    RestLibraryCacheManager manager(nullptr);
+
+    manager.reconcileTracks({newTrack(QStringLiteral("2"))}, settings);
+
+    EXPECT_FALSE(QFile::exists(cacheFilePath(tempDir.path(), QStringLiteral("1"))));
+    EXPECT_TRUE(QFile::exists(cacheFilePath(tempDir.path(), QStringLiteral("2"))));
+}
+
 TEST(RestLibraryCacheManagerTest, DownloadsAudioToFinalCacheFile) {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -124,6 +192,87 @@ TEST(RestLibraryCacheManagerTest, DownloadsAudioToFinalCacheFile) {
     EXPECT_EQ(result.cacheState, RestLibraryCacheState::Ready);
     EXPECT_TRUE(QFile::exists(result.cachedFilePath));
     EXPECT_TRUE(result.cachedFilePath.endsWith(QStringLiteral(".mp3")));
+}
+
+TEST(RestLibraryCacheManagerTest, DownloadPrunesOlderFilesButKeepsNewFile) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    writeCacheFile(
+            tempDir.path(),
+            QStringLiteral("1"),
+            700 * 1024,
+            QDateTime::currentDateTimeUtc().addSecs(-20));
+    MockNetworkAccessManager network;
+    RestLibraryCacheManager manager(&network);
+    QSignalSpy spy(
+            &manager,
+            &RestLibraryCacheManager::trackCacheStateChanged);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-audio/2"),
+            {},
+            200,
+            QByteArray(700 * 1024, 'a'));
+    RestLibrarySettings settings = newSettings(tempDir.path());
+    settings.cacheMaxMegabytes = 1;
+
+    manager.cacheTracks({newTrack(QStringLiteral("2"))}, settings);
+    pReply->Done();
+
+    const RestLibraryCacheResult result = lastResult(spy);
+    EXPECT_EQ(result.cacheState, RestLibraryCacheState::Ready);
+    EXPECT_TRUE(QFile::exists(result.cachedFilePath));
+    EXPECT_FALSE(QFile::exists(cacheFilePath(tempDir.path(), QStringLiteral("1"))));
+}
+
+TEST(RestLibraryCacheManagerTest, OversizedDownloadFailsAndIsNotFinalized) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MockNetworkAccessManager network;
+    RestLibraryCacheManager manager(&network);
+    QSignalSpy spy(
+            &manager,
+            &RestLibraryCacheManager::trackCacheStateChanged);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-audio/42"),
+            {},
+            200,
+            QByteArray(2 * 1024 * 1024, 'a'));
+    RestLibrarySettings settings = newSettings(tempDir.path());
+    settings.cacheMaxMegabytes = 1;
+
+    manager.cacheTracks({newTrack(QStringLiteral("42"))}, settings);
+    pReply->Done();
+
+    ASSERT_GE(spy.count(), 3);
+    const RestLibraryCacheResult result = lastResult(spy);
+    EXPECT_EQ(result.cacheState, RestLibraryCacheState::Failed);
+    EXPECT_TRUE(QDir(tempDir.path()).entryList(QStringList{QStringLiteral("*.mp3")}).isEmpty());
+}
+
+TEST(RestLibraryCacheManagerTest, IgnoresTemporaryAndUnrelatedFilesDuringPruning) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    QFile unrelated(QDir(tempDir.path()).filePath(QStringLiteral("notes.txt")));
+    ASSERT_TRUE(unrelated.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_EQ(unrelated.write("keep"), 4);
+    unrelated.close();
+    QFile download(QDir(tempDir.path()).filePath(
+            RestLibraryCacheManager::cacheFileStemForTesting(QStringLiteral("1")) +
+            QStringLiteral(".download")));
+    ASSERT_TRUE(download.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_EQ(download.write("keep"), 4);
+    download.close();
+    RestLibrarySettings settings = newSettings(tempDir.path());
+    settings.cacheMaxMegabytes = 1;
+    RestLibraryCacheManager manager(nullptr);
+
+    manager.reconcileTracks({}, settings);
+
+    EXPECT_TRUE(QFile::exists(unrelated.fileName()));
+    EXPECT_TRUE(QFile::exists(download.fileName()));
 }
 
 TEST(RestLibraryCacheManagerTest, ReportsFailedForHttpError) {

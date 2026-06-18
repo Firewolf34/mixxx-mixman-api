@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <QCheckBox>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
@@ -182,6 +183,41 @@ TEST_F(DlgPrefRestLibraryTest, CacheControlsFollowCacheEnabledCheckbox) {
     EXPECT_TRUE(pCacheDirectory->isEnabled());
     EXPECT_TRUE(pBrowse->isEnabled());
     EXPECT_TRUE(pCacheMaxMegabytes->isEnabled());
+}
+
+TEST_F(DlgPrefRestLibraryTest, MixManDefaultsOnlyDisablePathControls) {
+    DlgPrefRestLibrary page(nullptr, config());
+
+    auto* pUseMixManDefaults = requireChild<QCheckBox>(&page, "checkBoxUseMixManDefaults");
+    auto* pTrackList = requireChild<QLineEdit>(&page, "lineEditTrackListPath");
+    auto* pTrackDetail = requireChild<QLineEdit>(&page, "lineEditTrackDetailPathTemplate");
+    auto* pTrackLookup = requireChild<QLineEdit>(&page, "lineEditTrackLookupPathTemplate");
+    auto* pRecommendations = requireChild<QLineEdit>(&page, "lineEditRecommendationPathTemplate");
+    auto* pAudioDownload = requireChild<QLineEdit>(&page, "lineEditAudioDownloadPathTemplate");
+    auto* pPageSize = requireChild<QSpinBox>(&page, "spinBoxPageSize");
+    auto* pRecommendationLimit = requireChild<QSpinBox>(&page, "spinBoxRecommendationLimit");
+    auto* pPageSizeLabel = requireChild<QLabel>(&page, "labelPageSize");
+    auto* pRecommendationLimitLabel = requireChild<QLabel>(&page, "labelRecommendationLimit");
+
+    pUseMixManDefaults->setChecked(true);
+
+    EXPECT_FALSE(pTrackList->isEnabled());
+    EXPECT_FALSE(pTrackDetail->isEnabled());
+    EXPECT_FALSE(pTrackLookup->isEnabled());
+    EXPECT_FALSE(pRecommendations->isEnabled());
+    EXPECT_FALSE(pAudioDownload->isEnabled());
+    EXPECT_TRUE(pPageSize->isEnabled());
+    EXPECT_TRUE(pRecommendationLimit->isEnabled());
+    EXPECT_TRUE(pPageSizeLabel->isEnabled());
+    EXPECT_TRUE(pRecommendationLimitLabel->isEnabled());
+
+    pUseMixManDefaults->setChecked(false);
+
+    EXPECT_TRUE(pTrackList->isEnabled());
+    EXPECT_TRUE(pTrackDetail->isEnabled());
+    EXPECT_TRUE(pTrackLookup->isEnabled());
+    EXPECT_TRUE(pRecommendations->isEnabled());
+    EXPECT_TRUE(pAudioDownload->isEnabled());
 }
 
 TEST_F(DlgPrefRestLibraryTest, InvalidEnabledSettingsBlockApply) {

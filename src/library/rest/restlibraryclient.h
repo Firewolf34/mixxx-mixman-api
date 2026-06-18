@@ -57,6 +57,7 @@ class RestLibraryClient final : public QObject {
             const QString& sessionId,
             const QString& clientId,
             const QJsonObject& metadata = {});
+    void invalidateMixManRequests();
 
     static QList<RestLibraryTrack> parseTrackListDocumentForTesting(
             const QJsonDocument& document);
@@ -145,6 +146,9 @@ class RestLibraryClient final : public QObject {
     int m_finishedDetailCount = 0;
     int m_trackListRequestGeneration = 0;
     int m_policyPathRequestGeneration = 0;
+    int m_mixManDiagnosticsRequestGeneration = 0;
+    int m_policyPresetsRequestGeneration = 0;
+    int m_sessionRequestGeneration = 0;
     bool m_detailBatchFailed = false;
 };
 

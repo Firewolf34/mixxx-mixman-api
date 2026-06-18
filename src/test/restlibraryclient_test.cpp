@@ -395,7 +395,7 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
     QSignalSpy fetchedSpy(&client, &RestLibraryClient::mixManPolicyPathFetched);
     QSignalSpy failedSpy(&client, &RestLibraryClient::fetchFailed);
     MockNetworkReply* pReply = network.ExpectGet(
-            QStringLiteral("/recommendations/policy-console/path/source-1"),
+            QStringLiteral("/recommendations/policy-console/path/1"),
             {{"candidate_limit", "10"},
                     {"planning_depth", "5"},
                     {"admin_approved_only", "true"},
@@ -403,8 +403,8 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
                     {"target_energy", "0.80"},
                     {"target_color", "#ff6600"},
                     {"session_id", "session-1"},
-                    {"previous_track_id", "previous-7"},
-                    {"recent_track_ids", "previous-7,older-6"}},
+                    {"previous_track_id", "7"},
+                    {"recent_track_ids", "7,6"}},
             200,
             R"json({
               "tracks_by_id": {"8": {"track_id": 8, "title": "Policy Track"}},
@@ -414,10 +414,10 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
 
     client.fetchMixManPolicyPath(
             newMixManSettings(),
-            QStringLiteral("source-1"),
+            QStringLiteral("1"),
             QStringLiteral("session-1"),
-            QStringLiteral("previous-7"),
-            {QStringLiteral("previous-7"), QStringLiteral("older-6")});
+            QStringLiteral("7"),
+            {QStringLiteral("7"), QStringLiteral("6")});
     pReply->Done();
 
     ASSERT_EQ(fetchedSpy.count(), 1);
@@ -426,6 +426,45 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
             fetchedSpy.takeFirst().at(0));
     ASSERT_EQ(path.candidates.size(), 1);
     EXPECT_EQ(path.candidates.at(0).remoteId, QStringLiteral("8"));
+}
+
+TEST(RestLibraryClientTest, RejectsInvalidMixManPolicyPathCurrentTrackId) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::mixManPolicyPathFetched);
+    QSignalSpy failedSpy(&client, &RestLibraryClient::fetchFailed);
+
+    client.fetchMixManPolicyPath(newMixManSettings(), QStringLiteral("source-1"));
+
+    EXPECT_EQ(fetchedSpy.count(), 0);
+    ASSERT_EQ(failedSpy.count(), 1);
+    EXPECT_FALSE(failedSpy.takeFirst().at(0).toString().isEmpty());
+}
+
+TEST(RestLibraryClientTest, OmitsInvalidMixManPolicyPathHistoryIds) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::mixManPolicyPathFetched);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/recommendations/policy-console/path/1"),
+            {{"candidate_limit", "10"},
+                    {"previous_track_id", "7"},
+                    {"recent_track_ids", "7,6"}},
+            200,
+            R"json({
+              "tracks_by_id": {"8": {"track_id": 8, "title": "Policy Track"}},
+              "plan": {"alternatives": [{"track_id": 8, "score": 0.9}]}
+            })json");
+
+    client.fetchMixManPolicyPath(
+            newMixManSettings(),
+            QStringLiteral("1"),
+            {},
+            QStringLiteral("7"),
+            {QStringLiteral("bad"), QStringLiteral("7"), QStringLiteral("6"), QStringLiteral("7")});
+    pReply->Done();
+
+    ASSERT_EQ(fetchedSpy.count(), 1);
 }
 
 TEST(RestLibraryClientTest, IgnoresStaleMixManPolicyPathReplyAfterNewerRequest) {
@@ -461,6 +500,112 @@ TEST(RestLibraryClientTest, IgnoresStaleMixManPolicyPathReplyAfterNewerRequest) 
             fetchedSpy.takeFirst().at(0));
     ASSERT_EQ(path.candidates.size(), 1);
     EXPECT_EQ(path.candidates.at(0).remoteId, QStringLiteral("2"));
+}
+
+TEST(RestLibraryClientTest, IgnoresStaleMixManDiagnosticsReplies) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client, &RestLibraryClient::diagnosticsUpdated);
+    ::testing::InSequence sequence;
+    MockNetworkReply* pOldHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            200,
+            R"json({"ok":true})json");
+    MockNetworkReply* pOldIndexReply = network.ExpectGet(
+            QStringLiteral("/recommendations/index_status"),
+            {},
+            200,
+            R"json({"ready":true,"count":1,"dim":2})json");
+    MockNetworkReply* pCurrentHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            200,
+            R"json({"ok":true})json");
+    MockNetworkReply* pCurrentIndexReply = network.ExpectGet(
+            QStringLiteral("/recommendations/index_status"),
+            {},
+            200,
+            R"json({"ready":true,"count":3,"dim":4})json");
+
+    client.fetchMixManDiagnostics(newMixManSettings());
+    client.fetchMixManDiagnostics(newMixManSettings());
+    pCurrentHealthReply->Done();
+    pCurrentIndexReply->Done();
+    pOldHealthReply->Done();
+    pOldIndexReply->Done();
+
+    EXPECT_EQ(diagnosticsSpy.count(), 2);
+}
+
+TEST(RestLibraryClientTest, IgnoresInvalidatedMixManPolicyPresetReply) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy presetsSpy(&client, &RestLibraryClient::policyPresetsFetched);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/recommendations/policy-presets"),
+            {},
+            200,
+            R"json([{"key":"old","label":"Old"}])json");
+
+    client.fetchMixManPolicyPresets(newMixManSettings());
+    client.invalidateMixManRequests();
+    pReply->Done();
+
+    EXPECT_EQ(presetsSpy.count(), 0);
+}
+
+TEST(RestLibraryClientTest, IgnoresStaleMixManSessionCreateReply) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy createdSpy(&client, &RestLibraryClient::mixManSessionCreated);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pOldReply = network.ExpectPost(
+            QStringLiteral("/sessions"),
+            {},
+            {QStringLiteral("\"client_id\":\"old-client\"")},
+            201,
+            R"json({"session":{"id":"old-session"},"clients":[],"recent_events":[]})json");
+    MockNetworkReply* pCurrentReply = network.ExpectPost(
+            QStringLiteral("/sessions"),
+            {},
+            {QStringLiteral("\"client_id\":\"current-client\"")},
+            201,
+            R"json({"session":{"id":"current-session"},"clients":[],"recent_events":[]})json");
+
+    client.createMixManSession(newMixManSettings(), QStringLiteral("old-client"));
+    client.createMixManSession(newMixManSettings(), QStringLiteral("current-client"));
+    pCurrentReply->Done();
+    pOldReply->Done();
+
+    ASSERT_EQ(createdSpy.count(), 1);
+    const auto session = qvariant_cast<mixxx::library::rest::RestLibrarySession>(
+            createdSpy.takeFirst().at(0));
+    EXPECT_EQ(session.id, QStringLiteral("current-session"));
+    EXPECT_EQ(statusSpy.count(), 1);
+}
+
+TEST(RestLibraryClientTest, IgnoresInvalidatedMixManSessionWriteReply) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pReply = network.ExpectPut(
+            QStringLiteral("/sessions/session-1/snapshot"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\"")},
+            200,
+            R"json({"session_id":"session-1","snapshot":{}})json");
+    mixxx::library::rest::RestLibrarySessionSnapshot snapshot;
+    snapshot.clientId = QStringLiteral("client-1");
+
+    client.publishMixManSessionSnapshot(
+            newMixManSettings(),
+            QStringLiteral("session-1"),
+            snapshot);
+    client.invalidateMixManRequests();
+    pReply->Done();
+
+    EXPECT_EQ(statusSpy.count(), 0);
 }
 
 TEST(RestLibraryClientTest, CreatesMixManSession) {

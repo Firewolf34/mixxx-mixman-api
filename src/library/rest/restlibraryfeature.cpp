@@ -522,6 +522,7 @@ void RestLibraryFeature::ensureMixManSession(const RestLibrarySettings& settings
 }
 
 void RestLibraryFeature::resetMixManSessionState() {
+    m_client.invalidateMixManRequests();
     m_mixManSession = {};
     m_sessionCreateAttempted = false;
     m_sessionStatusText.clear();
