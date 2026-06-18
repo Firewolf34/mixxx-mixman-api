@@ -6,6 +6,7 @@
 #include <QNetworkReply>
 #include <QObject>
 #include <QPointer>
+#include <QStringList>
 #include <QVector>
 
 #include "library/rest/restlibrarymixman.h"
@@ -36,7 +37,9 @@ class RestLibraryClient final : public QObject {
     void fetchMixManPolicyPath(
             const RestLibrarySettings& settings,
             const QString& remoteId,
-            const QString& sessionId = {});
+            const QString& sessionId = {},
+            const QString& previousTrackId = {},
+            const QStringList& recentTrackIds = {});
     void createMixManSession(
             const RestLibrarySettings& settings,
             const QString& clientId,

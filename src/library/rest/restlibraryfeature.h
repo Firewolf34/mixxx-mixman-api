@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
+#include <QStringList>
 #include <QTimer>
 
 #include "library/libraryfeature.h"
@@ -69,6 +70,8 @@ class RestLibraryFeature final : public LibraryFeature {
     void requestRecommendationsForRemoteId(
             const RestLibrarySettings& settings,
             const QString& remoteId);
+    void rememberRemoteId(const QString& remoteId);
+    QStringList recentRemoteIdsForRequest(const QString& remoteId) const;
     void setRecommendationTracks(const QList<RestLibraryTrack>& tracks);
     void ensureMixManSession(const RestLibrarySettings& settings);
     void publishMixManSnapshot(
@@ -101,6 +104,8 @@ class RestLibraryFeature final : public LibraryFeature {
     QHash<QString, RestLibraryCacheState> m_cacheStates;
     QString m_lastRequestedTrackLocation;
     QString m_currentRemoteId;
+    QString m_previousRemoteId;
+    QStringList m_recentRemoteIds;
     QString m_clientId;
     QString m_sessionStatusText;
     QString m_statusText;

@@ -286,7 +286,9 @@ void RestLibraryClient::fetchMixManPolicyPresets(const RestLibrarySettings& sett
 void RestLibraryClient::fetchMixManPolicyPath(
         const RestLibrarySettings& settings,
         const QString& remoteId,
-        const QString& sessionId) {
+        const QString& sessionId,
+        const QString& previousTrackId,
+        const QStringList& recentTrackIds) {
     clearPendingDetails();
     m_settings = settings;
     if (!m_pNetworkAccessManager) {
@@ -332,6 +334,24 @@ void RestLibraryClient::fetchMixManPolicyPath(
     }
     if (!sessionId.trimmed().isEmpty()) {
         path = pathWithQueryItem(path, QStringLiteral("session_id"), sessionId.trimmed());
+    }
+    if (!previousTrackId.trimmed().isEmpty()) {
+        path = pathWithQueryItem(
+                path,
+                QStringLiteral("previous_track_id"),
+                previousTrackId.trimmed());
+    }
+    QStringList normalizedRecentTrackIds;
+    for (const QString& recentTrackId : recentTrackIds) {
+        if (!recentTrackId.trimmed().isEmpty()) {
+            normalizedRecentTrackIds.append(recentTrackId.trimmed());
+        }
+    }
+    if (!normalizedRecentTrackIds.isEmpty()) {
+        path = pathWithQueryItem(
+                path,
+                QStringLiteral("recent_track_ids"),
+                normalizedRecentTrackIds.join(QLatin1Char(',')));
     }
 
     QNetworkReply* pReply = m_pNetworkAccessManager->get(newRequest(path, 0));
@@ -408,6 +428,7 @@ void RestLibraryClient::updateMixManSessionIntent(
     }
 
     QJsonObject payload = baseSessionClientObject(intent.clientId);
+    payload.insert(QStringLiteral("status"), QStringLiteral("active"));
     insertIfNotEmpty(&payload, QStringLiteral("source"), intent.source);
     insertIfNotEmpty(&payload, QStringLiteral("surface"), intent.surface);
     insertIfNotEmpty(&payload, QStringLiteral("policy_preset"), intent.policyPreset);
@@ -1125,6 +1146,21 @@ RestLibrarySession RestLibraryClient::parseSessionDocument(const QJsonDocument& 
     session.id = readString(sessionObject, {"id", "session_id"});
     session.displayName = readString(sessionObject, {"display_name", "name"});
     session.status = readString(sessionObject, {"status"});
+    if (root.value(QStringLiteral("snapshot")).isObject()) {
+        session.snapshot = root.value(QStringLiteral("snapshot")).toObject();
+    }
+    if (root.value(QStringLiteral("intent")).isObject()) {
+        session.intent = root.value(QStringLiteral("intent")).toObject();
+    }
+    if (root.value(QStringLiteral("policy_event")).isObject()) {
+        session.policyEvent = root.value(QStringLiteral("policy_event")).toObject();
+    }
+    if (root.value(QStringLiteral("clients")).isArray()) {
+        session.clients = root.value(QStringLiteral("clients")).toArray();
+    }
+    if (root.value(QStringLiteral("recent_events")).isArray()) {
+        session.recentEvents = root.value(QStringLiteral("recent_events")).toArray();
+    }
     return session;
 }
 

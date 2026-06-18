@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDateTime>
+#include <QJsonArray>
 #include <QList>
 #include <QMap>
 #include <QJsonObject>
@@ -26,6 +27,11 @@ struct RestLibrarySession {
     QString id;
     QString displayName;
     QString status;
+    QJsonObject snapshot;
+    QJsonObject intent;
+    QJsonObject policyEvent;
+    QJsonArray clients;
+    QJsonArray recentEvents;
 };
 
 struct RestLibrarySessionWriteStatus {

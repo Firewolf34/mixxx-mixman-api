@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
@@ -195,9 +196,19 @@ TEST(RestLibraryClientTest, ParsesMixManSessionDetail) {
             "display_name": "Kitchen Party",
             "status": "active"
           },
-          "snapshot": null,
-          "clients": [],
-          "recent_events": []
+          "snapshot": {
+            "current_remote_id": "8",
+            "playback": {"state": "playing"}
+          },
+          "intent": {
+            "status": "active",
+            "policy_preset": "build_energy"
+          },
+          "policy_event": {
+            "id": 77
+          },
+          "clients": [{"client_id": "client-1"}],
+          "recent_events": [{"event_type": "snapshot"}]
         }
     )json");
 
@@ -206,6 +217,22 @@ TEST(RestLibraryClientTest, ParsesMixManSessionDetail) {
     EXPECT_EQ(session.id, QStringLiteral("session-1"));
     EXPECT_EQ(session.displayName, QStringLiteral("Kitchen Party"));
     EXPECT_EQ(session.status, QStringLiteral("active"));
+    EXPECT_EQ(session.snapshot.value(QStringLiteral("current_remote_id")).toString(),
+            QStringLiteral("8"));
+    EXPECT_EQ(session.snapshot.value(QStringLiteral("playback"))
+                    .toObject()
+                    .value(QStringLiteral("state"))
+                    .toString(),
+            QStringLiteral("playing"));
+    EXPECT_EQ(session.intent.value(QStringLiteral("policy_preset")).toString(),
+            QStringLiteral("build_energy"));
+    EXPECT_EQ(session.policyEvent.value(QStringLiteral("id")).toInt(), 77);
+    ASSERT_EQ(session.clients.size(), 1);
+    EXPECT_EQ(session.clients.at(0).toObject().value(QStringLiteral("client_id")).toString(),
+            QStringLiteral("client-1"));
+    ASSERT_EQ(session.recentEvents.size(), 1);
+    EXPECT_EQ(session.recentEvents.at(0).toObject().value(QStringLiteral("event_type")).toString(),
+            QStringLiteral("snapshot"));
 }
 
 TEST(RestLibraryClientTest, FetchesTrackListWithMockNetworkAccessManager) {
@@ -342,7 +369,9 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
                     {"policy_preset", "build_energy"},
                     {"target_energy", "0.80"},
                     {"target_color", "#ff6600"},
-                    {"session_id", "session-1"}},
+                    {"session_id", "session-1"},
+                    {"previous_track_id", "previous-7"},
+                    {"recent_track_ids", "previous-7,older-6"}},
             200,
             R"json({
               "tracks_by_id": {"8": {"track_id": 8, "title": "Policy Track"}},
@@ -353,7 +382,9 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
     client.fetchMixManPolicyPath(
             newMixManSettings(),
             QStringLiteral("source-1"),
-            QStringLiteral("session-1"));
+            QStringLiteral("session-1"),
+            QStringLiteral("previous-7"),
+            {QStringLiteral("previous-7"), QStringLiteral("older-6")});
     pReply->Done();
 
     ASSERT_EQ(fetchedSpy.count(), 1);
@@ -414,7 +445,11 @@ TEST(RestLibraryClientTest, PublishesMixManSessionSnapshot) {
                     QStringLiteral("\"current_track_id\":8"),
                     QStringLiteral("\"playback_state\":\"playing\""),
                     QStringLiteral("\"snapshot\""),
-                    QStringLiteral("\"title\":\"Night Train\"")},
+                    QStringLiteral("\"title\":\"Night Train\""),
+                    QStringLiteral("\"previous_track_id\":\"7\""),
+                    QStringLiteral("\"recent_track_ids\":[\"7\",\"6\"]"),
+                    QStringLiteral("\"policy\""),
+                    QStringLiteral("\"playback\"")},
             200,
             R"json({"session_id":"session-1","snapshot":{}})json");
 
@@ -425,6 +460,16 @@ TEST(RestLibraryClientTest, PublishesMixManSessionSnapshot) {
     snapshot.currentTrackId = QStringLiteral("8");
     snapshot.playbackState = QStringLiteral("playing");
     snapshot.snapshot.insert(QStringLiteral("title"), QStringLiteral("Night Train"));
+    snapshot.snapshot.insert(QStringLiteral("previous_track_id"), QStringLiteral("7"));
+    snapshot.snapshot.insert(
+            QStringLiteral("recent_track_ids"),
+            QJsonArray{QStringLiteral("7"), QStringLiteral("6")});
+    snapshot.snapshot.insert(
+            QStringLiteral("policy"),
+            QJsonObject{{QStringLiteral("policy_preset"), QStringLiteral("build_energy")}});
+    snapshot.snapshot.insert(
+            QStringLiteral("playback"),
+            QJsonObject{{QStringLiteral("state"), QStringLiteral("playing")}});
 
     client.publishMixManSessionSnapshot(
             newMixManSettings(),
@@ -448,6 +493,7 @@ TEST(RestLibraryClientTest, UpdatesMixManSessionIntent) {
             QStringLiteral("/sessions/session-1/intent"),
             {},
             {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"status\":\"active\""),
                     QStringLiteral("\"policy_preset\":\"build_energy\""),
                     QStringLiteral("\"target_energy\":0.8"),
                     QStringLiteral("\"target_color\":\"#ff6600\"")},

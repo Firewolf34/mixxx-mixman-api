@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <QDir>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QMenu>
 #include <QStringList>
@@ -13,6 +14,7 @@
 #include "library/rest/dlgrestlibrary.h"
 #include "library/rest/restlibrarysettings.h"
 #include "library/treeitem.h"
+#include "mixer/playermanager.h"
 #include "mixer/playerinfo.h"
 #include "moc_restlibraryfeature.cpp"
 #include "track/track.h"
@@ -26,6 +28,7 @@ namespace {
 const Logger kLogger("RestLibraryFeature");
 const QString kViewName = QStringLiteral("REST Library");
 constexpr int kSessionHeartbeatIntervalMillis = 30000;
+constexpr qsizetype kMaxRecentRemoteIds = 20;
 
 } // namespace
 
@@ -413,15 +416,46 @@ void RestLibraryFeature::requestRecommendationsForRemoteId(
         return;
     }
 
-    m_currentRemoteId = remoteId;
+    rememberRemoteId(remoteId);
     clearRecommendations();
     if (settings.useMixManDefaults) {
         setStatusText(tr("Loading MixMan policy recommendations."));
-        m_client.fetchMixManPolicyPath(settings, remoteId, m_mixManSession.id);
+        m_client.fetchMixManPolicyPath(
+                settings,
+                remoteId,
+                m_mixManSession.id,
+                m_previousRemoteId,
+                recentRemoteIdsForRequest(remoteId));
         return;
     }
     setStatusText(tr("Loading REST Library recommendations."));
     m_client.fetchRecommendations(settings, remoteId);
+}
+
+void RestLibraryFeature::rememberRemoteId(const QString& remoteId) {
+    const QString normalizedRemoteId = remoteId.trimmed();
+    if (normalizedRemoteId.isEmpty()) {
+        m_currentRemoteId.clear();
+        return;
+    }
+    if (normalizedRemoteId == m_currentRemoteId) {
+        return;
+    }
+    if (!m_currentRemoteId.isEmpty()) {
+        m_previousRemoteId = m_currentRemoteId;
+        m_recentRemoteIds.removeAll(m_currentRemoteId);
+        m_recentRemoteIds.prepend(m_currentRemoteId);
+        while (m_recentRemoteIds.size() > kMaxRecentRemoteIds) {
+            m_recentRemoteIds.removeLast();
+        }
+    }
+    m_currentRemoteId = normalizedRemoteId;
+}
+
+QStringList RestLibraryFeature::recentRemoteIdsForRequest(const QString& remoteId) const {
+    QStringList recentRemoteIds = m_recentRemoteIds;
+    recentRemoteIds.removeAll(remoteId.trimmed());
+    return recentRemoteIds;
 }
 
 void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& tracks) {
@@ -487,7 +521,10 @@ void RestLibraryFeature::publishMixManSnapshot(
     snapshot.source = QStringLiteral("mixxx");
     snapshot.surface = QStringLiteral("rest_library");
     snapshot.currentTrackId = remoteId;
-    snapshot.playbackState = pTrack ? QStringLiteral("playing") : QStringLiteral("idle");
+    const int currentPlayingDeck = PlayerInfo::instance().getCurrentPlayingDeck();
+    snapshot.playbackState = currentPlayingDeck >= 0
+            ? QStringLiteral("playing")
+            : (pTrack ? QStringLiteral("loaded") : QStringLiteral("idle"));
     snapshot.snapshot = mixManTrackSnapshot(pTrack, remoteId);
     snapshot.metadata = mixManSessionMetadata();
     m_client.publishMixManSessionSnapshot(settings, m_mixManSession.id, snapshot);
@@ -528,15 +565,47 @@ QJsonObject RestLibraryFeature::mixManTrackSnapshot(
     if (!remoteId.trimmed().isEmpty()) {
         snapshot.insert(QStringLiteral("current_remote_id"), remoteId.trimmed());
     }
+    if (!m_previousRemoteId.trimmed().isEmpty()) {
+        snapshot.insert(QStringLiteral("previous_track_id"), m_previousRemoteId.trimmed());
+    }
+    const QStringList recentRemoteIds = recentRemoteIdsForRequest(remoteId);
+    if (!recentRemoteIds.isEmpty()) {
+        QJsonArray recentTrackIds;
+        for (const QString& recentRemoteId : recentRemoteIds) {
+            recentTrackIds.append(recentRemoteId);
+        }
+        snapshot.insert(QStringLiteral("recent_track_ids"), recentTrackIds);
+    }
 
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    snapshot.insert(QStringLiteral("policy_preset"), settings.mixManPolicyPreset);
+    QJsonObject policy;
+    policy.insert(QStringLiteral("policy_preset"), settings.mixManPolicyPreset);
+    policy.insert(QStringLiteral("admin_approved_only"), settings.mixManAdminApprovedOnly);
+    policy.insert(QStringLiteral("path_depth"), settings.mixManPathDepth);
+    policy.insert(QStringLiteral("candidate_limit"), settings.recommendationLimit);
     if (settings.mixManTargetEnergyEnabled) {
-        snapshot.insert(QStringLiteral("target_energy"), settings.mixManTargetEnergyNormalized());
+        policy.insert(QStringLiteral("target_energy"), settings.mixManTargetEnergyNormalized());
     }
     if (settings.mixManTargetColorEnabled && !settings.mixManTargetColor.trimmed().isEmpty()) {
-        snapshot.insert(QStringLiteral("target_color"), settings.mixManTargetColor.trimmed());
+        policy.insert(QStringLiteral("target_color"), settings.mixManTargetColor.trimmed());
     }
+    snapshot.insert(QStringLiteral("policy"), policy);
+
+    const int currentPlayingDeck = PlayerInfo::instance().getCurrentPlayingDeck();
+    QJsonObject playback;
+    playback.insert(
+            QStringLiteral("state"),
+            currentPlayingDeck >= 0
+                    ? QStringLiteral("playing")
+                    : (pTrack ? QStringLiteral("loaded") : QStringLiteral("idle")));
+    if (currentPlayingDeck >= 0) {
+        playback.insert(QStringLiteral("deck_index"), currentPlayingDeck);
+        playback.insert(QStringLiteral("deck"), currentPlayingDeck + 1);
+        playback.insert(
+                QStringLiteral("player_group"),
+                PlayerManager::groupForDeck(currentPlayingDeck));
+    }
+    snapshot.insert(QStringLiteral("playback"), playback);
 
     if (!pTrack) {
         return snapshot;
