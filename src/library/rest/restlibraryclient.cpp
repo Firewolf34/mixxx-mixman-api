@@ -27,6 +27,9 @@ const QString kSessionCreateOperation = QStringLiteral("session_create");
 const QString kSessionSnapshotOperation = QStringLiteral("session_snapshot");
 const QString kSessionIntentOperation = QStringLiteral("session_intent");
 const QString kSessionHeartbeatOperation = QStringLiteral("session_heartbeat");
+const QString kSessionPlaybackOperation = QStringLiteral("session_playback");
+const QString kSessionControlClaimOperation = QStringLiteral("session_control_claim");
+const QString kSessionCandidateSelectOperation = QStringLiteral("session_candidate_select");
 const char* kRequestGenerationProperty = "requestGeneration";
 
 bool isSuccessStatus(int statusCode) {
@@ -167,7 +170,7 @@ QJsonObject baseSessionClientObject(const QString& clientId) {
     insertIfNotEmpty(&object, QStringLiteral("client_id"), clientId);
     object.insert(QStringLiteral("source"), QStringLiteral("mixxx"));
     object.insert(QStringLiteral("surface"), QStringLiteral("rest_library"));
-    object.insert(QStringLiteral("role"), QStringLiteral("policy_console"));
+    object.insert(QStringLiteral("role"), QStringLiteral("dj"));
     return object;
 }
 
@@ -364,6 +367,12 @@ void RestLibraryClient::fetchMixManPolicyPath(
                 QStringLiteral("target_color"),
                 m_settings.mixManTargetColor.trimmed());
     }
+    if (m_settings.mixManTargetBpmEnabled) {
+        path = pathWithQueryItem(
+                path,
+                QStringLiteral("target_bpm"),
+                QString::number(m_settings.mixManTargetBpm));
+    }
     if (!sessionId.trimmed().isEmpty()) {
         path = pathWithQueryItem(path, QStringLiteral("session_id"), sessionId.trimmed());
     }
@@ -418,6 +427,59 @@ void RestLibraryClient::createMixManSession(
     pReply->setProperty("operation", kSessionCreateOperation);
     pReply->setProperty(kRequestGenerationProperty, requestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionCreateFinished);
+}
+
+void RestLibraryClient::fetchMixManSession(
+        const RestLibrarySettings& settings,
+        const QString& sessionId) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty()) {
+        emit mixManSessionFetched({});
+        return;
+    }
+
+    QNetworkReply* pReply = m_pNetworkAccessManager->get(
+            newJsonRequest(QStringLiteral("%1/%2")
+                            .arg(config::mixManSessionsPath(), sessionId.trimmed())));
+    pReply->setParent(this);
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionFetchFinished);
+}
+
+void RestLibraryClient::publishMixManSessionPlayback(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const RestLibrarySessionPlayback& playback) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty()) {
+        RestLibrarySessionWriteStatus status;
+        status.operation = kSessionPlaybackOperation;
+        status.errorText = tr("MixMan session playback could not be published.");
+        emit mixManSessionWriteStatusUpdated(status);
+        return;
+    }
+
+    QJsonObject payload = baseSessionClientObject(playback.clientId);
+    insertIfNotEmpty(&payload, QStringLiteral("surface"), playback.surface);
+    insertIfNotEmpty(&payload, QStringLiteral("source"), playback.source);
+    insertIntegerStringIfValid(&payload, QStringLiteral("current_track_id"), playback.currentTrackId);
+    insertIntegerStringIfValid(&payload, QStringLiteral("previous_track_id"), playback.previousTrackId);
+    insertIfNotEmpty(&payload, QStringLiteral("cue"), playback.cue);
+    insertIfNotEmpty(&payload, QStringLiteral("playback_state"), playback.playbackState);
+    if (!playback.currentTrack.isEmpty()) {
+        payload.insert(QStringLiteral("current_track"), playback.currentTrack);
+    }
+    if (!playback.metadata.isEmpty()) {
+        payload.insert(QStringLiteral("metadata"), playback.metadata);
+    }
+
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(
+            newJsonRequest(config::mixManSessionPlaybackPath(sessionId.trimmed())),
+            jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionPlaybackOperation);
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
 
 void RestLibraryClient::publishMixManSessionSnapshot(
@@ -510,6 +572,66 @@ void RestLibraryClient::sendMixManSessionHeartbeat(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionHeartbeatOperation);
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
+}
+
+void RestLibraryClient::claimMixManSessionControl(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const QString& clientId,
+        const QJsonObject& metadata) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty()) {
+        return;
+    }
+
+    QJsonObject payload = baseSessionClientObject(clientId);
+    payload.insert(QStringLiteral("ttl_seconds"), 45);
+    if (!metadata.isEmpty()) {
+        payload.insert(QStringLiteral("metadata"), metadata);
+    }
+
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(
+            newJsonRequest(config::mixManSessionControlClaimPath(sessionId.trimmed())),
+            jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionControlClaimOperation);
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
+}
+
+void RestLibraryClient::selectMixManSessionCandidate(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const QString& trackId,
+        const QString& clientId,
+        const QJsonObject& metadata) {
+    m_settings = settings;
+    const QString normalizedTrackId = positiveIntegerString(trackId);
+    if (!m_pNetworkAccessManager ||
+            !m_settings.isConfigured() ||
+            sessionId.trimmed().isEmpty() ||
+            normalizedTrackId.isEmpty()) {
+        RestLibrarySessionWriteStatus status;
+        status.operation = kSessionCandidateSelectOperation;
+        status.errorText = tr("MixMan candidate selection could not be published.");
+        emit mixManSessionWriteStatusUpdated(status);
+        return;
+    }
+
+    QJsonObject payload = baseSessionClientObject(clientId);
+    if (!metadata.isEmpty()) {
+        payload.insert(QStringLiteral("metadata"), metadata);
+    }
+
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(
+            newJsonRequest(config::mixManSessionCandidateSelectPath(
+                    sessionId.trimmed(),
+                    normalizedTrackId)),
+            jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionCandidateSelectOperation);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
@@ -868,6 +990,41 @@ void RestLibraryClient::slotSessionCreateFinished() {
     emit mixManSessionWriteStatusUpdated(status);
 }
 
+void RestLibraryClient::slotSessionFetchFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit mixManSessionFetched({});
+        return;
+    }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_sessionRequestGeneration;
+    pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
+
+    const QByteArray responseBody = pReply->readAll();
+    const int statusCode = statusCodeFromReply(*pReply);
+    if (!isSuccessStatus(statusCode)) {
+        kLogger.warning()
+                << "MixMan session fetch failed"
+                << pReply->request().url().toString(QUrl::RemoveUserInfo)
+                << "status" << statusCode
+                << "body" << responseSnippet(responseBody);
+        emit mixManSessionFetched({});
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        emit mixManSessionFetched({});
+        return;
+    }
+    emit mixManSessionFetched(parseSessionDocument(document));
+}
+
 void RestLibraryClient::slotSessionWriteFinished() {
     auto* pReply = qobject_cast<QNetworkReply*>(sender());
     if (!pReply) {
@@ -894,6 +1051,17 @@ void RestLibraryClient::slotSessionWriteFinished() {
                 << pReply->request().url().toString(QUrl::RemoveUserInfo)
                 << "status" << status.statusCode
                 << "body" << responseSnippet(responseBody);
+    } else if (status.operation == kSessionPlaybackOperation ||
+            status.operation == kSessionControlClaimOperation ||
+            status.operation == kSessionCandidateSelectOperation) {
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+        if (parseError.error == QJsonParseError::NoError) {
+            const RestLibrarySession session = parseSessionDocument(document);
+            if (!session.id.isEmpty() || !session.authoritative.raw.isEmpty()) {
+                emit mixManSessionFetched(session);
+            }
+        }
     }
     emit mixManSessionWriteStatusUpdated(status);
 }
@@ -980,6 +1148,11 @@ RestLibraryDiagnostics RestLibraryClient::parseIndexStatusDocumentForTesting(
 RestLibrarySession RestLibraryClient::parseSessionDocumentForTesting(
         const QJsonDocument& document) {
     return parseSessionDocument(document);
+}
+
+RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocumentForTesting(
+        const QJsonDocument& document) {
+    return parseAuthoritativeDocument(document);
 }
 
 QList<RestLibraryTrack> RestLibraryClient::parseTrackListDocument(
@@ -1193,6 +1366,130 @@ RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocument(const QJsonDocu
     return result;
 }
 
+RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
+        const QJsonDocument& document) {
+    RestLibraryAuthoritativeState state;
+    if (!document.isObject()) {
+        return state;
+    }
+
+    const QJsonObject root = document.object();
+    const QJsonObject authoritative = root.value(QStringLiteral("authoritative")).isObject()
+            ? root.value(QStringLiteral("authoritative")).toObject()
+            : root;
+    state.raw = authoritative;
+    state.sessionId = readString(authoritative, {"session_id"});
+    state.revision = static_cast<int>(readDouble(authoritative, {"revision"}));
+    state.pressureRevision =
+            static_cast<int>(readDouble(authoritative, {"pressure_revision"}));
+    if (authoritative.value(QStringLiteral("playback")).isObject()) {
+        state.playback = authoritative.value(QStringLiteral("playback")).toObject();
+        state.playbackRevision =
+                static_cast<int>(readDouble(state.playback, {"revision"}));
+    }
+    if (authoritative.value(QStringLiteral("pressure_state")).isObject()) {
+        state.pressureState = authoritative.value(QStringLiteral("pressure_state")).toObject();
+    }
+    if (authoritative.value(QStringLiteral("selected_candidate")).isObject()) {
+        state.selectedCandidate =
+                authoritative.value(QStringLiteral("selected_candidate")).toObject();
+    }
+    if (authoritative.value(QStringLiteral("controller")).isObject()) {
+        state.controller = authoritative.value(QStringLiteral("controller")).toObject();
+    }
+    if (authoritative.value(QStringLiteral("blocked")).isObject()) {
+        state.blocked = authoritative.value(QStringLiteral("blocked")).toObject();
+    }
+    if (authoritative.value(QStringLiteral("queue")).isArray()) {
+        state.queue = authoritative.value(QStringLiteral("queue")).toArray();
+    }
+    if (authoritative.value(QStringLiteral("intents")).isArray()) {
+        state.intents = authoritative.value(QStringLiteral("intents")).toArray();
+    }
+
+    const QJsonObject tracksById = root.value(QStringLiteral("tracks_by_id")).toObject();
+    const QJsonArray candidates =
+            authoritative.value(QStringLiteral("candidates")).toArray();
+    state.policyPath.candidates.reserve(candidates.size());
+    for (const QJsonValue& value : candidates) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject candidate = value.toObject();
+        const QString remoteId = readString(candidate, {"id", "track_id"});
+        QJsonObject trackObject = candidate.value(QStringLiteral("track")).toObject();
+        if (trackObject.isEmpty()) {
+            trackObject = objectForTrackId(tracksById, remoteId);
+        }
+        RestLibraryTrack track = parseTrackObject(trackObject);
+        if (track.remoteId.isEmpty()) {
+            track.remoteId = remoteId;
+        }
+        if (track.title.isEmpty()) {
+            track.title = readString(candidate, {"title", "label"});
+        }
+        if (track.artist.isEmpty()) {
+            track.artist = readString(candidate, {"artist"});
+        }
+        track.score = readDouble(candidate, {"score"});
+        track.quality = track.score > 0.0 ? track.score : readDouble(candidate, {"quality"});
+        track.recommendationPosition =
+                static_cast<int>(readDouble(candidate, {"position"}));
+        track.planned = candidate.value(QStringLiteral("planned")).toBool(false);
+        track.moveType = readString(candidate, {"resolved_move_type", "move_type"});
+        track.transitionRisk = readDouble(candidate, {"transition_risk"});
+        track.transitionFit = readDouble(candidate, {"transition_fit"});
+        track.targetDistance = readDouble(candidate, {"target_distance"});
+        track.targetImprovement = readDouble(candidate, {"target_improvement"});
+        track.region = readString(candidate, {"region_id", "region"});
+        track.reasonCodes = readStringArray(candidate, QStringLiteral("reason_codes"));
+        if (track.color.isEmpty()) {
+            track.color = readString(candidate, {"color", "colour"});
+        }
+        if (track.sourceLabel.isEmpty()) {
+            track.sourceLabel = QStringLiteral("MixMan Authoritative");
+        }
+        if (!track.remoteId.isEmpty()) {
+            state.policyPath.candidates.append(std::move(track));
+        }
+    }
+
+    const QJsonValue pathValue = authoritative.value(QStringLiteral("path"));
+    const QJsonArray steps = pathValue.isObject()
+            ? pathValue.toObject().value(QStringLiteral("steps")).toArray()
+            : pathValue.toArray();
+    state.policyPath.path.reserve(steps.size());
+    for (const QJsonValue& value : steps) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject stepObject = value.toObject();
+        const QString remoteId = readString(stepObject, {"id", "track_id"});
+        QJsonObject trackObject = stepObject.value(QStringLiteral("track")).toObject();
+        if (trackObject.isEmpty()) {
+            trackObject = objectForTrackId(tracksById, remoteId);
+        }
+        const RestLibraryTrack track = parseTrackObject(trackObject);
+        RestLibraryPathStep step;
+        step.remoteId = track.remoteId.isEmpty() ? remoteId : track.remoteId;
+        step.title = track.title.isEmpty() ? readString(stepObject, {"title", "label"})
+                                           : track.title;
+        step.artist = track.artist.isEmpty() ? readString(stepObject, {"artist"})
+                                             : track.artist;
+        step.score = readDouble(stepObject, {"score"});
+        step.position = static_cast<int>(readDouble(stepObject, {"position"}));
+        step.moveType = readString(stepObject, {"resolved_move_type", "move_type"});
+        step.color = track.color.isEmpty() ? readString(stepObject, {"color", "colour"})
+                                           : track.color;
+        step.region = readString(stepObject, {"region_id", "region"});
+        if (!step.remoteId.isEmpty()) {
+            state.policyPath.path.append(std::move(step));
+        }
+    }
+
+    return state;
+}
+
 QList<RestLibraryPolicyPreset> RestLibraryClient::parsePolicyPresetsDocument(
         const QJsonDocument& document) {
     QList<RestLibraryPolicyPreset> result;
@@ -1257,6 +1554,10 @@ RestLibrarySession RestLibraryClient::parseSessionDocument(const QJsonDocument& 
     }
     if (root.value(QStringLiteral("recent_events")).isArray()) {
         session.recentEvents = root.value(QStringLiteral("recent_events")).toArray();
+    }
+    session.authoritative = parseAuthoritativeDocument(document);
+    if (session.authoritative.sessionId.isEmpty()) {
+        session.authoritative.sessionId = session.id;
     }
     return session;
 }

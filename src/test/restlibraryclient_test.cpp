@@ -45,6 +45,8 @@ RestLibrarySettings newMixManSettings() {
     settings.mixManTargetEnergy = 4;
     settings.mixManTargetColorEnabled = true;
     settings.mixManTargetColor = QStringLiteral("#ff6600");
+    settings.mixManTargetBpmEnabled = true;
+    settings.mixManTargetBpm = 132;
     settings.mixManAdminApprovedOnly = true;
     return settings;
 }
@@ -235,6 +237,57 @@ TEST(RestLibraryClientTest, ParsesMixManSessionDetail) {
             QStringLiteral("snapshot"));
 }
 
+TEST(RestLibraryClientTest, ParsesMixManAuthoritativeSessionState) {
+    const QJsonDocument document = QJsonDocument::fromJson(R"json(
+        {
+          "session": {"id": "session-1", "status": "active"},
+          "authoritative": {
+            "session_id": "session-1",
+            "revision": 42,
+            "playback": {"revision": 7, "current_track_id": 8},
+            "pressure_revision": 3,
+            "pressure_state": {"explore": 0.25},
+            "controller": {"client_id": "mixxx-1", "role": "dj"},
+            "blocked": {"sector_change": {"reason": "beacon"}},
+            "intents": [{"intent_type": "beacon"}],
+            "queue": [{"track_id": 10}],
+            "candidates": [
+              {
+                "track_id": 9,
+                "title": "Next Track",
+                "artist": "Ada",
+                "score": 0.91,
+                "reason_codes": ["energy_match"]
+              }
+            ],
+            "path": {
+              "steps": [
+                {"track_id": 9, "title": "Next Track", "position": 1}
+              ]
+            }
+          }
+        }
+    )json");
+
+    const auto session = RestLibraryClient::parseSessionDocumentForTesting(document);
+
+    EXPECT_EQ(session.authoritative.sessionId, QStringLiteral("session-1"));
+    EXPECT_EQ(session.authoritative.revision, 42);
+    EXPECT_EQ(session.authoritative.playbackRevision, 7);
+    EXPECT_EQ(session.authoritative.pressureRevision, 3);
+    EXPECT_EQ(session.authoritative.intents.size(), 1);
+    EXPECT_EQ(session.authoritative.queue.size(), 1);
+    EXPECT_FALSE(session.authoritative.blocked.isEmpty());
+    ASSERT_EQ(session.authoritative.policyPath.candidates.size(), 1);
+    EXPECT_EQ(session.authoritative.policyPath.candidates.at(0).remoteId, QStringLiteral("9"));
+    EXPECT_EQ(session.authoritative.policyPath.candidates.at(0).sourceLabel,
+            QStringLiteral("MixMan Authoritative"));
+    EXPECT_EQ(session.authoritative.policyPath.candidates.at(0).reasonCodes,
+            QStringList({QStringLiteral("energy_match")}));
+    ASSERT_EQ(session.authoritative.policyPath.path.size(), 1);
+    EXPECT_EQ(session.authoritative.policyPath.path.at(0).remoteId, QStringLiteral("9"));
+}
+
 TEST(RestLibraryClientTest, FetchesTrackListWithMockNetworkAccessManager) {
     MockNetworkAccessManager network;
     RestLibraryClient client(&network);
@@ -402,6 +455,7 @@ TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
                     {"policy_preset", "build_energy"},
                     {"target_energy", "0.80"},
                     {"target_color", "#ff6600"},
+                    {"target_bpm", "132"},
                     {"session_id", "session-1"},
                     {"previous_track_id", "7"},
                     {"recent_track_ids", "7,6"}},
@@ -617,7 +671,7 @@ TEST(RestLibraryClientTest, CreatesMixManSession) {
             QStringLiteral("/sessions"),
             {},
             {QStringLiteral("\"client_id\":\"client-1\""),
-                    QStringLiteral("\"role\":\"policy_console\""),
+                    QStringLiteral("\"role\":\"dj\""),
                     QStringLiteral("\"source\":\"mixxx\""),
                     QStringLiteral("\"surface\":\"rest_library\"")},
             201,
@@ -746,7 +800,7 @@ TEST(RestLibraryClientTest, SendsMixManSessionHeartbeat) {
             {},
             {QStringLiteral("\"client_id\":\"client-1\""),
                     QStringLiteral("\"status\":\"active\""),
-                    QStringLiteral("\"role\":\"policy_console\"")},
+                    QStringLiteral("\"role\":\"dj\"")},
             200,
             R"json({"session_id":"session-1","client_id":"client-1"})json");
 
@@ -762,4 +816,136 @@ TEST(RestLibraryClientTest, SendsMixManSessionHeartbeat) {
                     statusSpy.takeFirst().at(0));
     EXPECT_TRUE(status.success);
     EXPECT_EQ(status.operation, QStringLiteral("session_heartbeat"));
+}
+
+TEST(RestLibraryClientTest, FetchesMixManAuthoritativeSession) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::mixManSessionFetched);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/sessions/session-1"),
+            {},
+            200,
+            R"json({
+              "session": {"id": "session-1"},
+              "authoritative": {"session_id": "session-1", "revision": 2}
+            })json");
+
+    client.fetchMixManSession(newMixManSettings(), QStringLiteral("session-1"));
+    pReply->Done();
+
+    ASSERT_EQ(fetchedSpy.count(), 1);
+    const auto session = qvariant_cast<mixxx::library::rest::RestLibrarySession>(
+            fetchedSpy.takeFirst().at(0));
+    EXPECT_EQ(session.id, QStringLiteral("session-1"));
+    EXPECT_EQ(session.authoritative.revision, 2);
+}
+
+TEST(RestLibraryClientTest, PublishesMixManSessionPlayback) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::mixManSessionFetched);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pReply = network.ExpectPost(
+            QStringLiteral("/sessions/session-1/playback"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"role\":\"dj\""),
+                    QStringLiteral("\"current_track_id\":8"),
+                    QStringLiteral("\"previous_track_id\":7"),
+                    QStringLiteral("\"playback_state\":\"playing\""),
+                    QStringLiteral("\"current_track\""),
+                    QStringLiteral("\"title\":\"Night Train\"")},
+            200,
+            R"json({
+              "session": {"id": "session-1"},
+              "authoritative": {
+                "session_id": "session-1",
+                "revision": 3,
+                "candidates": [{"track_id": 9, "title": "Next"}]
+              }
+            })json");
+
+    mixxx::library::rest::RestLibrarySessionPlayback playback;
+    playback.clientId = QStringLiteral("client-1");
+    playback.source = QStringLiteral("mixxx");
+    playback.surface = QStringLiteral("rest_library");
+    playback.currentTrackId = QStringLiteral("8");
+    playback.previousTrackId = QStringLiteral("7");
+    playback.playbackState = QStringLiteral("playing");
+    playback.currentTrack.insert(QStringLiteral("title"), QStringLiteral("Night Train"));
+
+    client.publishMixManSessionPlayback(
+            newMixManSettings(),
+            QStringLiteral("session-1"),
+            playback);
+    pReply->Done();
+
+    ASSERT_EQ(statusSpy.count(), 1);
+    const auto status =
+            qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                    statusSpy.takeFirst().at(0));
+    EXPECT_TRUE(status.success);
+    EXPECT_EQ(status.operation, QStringLiteral("session_playback"));
+    ASSERT_EQ(fetchedSpy.count(), 1);
+    const auto session = qvariant_cast<mixxx::library::rest::RestLibrarySession>(
+            fetchedSpy.takeFirst().at(0));
+    EXPECT_EQ(session.authoritative.revision, 3);
+    ASSERT_EQ(session.authoritative.policyPath.candidates.size(), 1);
+    EXPECT_EQ(session.authoritative.policyPath.candidates.at(0).remoteId, QStringLiteral("9"));
+}
+
+TEST(RestLibraryClientTest, ClaimsMixManSessionControlAsDj) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pReply = network.ExpectPost(
+            QStringLiteral("/sessions/session-1/control/claim"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"role\":\"dj\""),
+                    QStringLiteral("\"ttl_seconds\":45")},
+            200,
+            R"json({"session_id":"session-1"})json");
+
+    client.claimMixManSessionControl(
+            newMixManSettings(),
+            QStringLiteral("session-1"),
+            QStringLiteral("client-1"));
+    pReply->Done();
+
+    ASSERT_EQ(statusSpy.count(), 1);
+    const auto status =
+            qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                    statusSpy.takeFirst().at(0));
+    EXPECT_TRUE(status.success);
+    EXPECT_EQ(status.operation, QStringLiteral("session_control_claim"));
+}
+
+TEST(RestLibraryClientTest, SelectsMixManSessionCandidateAndReportsConflict) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pReply = network.ExpectPost(
+            QStringLiteral("/sessions/session-1/candidates/9/select"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"role\":\"dj\"")},
+            409,
+            R"json({"detail":{"reason":"candidate_not_authoritative"}})json");
+
+    client.selectMixManSessionCandidate(
+            newMixManSettings(),
+            QStringLiteral("session-1"),
+            QStringLiteral("9"),
+            QStringLiteral("client-1"));
+    pReply->Done();
+
+    ASSERT_EQ(statusSpy.count(), 1);
+    const auto status =
+            qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                    statusSpy.takeFirst().at(0));
+    EXPECT_FALSE(status.success);
+    EXPECT_EQ(status.statusCode, 409);
+    EXPECT_EQ(status.operation, QStringLiteral("session_candidate_select"));
 }

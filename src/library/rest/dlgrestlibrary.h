@@ -54,7 +54,9 @@ class DlgRestLibrary final : public QWidget, public LibraryView {
             bool targetEnergyEnabled,
             int targetEnergy,
             bool targetColorEnabled,
-            const QString& targetColor);
+            const QString& targetColor,
+            bool targetBpmEnabled,
+            int targetBpm);
 
   signals:
     void refreshRequested();
@@ -62,6 +64,8 @@ class DlgRestLibrary final : public QWidget, public LibraryView {
     void policyPresetChanged(const QString& presetKey);
     void targetEnergyChanged(bool enabled, int energy);
     void targetColorChanged(bool enabled, const QString& color);
+    void targetBpmChanged(bool enabled, int bpm);
+    void rerollRequested();
     void loadTrack(TrackPointer pTrack);
     void loadTrackToPlayer(TrackPointer pTrack, const QString& group, bool play);
     void trackSelected(TrackPointer pTrack);

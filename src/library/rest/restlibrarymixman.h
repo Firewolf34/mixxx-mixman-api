@@ -23,17 +23,6 @@ struct RestLibraryDiagnostics {
     QString lastError;
 };
 
-struct RestLibrarySession {
-    QString id;
-    QString displayName;
-    QString status;
-    QJsonObject snapshot;
-    QJsonObject intent;
-    QJsonObject policyEvent;
-    QJsonArray clients;
-    QJsonArray recentEvents;
-};
-
 struct RestLibrarySessionWriteStatus {
     QString operation;
     bool success = false;
@@ -49,6 +38,18 @@ struct RestLibrarySessionSnapshot {
     QString cue;
     QString playbackState;
     QJsonObject snapshot;
+    QJsonObject metadata;
+};
+
+struct RestLibrarySessionPlayback {
+    QString clientId;
+    QString surface;
+    QString source;
+    QString currentTrackId;
+    QString previousTrackId;
+    QString cue;
+    QString playbackState;
+    QJsonObject currentTrack;
     QJsonObject metadata;
 };
 
@@ -90,11 +91,40 @@ struct RestLibraryPolicyPath {
     double selectedBranchScore = 0.0;
 };
 
+struct RestLibraryAuthoritativeState {
+    QString sessionId;
+    int revision = 0;
+    int playbackRevision = 0;
+    int pressureRevision = 0;
+    RestLibraryPolicyPath policyPath;
+    QJsonObject playback;
+    QJsonObject pressureState;
+    QJsonObject selectedCandidate;
+    QJsonObject controller;
+    QJsonObject blocked;
+    QJsonArray queue;
+    QJsonArray intents;
+    QJsonObject raw;
+};
+
+struct RestLibrarySession {
+    QString id;
+    QString displayName;
+    QString status;
+    QJsonObject snapshot;
+    QJsonObject intent;
+    QJsonObject policyEvent;
+    QJsonArray clients;
+    QJsonArray recentEvents;
+    RestLibraryAuthoritativeState authoritative;
+};
+
 } // namespace mixxx::library::rest
 
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryDiagnostics)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySession)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySessionWriteStatus)
+Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryAuthoritativeState)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryPolicyPreset)
 Q_DECLARE_METATYPE(QList<mixxx::library::rest::RestLibraryPolicyPreset>)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryPathStep)

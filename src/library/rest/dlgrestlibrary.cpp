@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QColorDialog>
 #include <QSignalBlocker>
+#include <QSpinBox>
 
 #include "controllers/keyboard/keyboardeventfilter.h"
 #include "library/library.h"
@@ -99,6 +100,23 @@ DlgRestLibrary::DlgRestLibrary(
             &QPushButton::clicked,
             this,
             &DlgRestLibrary::slotChooseTargetColor);
+    connect(m_ui->checkBoxTargetBpm,
+            &QCheckBox::toggled,
+            this,
+            [this](bool checked) {
+                m_ui->spinBoxTargetBpm->setEnabled(checked);
+                emit targetBpmChanged(checked, m_ui->spinBoxTargetBpm->value());
+            });
+    connect(m_ui->spinBoxTargetBpm,
+            QOverload<int>::of(&QSpinBox::valueChanged),
+            this,
+            [this](int value) {
+                emit targetBpmChanged(m_ui->checkBoxTargetBpm->isChecked(), value);
+            });
+    connect(m_ui->pushButtonReroll,
+            &QPushButton::clicked,
+            this,
+            &DlgRestLibrary::rerollRequested);
 
     QBoxLayout* box = qobject_cast<QBoxLayout*>(layout());
     VERIFY_OR_DEBUG_ASSERT(box) {
@@ -112,6 +130,7 @@ DlgRestLibrary::DlgRestLibrary(
     m_pTrackTableView->loadTrackModel(m_pTableModel);
     m_ui->horizontalSliderTargetEnergy->setEnabled(false);
     m_ui->pushButtonTargetColor->setEnabled(false);
+    m_ui->spinBoxTargetBpm->setEnabled(false);
     m_targetColor = QStringLiteral("#ffffff");
     updateTargetColorButton();
     setStatusText(tr("Select or play a track to load REST recommendations."));
@@ -187,7 +206,9 @@ void DlgRestLibrary::setMixManTargets(
         bool targetEnergyEnabled,
         int targetEnergy,
         bool targetColorEnabled,
-        const QString& targetColor) {
+        const QString& targetColor,
+        bool targetBpmEnabled,
+        int targetBpm) {
     {
         const QSignalBlocker blocker(m_ui->checkBoxTargetEnergy);
         m_ui->checkBoxTargetEnergy->setChecked(targetEnergyEnabled);
@@ -205,6 +226,16 @@ void DlgRestLibrary::setMixManTargets(
     m_targetColor = targetColor.trimmed().isEmpty() ? QStringLiteral("#ffffff") : targetColor;
     m_ui->pushButtonTargetColor->setEnabled(targetColorEnabled);
     updateTargetColorButton();
+
+    {
+        const QSignalBlocker blocker(m_ui->checkBoxTargetBpm);
+        m_ui->checkBoxTargetBpm->setChecked(targetBpmEnabled);
+    }
+    {
+        const QSignalBlocker blocker(m_ui->spinBoxTargetBpm);
+        m_ui->spinBoxTargetBpm->setValue(targetBpm);
+    }
+    m_ui->spinBoxTargetBpm->setEnabled(targetBpmEnabled);
 }
 
 void DlgRestLibrary::slotChooseTargetColor() {

@@ -94,6 +94,10 @@ RestLibraryFeature::RestLibraryFeature(
             this,
             &RestLibraryFeature::slotMixManSessionCreated);
     connect(&m_client,
+            &RestLibraryClient::mixManSessionFetched,
+            this,
+            &RestLibraryFeature::slotMixManSessionFetched);
+    connect(&m_client,
             &RestLibraryClient::mixManSessionWriteStatusUpdated,
             this,
             &RestLibraryFeature::slotMixManSessionWriteStatusUpdated);
@@ -105,6 +109,10 @@ RestLibraryFeature::RestLibraryFeature(
             &RestLibraryCacheManager::trackCacheStateChanged,
             this,
             &RestLibraryFeature::slotTrackCacheStateChanged);
+    connect(&PlayerInfo::instance(),
+            &PlayerInfo::currentPlayingTrackChanged,
+            this,
+            &RestLibraryFeature::slotCurrentPlayingTrackChanged);
 }
 
 QVariant RestLibraryFeature::title() {
@@ -138,11 +146,11 @@ void RestLibraryFeature::bindLibraryWidget(
     connect(m_pRestLibraryView,
             &DlgRestLibrary::loadTrack,
             this,
-            &RestLibraryFeature::loadTrack);
+            &RestLibraryFeature::slotLoadTrackRequested);
     connect(m_pRestLibraryView,
             &DlgRestLibrary::loadTrackToPlayer,
             this,
-            &RestLibraryFeature::loadTrackToPlayer);
+            &RestLibraryFeature::slotLoadTrackToPlayerRequested);
     connect(m_pRestLibraryView,
             &DlgRestLibrary::trackSelected,
             this,
@@ -159,15 +167,18 @@ void RestLibraryFeature::bindLibraryWidget(
             &DlgRestLibrary::targetColorChanged,
             this,
             &RestLibraryFeature::slotTargetColorChanged);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::targetBpmChanged,
+            this,
+            &RestLibraryFeature::slotTargetBpmChanged);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::rerollRequested,
+            this,
+            &RestLibraryFeature::slotRerollRequested);
     connect(this,
             &RestLibraryFeature::statusTextChanged,
             m_pRestLibraryView,
             &DlgRestLibrary::setStatusText);
-
-    connect(&PlayerInfo::instance(),
-            &PlayerInfo::currentPlayingTrackChanged,
-            this,
-            &RestLibraryFeature::slotCurrentPlayingTrackChanged);
 
     if (!m_statusText.isEmpty()) {
         emit statusTextChanged(m_statusText);
@@ -203,6 +214,15 @@ void RestLibraryFeature::slotFollowCurrentTrackChanged(bool follow) {
 }
 
 void RestLibraryFeature::slotCurrentPlayingTrackChanged(TrackPointer pTrack) {
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    if (settings.isConfigured() && settings.useMixManDefaults) {
+        ensureMixManSession(settings);
+        const QString remoteId = remoteIdForTrack(pTrack);
+        if (!remoteId.isEmpty()) {
+            rememberRemoteId(remoteId);
+            publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("playing"));
+        }
+    }
     if (!m_followCurrentTrack) {
         return;
     }
@@ -255,8 +275,13 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
     const QString remoteId = remoteIdForTrack(pTrack);
     if (!remoteId.isEmpty()) {
         rememberRemoteId(remoteId);
-        publishMixManSnapshot(settings, pTrack, remoteId);
-        requestRecommendationsForRemoteId(settings, remoteId);
+        publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("playing"));
+        if (settings.useMixManDefaults && !m_mixManSession.id.isEmpty()) {
+            setStatusText(tr("Loading MixMan authoritative recommendations."));
+            m_client.fetchMixManSession(settings, m_mixManSession.id);
+        } else {
+            requestRecommendationsForRemoteId(settings, remoteId);
+        }
         return;
     }
 
@@ -281,8 +306,16 @@ void RestLibraryFeature::slotTracksFetched(const QList<RestLibraryTrack>& tracks
 void RestLibraryFeature::slotTrackLookupSucceeded(const QString& remoteId) {
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
     rememberRemoteId(remoteId);
-    publishMixManSnapshot(settings, PlayerInfo::instance().getCurrentPlayingTrack(), remoteId);
-    requestRecommendationsForRemoteId(settings, remoteId);
+    publishMixManPlayback(
+            settings,
+            PlayerInfo::instance().getCurrentPlayingTrack(),
+            remoteId,
+            QStringLiteral("playing"));
+    if (settings.useMixManDefaults && !m_mixManSession.id.isEmpty()) {
+        m_client.fetchMixManSession(settings, m_mixManSession.id);
+    } else {
+        requestRecommendationsForRemoteId(settings, remoteId);
+    }
 }
 
 void RestLibraryFeature::slotTrackLookupMissed(const QString& message) {
@@ -346,17 +379,36 @@ void RestLibraryFeature::slotMixManSessionCreated(const RestLibrarySession& sess
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
     updateMixManIntent(settings);
     if (!m_currentRemoteId.isEmpty()) {
-        publishMixManSnapshot(
+        publishMixManPlayback(
                 settings,
                 PlayerInfo::instance().getCurrentPlayingTrack(),
-                m_currentRemoteId);
-        requestRecommendationsForRemoteId(settings, m_currentRemoteId);
+                m_currentRemoteId,
+                QStringLiteral("playing"));
+        m_client.fetchMixManSession(settings, m_mixManSession.id);
     }
     m_client.sendMixManSessionHeartbeat(
             settings,
             m_mixManSession.id,
             m_clientId,
             mixManSessionMetadata());
+}
+
+void RestLibraryFeature::slotMixManSessionFetched(const RestLibrarySession& session) {
+    if (!session.id.isEmpty()) {
+        m_mixManSession.id = session.id;
+        m_mixManSession.displayName = session.displayName;
+        m_mixManSession.status = session.status;
+    }
+    if (session.authoritative.raw.isEmpty()) {
+        return;
+    }
+
+    m_authoritativeState = session.authoritative;
+    setPathSummary(m_authoritativeState.policyPath);
+    if (!m_authoritativeState.policyPath.candidates.isEmpty()) {
+        setRecommendationTracks(m_authoritativeState.policyPath.candidates);
+    }
+    updateDiagnosticsText();
 }
 
 void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
@@ -370,9 +422,13 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
             m_mixManSession = {};
             m_sessionHeartbeatTimer.stop();
         }
-        m_sessionStatusText = status.errorText.isEmpty()
-                ? tr("Session publishing failed")
-                : status.errorText;
+        if (status.statusCode == 409) {
+            m_sessionStatusText = tr("MixMan control conflict; DJ action was not accepted.");
+        } else {
+            m_sessionStatusText = status.errorText.isEmpty()
+                    ? tr("Session publishing failed")
+                    : status.errorText;
+        }
         updateDiagnosticsText();
         return;
     }
@@ -418,6 +474,46 @@ void RestLibraryFeature::slotTargetColorChanged(bool enabled, const QString& col
     m_pConfig->setValue(config::kMixManTargetColorKey, color.trimmed());
     updateMixManIntent(RestLibrarySettings::fromConfig(m_pConfig));
     slotRefresh();
+}
+
+void RestLibraryFeature::slotTargetBpmChanged(bool enabled, int bpm) {
+    m_pConfig->setValue(config::kMixManTargetBpmEnabledKey, enabled);
+    m_pConfig->setValue(config::kMixManTargetBpmKey, bpm);
+    slotRefresh();
+}
+
+void RestLibraryFeature::slotRerollRequested() {
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    if (m_currentRemoteId.isEmpty()) {
+        slotRefresh();
+        return;
+    }
+    requestRecommendationsForRemoteId(settings, m_currentRemoteId);
+}
+
+void RestLibraryFeature::slotLoadTrackRequested(TrackPointer pTrack) {
+    selectMixManCandidateForTrack(pTrack);
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    const QString remoteId = remoteIdForTrack(pTrack);
+    if (!remoteId.isEmpty()) {
+        rememberRemoteId(remoteId);
+        publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("loaded"));
+    }
+    emit loadTrack(pTrack);
+}
+
+void RestLibraryFeature::slotLoadTrackToPlayerRequested(
+        TrackPointer pTrack,
+        const QString& group,
+        bool play) {
+    selectMixManCandidateForTrack(pTrack);
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    const QString remoteId = remoteIdForTrack(pTrack);
+    if (!remoteId.isEmpty()) {
+        rememberRemoteId(remoteId);
+        publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("loaded"));
+    }
+    emit loadTrackToPlayer(pTrack, group, play);
 }
 
 void RestLibraryFeature::requestRecommendationsForRemoteId(
@@ -524,6 +620,7 @@ void RestLibraryFeature::ensureMixManSession(const RestLibrarySettings& settings
 void RestLibraryFeature::resetMixManSessionState() {
     m_client.invalidateMixManRequests();
     m_mixManSession = {};
+    m_authoritativeState = {};
     m_sessionCreateAttempted = false;
     m_sessionStatusText.clear();
     m_mixManSessionConfigKey.clear();
@@ -557,6 +654,93 @@ void RestLibraryFeature::publishMixManSnapshot(
     snapshot.snapshot = mixManTrackSnapshot(pTrack, remoteId);
     snapshot.metadata = mixManSessionMetadata();
     m_client.publishMixManSessionSnapshot(settings, m_mixManSession.id, snapshot);
+}
+
+void RestLibraryFeature::publishMixManPlayback(
+        const RestLibrarySettings& settings,
+        const TrackPointer& pTrack,
+        const QString& remoteId,
+        const QString& playbackState) {
+    if (!settings.isConfigured() ||
+            !settings.useMixManDefaults ||
+            m_mixManSession.id.isEmpty()) {
+        return;
+    }
+
+    claimMixManControl(settings);
+
+    RestLibrarySessionPlayback playback;
+    playback.clientId = m_clientId;
+    playback.source = QStringLiteral("mixxx");
+    playback.surface = QStringLiteral("rest_library");
+    playback.currentTrackId = remoteId;
+    playback.previousTrackId = m_previousRemoteId;
+    playback.playbackState = playbackState;
+    playback.cue = QStringLiteral("library");
+    playback.metadata = mixManSessionMetadata();
+    playback.metadata.insert(QStringLiteral("schema_version"), QStringLiteral("session_snapshot_v1"));
+
+    bool ok = false;
+    const int trackId = remoteId.toInt(&ok);
+    if (ok && trackId > 0) {
+        playback.currentTrack.insert(QStringLiteral("track_id"), trackId);
+    }
+    if (pTrack) {
+        playback.currentTrack.insert(QStringLiteral("title"), pTrack->getTitle());
+        playback.currentTrack.insert(QStringLiteral("artist"), pTrack->getArtist());
+        playback.currentTrack.insert(QStringLiteral("album"), pTrack->getAlbum());
+        playback.currentTrack.insert(QStringLiteral("genre"), pTrack->getGenre());
+        playback.currentTrack.insert(QStringLiteral("bpm"), pTrack->getBpm());
+        playback.currentTrack.insert(QStringLiteral("key"), pTrack->getKeyText());
+        playback.currentTrack.insert(QStringLiteral("duration"), pTrack->getDuration());
+    }
+
+    const int currentPlayingDeck = PlayerInfo::instance().getCurrentPlayingDeck();
+    if (currentPlayingDeck >= 0) {
+        playback.metadata.insert(QStringLiteral("deck_index"), currentPlayingDeck);
+        playback.metadata.insert(QStringLiteral("deck"), currentPlayingDeck + 1);
+        playback.metadata.insert(
+                QStringLiteral("player_group"),
+                PlayerManager::groupForDeck(currentPlayingDeck));
+    }
+
+    m_client.publishMixManSessionPlayback(settings, m_mixManSession.id, playback);
+    publishMixManSnapshot(settings, pTrack, remoteId);
+}
+
+void RestLibraryFeature::claimMixManControl(const RestLibrarySettings& settings) {
+    if (!settings.isConfigured() ||
+            !settings.useMixManDefaults ||
+            m_mixManSession.id.isEmpty()) {
+        return;
+    }
+    QJsonObject metadata = mixManSessionMetadata();
+    metadata.insert(QStringLiteral("reason"), QStringLiteral("mixxx dj action"));
+    m_client.claimMixManSessionControl(settings, m_mixManSession.id, m_clientId, metadata);
+}
+
+void RestLibraryFeature::selectMixManCandidateForTrack(const TrackPointer& pTrack) {
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    if (!settings.isConfigured() ||
+            !settings.useMixManDefaults ||
+            m_mixManSession.id.isEmpty()) {
+        return;
+    }
+
+    const QString remoteId = remoteIdForTrack(pTrack);
+    if (remoteId.isEmpty()) {
+        return;
+    }
+
+    claimMixManControl(settings);
+    QJsonObject metadata = mixManSessionMetadata();
+    metadata.insert(QStringLiteral("reason"), QStringLiteral("dj selected recommendation"));
+    m_client.selectMixManSessionCandidate(
+            settings,
+            m_mixManSession.id,
+            remoteId,
+            m_clientId,
+            metadata);
 }
 
 void RestLibraryFeature::updateMixManIntent(const RestLibrarySettings& settings) {
@@ -663,7 +847,9 @@ void RestLibraryFeature::refreshMixManControls(const RestLibrarySettings& settin
             settings.mixManTargetEnergyEnabled,
             settings.mixManTargetEnergy,
             settings.mixManTargetColorEnabled,
-            settings.mixManTargetColor);
+            settings.mixManTargetColor,
+            settings.mixManTargetBpmEnabled,
+            settings.mixManTargetBpm);
 }
 
 void RestLibraryFeature::updateDiagnosticsText() {
@@ -684,6 +870,29 @@ void RestLibraryFeature::updateDiagnosticsText() {
     }
     if (!m_sessionStatusText.isEmpty()) {
         parts.append(m_sessionStatusText);
+    }
+    if (m_authoritativeState.revision > 0) {
+        parts.append(tr("Authoritative rev %1").arg(m_authoritativeState.revision));
+    }
+    if (!m_authoritativeState.controller.isEmpty()) {
+        const QString controllerId =
+                m_authoritativeState.controller.value(QStringLiteral("client_id")).toString();
+        const QString controllerRole =
+                m_authoritativeState.controller.value(QStringLiteral("role")).toString();
+        if (!controllerId.isEmpty()) {
+            parts.append(controllerRole.isEmpty()
+                            ? tr("Controller: %1").arg(controllerId)
+                            : tr("Controller: %1 (%2)").arg(controllerId, controllerRole));
+        }
+    }
+    if (!m_authoritativeState.intents.isEmpty()) {
+        parts.append(tr("%n MixMan intent(s)", nullptr, m_authoritativeState.intents.size()));
+    }
+    if (!m_authoritativeState.blocked.isEmpty()) {
+        parts.append(tr("Blocked MixMan intent"));
+    }
+    if (!m_authoritativeState.pressureState.isEmpty()) {
+        parts.append(tr("Pressure active"));
     }
     m_pRestLibraryView->setDiagnosticsText(parts.join(QStringLiteral(" | ")));
 }

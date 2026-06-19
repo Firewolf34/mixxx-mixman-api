@@ -44,6 +44,13 @@ class RestLibraryClient final : public QObject {
             const RestLibrarySettings& settings,
             const QString& clientId,
             const QJsonObject& metadata = {});
+    void fetchMixManSession(
+            const RestLibrarySettings& settings,
+            const QString& sessionId);
+    void publishMixManSessionPlayback(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const RestLibrarySessionPlayback& playback);
     void publishMixManSessionSnapshot(
             const RestLibrarySettings& settings,
             const QString& sessionId,
@@ -55,6 +62,17 @@ class RestLibraryClient final : public QObject {
     void sendMixManSessionHeartbeat(
             const RestLibrarySettings& settings,
             const QString& sessionId,
+            const QString& clientId,
+            const QJsonObject& metadata = {});
+    void claimMixManSessionControl(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const QString& clientId,
+            const QJsonObject& metadata = {});
+    void selectMixManSessionCandidate(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const QString& trackId,
             const QString& clientId,
             const QJsonObject& metadata = {});
     void invalidateMixManRequests();
@@ -71,6 +89,8 @@ class RestLibraryClient final : public QObject {
             const QJsonDocument& document);
     static RestLibrarySession parseSessionDocumentForTesting(
             const QJsonDocument& document);
+    static RestLibraryAuthoritativeState parseAuthoritativeDocumentForTesting(
+            const QJsonDocument& document);
 
   signals:
     void tracksFetched(const QList<mixxx::library::rest::RestLibraryTrack>& tracks);
@@ -86,6 +106,8 @@ class RestLibraryClient final : public QObject {
             const mixxx::library::rest::RestLibraryPolicyPath& policyPath);
     void mixManSessionCreated(
             const mixxx::library::rest::RestLibrarySession& session);
+    void mixManSessionFetched(
+            const mixxx::library::rest::RestLibrarySession& session);
     void mixManSessionWriteStatusUpdated(
             const mixxx::library::rest::RestLibrarySessionWriteStatus& status);
     void fetchFailed(const QString& message);
@@ -98,6 +120,7 @@ class RestLibraryClient final : public QObject {
     void slotPolicyPresetsFinished();
     void slotPolicyPathFinished();
     void slotSessionCreateFinished();
+    void slotSessionFetchFinished();
     void slotSessionWriteFinished();
 
   private:
@@ -130,6 +153,8 @@ class RestLibraryClient final : public QObject {
             const QJsonDocument& document);
     static RestLibraryDiagnostics parseIndexStatusDocument(const QJsonDocument& document);
     static RestLibrarySession parseSessionDocument(const QJsonDocument& document);
+    static RestLibraryAuthoritativeState parseAuthoritativeDocument(
+            const QJsonDocument& document);
     static QString readString(
             const QJsonObject& object,
             std::initializer_list<QString> keys);

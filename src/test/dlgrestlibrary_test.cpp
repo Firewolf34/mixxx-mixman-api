@@ -24,6 +24,8 @@ TEST(DlgRestLibraryTest, ExposesLibraryViewContractAndSignals) {
     EXPECT_TRUE(hasSignal(metaObject, "policyPresetChanged(QString)"));
     EXPECT_TRUE(hasSignal(metaObject, "targetEnergyChanged(bool,int)"));
     EXPECT_TRUE(hasSignal(metaObject, "targetColorChanged(bool,QString)"));
+    EXPECT_TRUE(hasSignal(metaObject, "targetBpmChanged(bool,int)"));
+    EXPECT_TRUE(hasSignal(metaObject, "rerollRequested()"));
     EXPECT_TRUE(hasSignal(metaObject, "loadTrack(TrackPointer)"));
     EXPECT_TRUE(hasSignal(metaObject, "trackSelected(TrackPointer)"));
 }

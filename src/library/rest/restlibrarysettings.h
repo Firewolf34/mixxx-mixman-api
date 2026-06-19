@@ -69,6 +69,12 @@ inline const ConfigKey kMixManTargetColorKey(
 inline const ConfigKey kMixManTargetColorEnabledKey(
         QStringLiteral("[RestLibrary]"),
         QStringLiteral("MixManTargetColorEnabled"));
+inline const ConfigKey kMixManTargetBpmKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManTargetBpm"));
+inline const ConfigKey kMixManTargetBpmEnabledKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManTargetBpmEnabled"));
 inline const ConfigKey kMixManAdminApprovedOnlyKey(
         QStringLiteral("[RestLibrary]"),
         QStringLiteral("MixManAdminApprovedOnly"));
@@ -81,6 +87,7 @@ constexpr bool kDefaultCacheEnabled = true;
 constexpr bool kDefaultUseMixManDefaults = true;
 constexpr bool kDefaultMixManTargetEnergyEnabled = false;
 constexpr bool kDefaultMixManTargetColorEnabled = false;
+constexpr bool kDefaultMixManTargetBpmEnabled = false;
 constexpr bool kDefaultMixManAdminApprovedOnly = true;
 constexpr int kDefaultPageSize = 50;
 constexpr int kMinPageSize = 1;
@@ -94,6 +101,9 @@ constexpr int kMaxMixManPathDepth = 20;
 constexpr int kDefaultMixManTargetEnergy = 3;
 constexpr int kMinMixManTargetEnergy = 0;
 constexpr int kMaxMixManTargetEnergy = 5;
+constexpr int kDefaultMixManTargetBpm = 124;
+constexpr int kMinMixManTargetBpm = 40;
+constexpr int kMaxMixManTargetBpm = 240;
 constexpr int kDefaultCacheMaxMegabytes = 1024;
 constexpr int kMinCacheMaxMegabytes = 64;
 constexpr int kMaxCacheMaxMegabytes = 1024 * 100;
@@ -118,6 +128,9 @@ QString mixManSessionsPath();
 QString mixManSessionSnapshotPath(const QString& sessionId);
 QString mixManSessionIntentPath(const QString& sessionId);
 QString mixManSessionHeartbeatPath(const QString& sessionId);
+QString mixManSessionPlaybackPath(const QString& sessionId);
+QString mixManSessionControlClaimPath(const QString& sessionId);
+QString mixManSessionCandidateSelectPath(const QString& sessionId, const QString& trackId);
 
 } // namespace config
 
@@ -131,6 +144,7 @@ class RestLibrarySettings final {
     bool useMixManDefaults = config::kDefaultUseMixManDefaults;
     bool mixManTargetEnergyEnabled = config::kDefaultMixManTargetEnergyEnabled;
     bool mixManTargetColorEnabled = config::kDefaultMixManTargetColorEnabled;
+    bool mixManTargetBpmEnabled = config::kDefaultMixManTargetBpmEnabled;
     bool mixManAdminApprovedOnly = config::kDefaultMixManAdminApprovedOnly;
     QUrl baseUrl;
     QString bearerToken;
@@ -146,6 +160,7 @@ class RestLibrarySettings final {
     int recommendationLimit = config::kDefaultRecommendationLimit;
     int mixManPathDepth = config::kDefaultMixManPathDepth;
     int mixManTargetEnergy = config::kDefaultMixManTargetEnergy;
+    int mixManTargetBpm = config::kDefaultMixManTargetBpm;
     int cacheMaxMegabytes = config::kDefaultCacheMaxMegabytes;
     int cacheMaxAgeDays = config::kDefaultCacheMaxAgeDays;
     int maxConcurrentDownloads = config::kDefaultMaxConcurrentDownloads;

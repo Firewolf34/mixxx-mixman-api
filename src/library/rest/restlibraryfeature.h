@@ -55,12 +55,18 @@ class RestLibraryFeature final : public LibraryFeature {
             const mixxx::library::rest::RestLibraryPolicyPath& policyPath);
     void slotMixManSessionCreated(
             const mixxx::library::rest::RestLibrarySession& session);
+    void slotMixManSessionFetched(
+            const mixxx::library::rest::RestLibrarySession& session);
     void slotMixManSessionWriteStatusUpdated(
             const mixxx::library::rest::RestLibrarySessionWriteStatus& status);
     void slotSessionHeartbeat();
     void slotPolicyPresetChanged(const QString& presetKey);
     void slotTargetEnergyChanged(bool enabled, int energy);
     void slotTargetColorChanged(bool enabled, const QString& color);
+    void slotTargetBpmChanged(bool enabled, int bpm);
+    void slotRerollRequested();
+    void slotLoadTrackRequested(TrackPointer pTrack);
+    void slotLoadTrackToPlayerRequested(TrackPointer pTrack, const QString& group, bool play);
     void slotFetchFailed(const QString& message);
     void slotTrackCacheStateChanged(
             const mixxx::library::rest::RestLibraryCacheResult& result);
@@ -80,6 +86,13 @@ class RestLibraryFeature final : public LibraryFeature {
             const RestLibrarySettings& settings,
             const TrackPointer& pTrack,
             const QString& remoteId);
+    void publishMixManPlayback(
+            const RestLibrarySettings& settings,
+            const TrackPointer& pTrack,
+            const QString& remoteId,
+            const QString& playbackState);
+    void claimMixManControl(const RestLibrarySettings& settings);
+    void selectMixManCandidateForTrack(const TrackPointer& pTrack);
     void updateMixManIntent(const RestLibrarySettings& settings);
     QJsonObject mixManSessionMetadata() const;
     QJsonObject mixManTrackSnapshot(const TrackPointer& pTrack, const QString& remoteId) const;
@@ -101,6 +114,7 @@ class RestLibraryFeature final : public LibraryFeature {
     RestLibraryCacheManager m_cacheManager;
     RestLibraryDiagnostics m_diagnostics;
     RestLibrarySession m_mixManSession;
+    RestLibraryAuthoritativeState m_authoritativeState;
     QTimer m_sessionHeartbeatTimer;
     QHash<QString, QString> m_cachedPathToRemoteId;
     QHash<QString, RestLibraryCacheState> m_cacheStates;

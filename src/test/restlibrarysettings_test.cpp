@@ -42,6 +42,8 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     config()->setValue(restConfig::kMixManTargetEnergyKey, 4);
     config()->setValue(restConfig::kMixManTargetColorEnabledKey, true);
     config()->setValue(restConfig::kMixManTargetColorKey, QStringLiteral("#ff6600"));
+    config()->setValue(restConfig::kMixManTargetBpmEnabledKey, true);
+    config()->setValue(restConfig::kMixManTargetBpmKey, 132);
     config()->setValue(restConfig::kMixManAdminApprovedOnlyKey, false);
     config()->setValue(restConfig::kCacheMaxMegabytesKey, 2048);
     config()->setValue(restConfig::kCacheMaxAgeDaysKey, 45);
@@ -69,6 +71,8 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     EXPECT_DOUBLE_EQ(settings.mixManTargetEnergyNormalized(), 0.8);
     EXPECT_TRUE(settings.mixManTargetColorEnabled);
     EXPECT_EQ(settings.mixManTargetColor, QStringLiteral("#ff6600"));
+    EXPECT_TRUE(settings.mixManTargetBpmEnabled);
+    EXPECT_EQ(settings.mixManTargetBpm, 132);
     EXPECT_FALSE(settings.mixManAdminApprovedOnly);
     EXPECT_EQ(settings.cacheMaxMegabytes, 2048);
     EXPECT_EQ(settings.cacheMaxAgeDays, 45);
@@ -93,6 +97,8 @@ TEST_F(RestLibrarySettingsTest, UsesDefaultsAndFallbackCacheDirectory) {
     EXPECT_EQ(settings.mixManTargetEnergyEnabled, restConfig::kDefaultMixManTargetEnergyEnabled);
     EXPECT_EQ(settings.mixManTargetEnergy, restConfig::kDefaultMixManTargetEnergy);
     EXPECT_EQ(settings.mixManTargetColorEnabled, restConfig::kDefaultMixManTargetColorEnabled);
+    EXPECT_EQ(settings.mixManTargetBpmEnabled, restConfig::kDefaultMixManTargetBpmEnabled);
+    EXPECT_EQ(settings.mixManTargetBpm, restConfig::kDefaultMixManTargetBpm);
     EXPECT_EQ(settings.mixManAdminApprovedOnly, restConfig::kDefaultMixManAdminApprovedOnly);
     EXPECT_EQ(settings.cacheMaxMegabytes, restConfig::kDefaultCacheMaxMegabytes);
     EXPECT_EQ(settings.cacheMaxAgeDays, restConfig::kDefaultCacheMaxAgeDays);
@@ -110,6 +116,9 @@ TEST_F(RestLibrarySettingsTest, ClampsNumericValues) {
             restConfig::kMixManTargetEnergyKey,
             restConfig::kMinMixManTargetEnergy - 1);
     config()->setValue(
+            restConfig::kMixManTargetBpmKey,
+            restConfig::kMaxMixManTargetBpm + 1);
+    config()->setValue(
             restConfig::kCacheMaxMegabytesKey,
             restConfig::kMaxCacheMaxMegabytes + 1);
     config()->setValue(restConfig::kCacheMaxAgeDaysKey, restConfig::kMinCacheMaxAgeDays - 1);
@@ -123,6 +132,7 @@ TEST_F(RestLibrarySettingsTest, ClampsNumericValues) {
     EXPECT_EQ(settings.recommendationLimit, restConfig::kMinRecommendationLimit);
     EXPECT_EQ(settings.mixManPathDepth, restConfig::kMaxMixManPathDepth);
     EXPECT_EQ(settings.mixManTargetEnergy, restConfig::kMinMixManTargetEnergy);
+    EXPECT_EQ(settings.mixManTargetBpm, restConfig::kMaxMixManTargetBpm);
     EXPECT_EQ(settings.cacheMaxMegabytes, restConfig::kMaxCacheMaxMegabytes);
     EXPECT_EQ(settings.cacheMaxAgeDays, restConfig::kMinCacheMaxAgeDays);
     EXPECT_EQ(settings.maxConcurrentDownloads, restConfig::kMaxMaxConcurrentDownloads);

@@ -107,6 +107,18 @@ QString mixManSessionHeartbeatPath(const QString& sessionId) {
     return QStringLiteral("/sessions/%1/heartbeat").arg(sessionId);
 }
 
+QString mixManSessionPlaybackPath(const QString& sessionId) {
+    return QStringLiteral("/sessions/%1/playback").arg(sessionId);
+}
+
+QString mixManSessionControlClaimPath(const QString& sessionId) {
+    return QStringLiteral("/sessions/%1/control/claim").arg(sessionId);
+}
+
+QString mixManSessionCandidateSelectPath(const QString& sessionId, const QString& trackId) {
+    return QStringLiteral("/sessions/%1/candidates/%2/select").arg(sessionId, trackId);
+}
+
 } // namespace config
 
 RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& pConfig) {
@@ -186,6 +198,15 @@ RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& p
             config::kMixManTargetColorEnabledKey,
             config::kDefaultMixManTargetColorEnabled);
     settings.mixManTargetColor = pConfig->getValueString(config::kMixManTargetColorKey);
+    settings.mixManTargetBpmEnabled = pConfig->getValue<bool>(
+            config::kMixManTargetBpmEnabledKey,
+            config::kDefaultMixManTargetBpmEnabled);
+    settings.mixManTargetBpm = std::clamp(
+            pConfig->getValue<int>(
+                    config::kMixManTargetBpmKey,
+                    config::kDefaultMixManTargetBpm),
+            config::kMinMixManTargetBpm,
+            config::kMaxMixManTargetBpm);
     settings.mixManAdminApprovedOnly = pConfig->getValue<bool>(
             config::kMixManAdminApprovedOnlyKey,
             config::kDefaultMixManAdminApprovedOnly);
