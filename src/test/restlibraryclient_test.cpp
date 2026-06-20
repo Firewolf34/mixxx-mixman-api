@@ -930,7 +930,9 @@ TEST(RestLibraryClientTest, SelectsMixManSessionCandidateAndReportsConflict) {
             QStringLiteral("/sessions/session-1/candidates/9/select"),
             {},
             {QStringLiteral("\"client_id\":\"client-1\""),
-                    QStringLiteral("\"role\":\"dj\"")},
+                    QStringLiteral("\"role\":\"dj\""),
+                    QStringLiteral("\"selection_origin\":\"recommendation_reroll\""),
+                    QStringLiteral("\"allow_external_candidate\":true")},
             409,
             R"json({"detail":{"reason":"candidate_not_authoritative"}})json");
 
@@ -938,7 +940,9 @@ TEST(RestLibraryClientTest, SelectsMixManSessionCandidateAndReportsConflict) {
             newMixManSettings(),
             QStringLiteral("session-1"),
             QStringLiteral("9"),
-            QStringLiteral("client-1"));
+            QStringLiteral("client-1"),
+            QStringLiteral("recommendation_reroll"),
+            true);
     pReply->Done();
 
     ASSERT_EQ(statusSpy.count(), 1);
@@ -948,4 +952,52 @@ TEST(RestLibraryClientTest, SelectsMixManSessionCandidateAndReportsConflict) {
     EXPECT_FALSE(status.success);
     EXPECT_EQ(status.statusCode, 409);
     EXPECT_EQ(status.operation, QStringLiteral("session_candidate_select"));
+}
+
+TEST(RestLibraryClientTest, PublishesMixManPolicyRefreshAction) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::mixManSessionFetched);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pReply = network.ExpectPost(
+            QStringLiteral("/sessions/session-1/actions"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"role\":\"dj\""),
+                    QStringLiteral("\"action_type\":\"policy_refresh\""),
+                    QStringLiteral("\"policy_preset\":\"build_energy\""),
+                    QStringLiteral("\"target_energy\":0.8"),
+                    QStringLiteral("\"target_color\":\"#ff6600\""),
+                    QStringLiteral("\"target_bpm\":132"),
+                    QStringLiteral("\"reroll_constraints\""),
+                    QStringLiteral("\"mode\":\"fuzzy\""),
+                    QStringLiteral("\"limit\":10")},
+            200,
+            R"json({
+              "session": {"id": "session-1"},
+              "authoritative": {
+                "session_id": "session-1",
+                "revision": 4,
+                "candidates": [{"track_id": 12, "title": "Reroll"}]
+              }
+            })json");
+
+    client.publishMixManPolicyRefreshAction(
+            newMixManSettings(),
+            QStringLiteral("session-1"),
+            QStringLiteral("client-1"));
+    pReply->Done();
+
+    ASSERT_EQ(statusSpy.count(), 1);
+    const auto status =
+            qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                    statusSpy.takeFirst().at(0));
+    EXPECT_TRUE(status.success);
+    EXPECT_EQ(status.operation, QStringLiteral("session_policy_refresh"));
+    ASSERT_EQ(fetchedSpy.count(), 1);
+    const auto session = qvariant_cast<mixxx::library::rest::RestLibrarySession>(
+            fetchedSpy.takeFirst().at(0));
+    EXPECT_EQ(session.authoritative.revision, 4);
+    ASSERT_EQ(session.authoritative.policyPath.candidates.size(), 1);
+    EXPECT_EQ(session.authoritative.policyPath.candidates.at(0).remoteId, QStringLiteral("12"));
 }

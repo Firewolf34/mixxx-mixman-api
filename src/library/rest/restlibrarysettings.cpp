@@ -119,6 +119,10 @@ QString mixManSessionCandidateSelectPath(const QString& sessionId, const QString
     return QStringLiteral("/sessions/%1/candidates/%2/select").arg(sessionId, trackId);
 }
 
+QString mixManSessionActionsPath(const QString& sessionId) {
+    return QStringLiteral("/sessions/%1/actions").arg(sessionId);
+}
+
 } // namespace config
 
 RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& pConfig) {

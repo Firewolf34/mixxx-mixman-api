@@ -93,6 +93,8 @@ class RestLibraryFeature final : public LibraryFeature {
             const QString& playbackState);
     void claimMixManControl(const RestLibrarySettings& settings);
     void selectMixManCandidateForTrack(const TrackPointer& pTrack);
+    void requestMixManPolicyRefresh(const RestLibrarySettings& settings);
+    QString selectionOriginForRemoteId(const QString& remoteId) const;
     void updateMixManIntent(const RestLibrarySettings& settings);
     QJsonObject mixManSessionMetadata() const;
     QJsonObject mixManTrackSnapshot(const TrackPointer& pTrack, const QString& remoteId) const;

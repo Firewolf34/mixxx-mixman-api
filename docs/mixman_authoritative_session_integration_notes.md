@@ -4,7 +4,7 @@
 
 Mixxx is the DJ console and final playback authority. MixMan should treat Mixxx playback updates as the source of truth for what is loaded or playing, then rebuild candidates, path, and queue guidance from that state.
 
-Mixxx now identifies session mutations as role `dj`, source `mixxx`, and surface `rest_library`.
+Mixxx identifies session mutations as role `dj`, source `mixxx`, and surface `rest_library`.
 
 ## Implemented Mixxx Behavior
 
@@ -14,32 +14,53 @@ Mixxx now identifies session mutations as role `dj`, source `mixxx`, and surface
 - Mixxx treats `authoritative.queue` as MixMan-owned and does not locally manage it.
 - Mixxx claims control in the background before DJ-sensitive mutations and reports conflicts as diagnostics.
 - Mixxx posts `POST /sessions/{id}/candidates/{track_id}/select` when the DJ loads a candidate or reroll result.
+- Mixxx posts `POST /sessions/{id}/actions` with `action_type: policy_refresh` for policy, energy, color, BPM, and reroll steering.
 
-## Contract Gaps For MixMan
+## Candidate Selection
 
-### Candidate Selection For DJ Rerolls
+For tracks in the current authoritative candidate set, Mixxx sends:
 
-Mixxx can show reroll/search candidates from the recommendation API when the DJ wants alternatives outside the current Sector Jump plan. These tracks may not be present in `authoritative.candidates`.
+```json
+{
+  "selection_origin": "authoritative_candidate"
+}
+```
 
-Current risk: `POST /sessions/{id}/candidates/{track_id}/select` can return `409` if the track is not in the latest authoritative candidate set. Mixxx treats this as non-fatal and will still publish playback once the DJ loads or plays the track.
+For DJ reroll/search tracks that came from MixMan recommendation results but are not in `authoritative.candidates`, Mixxx sends:
 
-Preferred MixMan behavior: provide a sanctioned way for the DJ to express “this MixMan-backed track is my intended next track” even when it came from reroll/search results.
+```json
+{
+  "selection_origin": "recommendation_reroll",
+  "allow_external_candidate": true,
+  "metadata": {
+    "reason": "DJ loaded reroll result"
+  }
+}
+```
 
-### Fuzzy Steering Payloads
+MixMan validates the production track ID, commits it as the intended next track, and rebuilds authoritative queue, path, and candidates from that selected anchor. Controller conflicts may still return `409`; Mixxx reports those as diagnostics/backoff.
 
-The breaking-changes document says `POST /sessions/{id}/actions` supports pressure, crew, policy, and sector controls, but only documents pressure and sector examples.
+## Fuzzy Steering Payloads
 
-Mixxx needs documented authoritative action fields for:
+Mixxx uses `POST /sessions/{id}/actions` for current path future targets:
 
-- Policy preset
-- Target energy
-- Target color
-- Target BPM
-- Fuzzy/reroll candidate refresh constraints
+```json
+{
+  "action_type": "policy_refresh",
+  "policy_preset": "explore",
+  "target_color": "#33AAFF",
+  "target_energy": 0.72,
+  "target_bpm": 128,
+  "reroll_constraints": {
+    "mode": "fuzzy",
+    "limit": 8
+  }
+}
+```
 
-Until those fields are documented, Mixxx uses the existing recommendation path API for reroll/search mode and does not invent undocumented action payloads.
+Mixxx only includes enabled target fields. Policy refresh responses are parsed as authoritative session state and can update candidates, path, queue diagnostics, controller diagnostics, pressure, intents, blocked state, and revision.
 
-### Playback State Semantics
+## Playback State Semantics
 
 Mixxx publishes:
 

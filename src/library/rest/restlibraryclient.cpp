@@ -30,6 +30,7 @@ const QString kSessionHeartbeatOperation = QStringLiteral("session_heartbeat");
 const QString kSessionPlaybackOperation = QStringLiteral("session_playback");
 const QString kSessionControlClaimOperation = QStringLiteral("session_control_claim");
 const QString kSessionCandidateSelectOperation = QStringLiteral("session_candidate_select");
+const QString kSessionPolicyRefreshOperation = QStringLiteral("session_policy_refresh");
 const char* kRequestGenerationProperty = "requestGeneration";
 
 bool isSuccessStatus(int statusCode) {
@@ -606,6 +607,8 @@ void RestLibraryClient::selectMixManSessionCandidate(
         const QString& sessionId,
         const QString& trackId,
         const QString& clientId,
+        const QString& selectionOrigin,
+        bool allowExternalCandidate,
         const QJsonObject& metadata) {
     m_settings = settings;
     const QString normalizedTrackId = positiveIntegerString(trackId);
@@ -621,6 +624,10 @@ void RestLibraryClient::selectMixManSessionCandidate(
     }
 
     QJsonObject payload = baseSessionClientObject(clientId);
+    insertIfNotEmpty(&payload, QStringLiteral("selection_origin"), selectionOrigin);
+    if (allowExternalCandidate) {
+        payload.insert(QStringLiteral("allow_external_candidate"), true);
+    }
     if (!metadata.isEmpty()) {
         payload.insert(QStringLiteral("metadata"), metadata);
     }
@@ -632,6 +639,51 @@ void RestLibraryClient::selectMixManSessionCandidate(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionCandidateSelectOperation);
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
+}
+
+void RestLibraryClient::publishMixManPolicyRefreshAction(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const QString& clientId,
+        const QJsonObject& metadata) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty()) {
+        RestLibrarySessionWriteStatus status;
+        status.operation = kSessionPolicyRefreshOperation;
+        status.errorText = tr("MixMan policy refresh could not be published.");
+        emit mixManSessionWriteStatusUpdated(status);
+        return;
+    }
+
+    QJsonObject payload = baseSessionClientObject(clientId);
+    payload.insert(QStringLiteral("action_type"), QStringLiteral("policy_refresh"));
+    insertIfNotEmpty(&payload, QStringLiteral("policy_preset"), m_settings.mixManPolicyPreset);
+    if (m_settings.mixManTargetColorEnabled &&
+            !m_settings.mixManTargetColor.trimmed().isEmpty()) {
+        payload.insert(QStringLiteral("target_color"), m_settings.mixManTargetColor.trimmed());
+    }
+    if (m_settings.mixManTargetEnergyEnabled) {
+        payload.insert(QStringLiteral("target_energy"), m_settings.mixManTargetEnergyNormalized());
+    }
+    if (m_settings.mixManTargetBpmEnabled) {
+        payload.insert(QStringLiteral("target_bpm"), m_settings.mixManTargetBpm);
+    }
+    payload.insert(
+            QStringLiteral("reroll_constraints"),
+            QJsonObject{
+                    {QStringLiteral("mode"), QStringLiteral("fuzzy")},
+                    {QStringLiteral("limit"), m_settings.recommendationLimit}});
+    if (!metadata.isEmpty()) {
+        payload.insert(QStringLiteral("metadata"), metadata);
+    }
+
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(
+            newJsonRequest(config::mixManSessionActionsPath(sessionId.trimmed())),
+            jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionPolicyRefreshOperation);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
@@ -1053,7 +1105,8 @@ void RestLibraryClient::slotSessionWriteFinished() {
                 << "body" << responseSnippet(responseBody);
     } else if (status.operation == kSessionPlaybackOperation ||
             status.operation == kSessionControlClaimOperation ||
-            status.operation == kSessionCandidateSelectOperation) {
+            status.operation == kSessionCandidateSelectOperation ||
+            status.operation == kSessionPolicyRefreshOperation) {
         QJsonParseError parseError;
         const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
         if (parseError.error == QJsonParseError::NoError) {

@@ -131,6 +131,7 @@ QString mixManSessionHeartbeatPath(const QString& sessionId);
 QString mixManSessionPlaybackPath(const QString& sessionId);
 QString mixManSessionControlClaimPath(const QString& sessionId);
 QString mixManSessionCandidateSelectPath(const QString& sessionId, const QString& trackId);
+QString mixManSessionActionsPath(const QString& sessionId);
 
 } // namespace config
 

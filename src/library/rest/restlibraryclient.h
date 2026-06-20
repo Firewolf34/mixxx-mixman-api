@@ -74,6 +74,13 @@ class RestLibraryClient final : public QObject {
             const QString& sessionId,
             const QString& trackId,
             const QString& clientId,
+            const QString& selectionOrigin = QStringLiteral("authoritative_candidate"),
+            bool allowExternalCandidate = false,
+            const QJsonObject& metadata = {});
+    void publishMixManPolicyRefreshAction(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const QString& clientId,
             const QJsonObject& metadata = {});
     void invalidateMixManRequests();
 

@@ -458,37 +458,34 @@ void RestLibraryFeature::slotPolicyPresetChanged(const QString& presetKey) {
         return;
     }
     m_pConfig->setValue(config::kMixManPolicyPresetKey, presetKey.trimmed());
-    updateMixManIntent(RestLibrarySettings::fromConfig(m_pConfig));
-    slotRefresh();
+    requestMixManPolicyRefresh(RestLibrarySettings::fromConfig(m_pConfig));
 }
 
 void RestLibraryFeature::slotTargetEnergyChanged(bool enabled, int energy) {
     m_pConfig->setValue(config::kMixManTargetEnergyEnabledKey, enabled);
     m_pConfig->setValue(config::kMixManTargetEnergyKey, energy);
-    updateMixManIntent(RestLibrarySettings::fromConfig(m_pConfig));
-    slotRefresh();
+    requestMixManPolicyRefresh(RestLibrarySettings::fromConfig(m_pConfig));
 }
 
 void RestLibraryFeature::slotTargetColorChanged(bool enabled, const QString& color) {
     m_pConfig->setValue(config::kMixManTargetColorEnabledKey, enabled);
     m_pConfig->setValue(config::kMixManTargetColorKey, color.trimmed());
-    updateMixManIntent(RestLibrarySettings::fromConfig(m_pConfig));
-    slotRefresh();
+    requestMixManPolicyRefresh(RestLibrarySettings::fromConfig(m_pConfig));
 }
 
 void RestLibraryFeature::slotTargetBpmChanged(bool enabled, int bpm) {
     m_pConfig->setValue(config::kMixManTargetBpmEnabledKey, enabled);
     m_pConfig->setValue(config::kMixManTargetBpmKey, bpm);
-    slotRefresh();
+    requestMixManPolicyRefresh(RestLibrarySettings::fromConfig(m_pConfig));
 }
 
 void RestLibraryFeature::slotRerollRequested() {
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    if (m_currentRemoteId.isEmpty()) {
+    if (!settings.useMixManDefaults) {
         slotRefresh();
         return;
     }
-    requestRecommendationsForRemoteId(settings, m_currentRemoteId);
+    requestMixManPolicyRefresh(settings);
 }
 
 void RestLibraryFeature::slotLoadTrackRequested(TrackPointer pTrack) {
@@ -733,14 +730,53 @@ void RestLibraryFeature::selectMixManCandidateForTrack(const TrackPointer& pTrac
     }
 
     claimMixManControl(settings);
+    const QString selectionOrigin = selectionOriginForRemoteId(remoteId);
+    const bool allowExternalCandidate =
+            selectionOrigin != QStringLiteral("authoritative_candidate");
     QJsonObject metadata = mixManSessionMetadata();
-    metadata.insert(QStringLiteral("reason"), QStringLiteral("dj selected recommendation"));
+    metadata.insert(
+            QStringLiteral("reason"),
+            allowExternalCandidate ? QStringLiteral("DJ loaded reroll result")
+                                   : QStringLiteral("DJ loaded authoritative candidate"));
     m_client.selectMixManSessionCandidate(
             settings,
             m_mixManSession.id,
             remoteId,
             m_clientId,
+            selectionOrigin,
+            allowExternalCandidate,
             metadata);
+}
+
+void RestLibraryFeature::requestMixManPolicyRefresh(const RestLibrarySettings& settings) {
+    if (!settings.isConfigured() ||
+            !settings.useMixManDefaults ||
+            m_mixManSession.id.isEmpty()) {
+        slotRefresh();
+        return;
+    }
+
+    claimMixManControl(settings);
+    QJsonObject metadata = mixManSessionMetadata();
+    metadata.insert(QStringLiteral("reason"), QStringLiteral("DJ requested policy refresh"));
+    m_client.publishMixManPolicyRefreshAction(
+            settings,
+            m_mixManSession.id,
+            m_clientId,
+            metadata);
+}
+
+QString RestLibraryFeature::selectionOriginForRemoteId(const QString& remoteId) const {
+    const QString normalizedRemoteId = remoteId.trimmed();
+    if (normalizedRemoteId.isEmpty()) {
+        return QStringLiteral("manual");
+    }
+    for (const RestLibraryTrack& candidate : m_authoritativeState.policyPath.candidates) {
+        if (candidate.remoteId == normalizedRemoteId) {
+            return QStringLiteral("authoritative_candidate");
+        }
+    }
+    return QStringLiteral("recommendation_reroll");
 }
 
 void RestLibraryFeature::updateMixManIntent(const RestLibrarySettings& settings) {
