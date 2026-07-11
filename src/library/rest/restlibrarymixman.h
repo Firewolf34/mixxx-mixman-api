@@ -21,6 +21,21 @@ struct RestLibraryDiagnostics {
     int lastStatusCode = 0;
     int lastLatencyMillis = 0;
     QString lastError;
+    QString healthError;
+    QString indexError;
+};
+
+struct RestLibraryRequestDiagnostic {
+    QString stage;
+    QString method;
+    QString url;
+    bool success = false;
+    int statusCode = 0;
+    int networkError = 0;
+    int elapsedMillis = 0;
+    QString summary;
+    QString errorText;
+    QString responseSnippet;
 };
 
 struct RestLibrarySessionWriteStatus {
@@ -61,7 +76,9 @@ struct RestLibrarySessionIntent {
     QString targetColor;
     bool targetColorEnabled = false;
     bool targetEnergyEnabled = false;
+    bool targetBpmEnabled = false;
     double targetEnergy = 0.0;
+    int targetBpm = 0;
     QJsonObject metadata;
 };
 
@@ -122,6 +139,7 @@ struct RestLibrarySession {
 } // namespace mixxx::library::rest
 
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryDiagnostics)
+Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryRequestDiagnostic)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySession)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySessionWriteStatus)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryAuthoritativeState)

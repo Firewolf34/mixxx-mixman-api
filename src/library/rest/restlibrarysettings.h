@@ -132,6 +132,7 @@ QString mixManSessionPlaybackPath(const QString& sessionId);
 QString mixManSessionControlClaimPath(const QString& sessionId);
 QString mixManSessionCandidateSelectPath(const QString& sessionId, const QString& trackId);
 QString mixManSessionActionsPath(const QString& sessionId);
+QUrl urlWithRestPath(const QUrl& baseUrl, const QString& path);
 
 } // namespace config
 

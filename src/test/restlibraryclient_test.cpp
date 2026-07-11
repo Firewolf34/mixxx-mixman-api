@@ -13,6 +13,7 @@
 namespace {
 
 using mixxx::library::rest::RestLibraryClient;
+using mixxx::library::rest::RestLibraryRequestDiagnostic;
 using mixxx::library::rest::RestLibrarySettings;
 
 RestLibrarySettings newSettings() {
@@ -361,6 +362,35 @@ TEST(RestLibraryClientTest, ReportsAuthOrValidationFailure) {
     EXPECT_EQ(failedSpy.count(), 1);
 }
 
+TEST(RestLibraryClientTest, EmitsDiagnosticForAuthFailure) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client, &RestLibraryClient::requestDiagnosticUpdated);
+    QSignalSpy failedSpy(&client, &RestLibraryClient::fetchFailed);
+    RestLibrarySettings settings = newSettings();
+    settings.baseUrl = QUrl(QStringLiteral("http://user:secret@example.invalid"));
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-list"),
+            {{"limit", "5"}},
+            401,
+            R"json({"detail":"bad token"})json");
+
+    client.fetchTracks(settings);
+    pReply->Done();
+
+    ASSERT_EQ(diagnosticsSpy.count(), 1);
+    const auto diagnostic =
+            qvariant_cast<RestLibraryRequestDiagnostic>(diagnosticsSpy.takeFirst().at(0));
+    EXPECT_FALSE(diagnostic.success);
+    EXPECT_EQ(diagnostic.statusCode, 401);
+    EXPECT_EQ(diagnostic.stage, QStringLiteral("Track list"));
+    EXPECT_TRUE(diagnostic.url.contains(QStringLiteral("/configured-list")));
+    EXPECT_FALSE(diagnostic.url.contains(QStringLiteral("secret")));
+    EXPECT_TRUE(diagnostic.responseSnippet.contains(QStringLiteral("bad token")));
+    ASSERT_EQ(failedSpy.count(), 1);
+    EXPECT_TRUE(failedSpy.takeFirst().at(0).toString().contains(QStringLiteral("401")));
+}
+
 TEST(RestLibraryClientTest, ReportsMalformedOrEmptyPayload) {
     MockNetworkAccessManager network;
     RestLibraryClient client(&network);
@@ -377,6 +407,172 @@ TEST(RestLibraryClientTest, ReportsMalformedOrEmptyPayload) {
 
     EXPECT_EQ(fetchedSpy.count(), 0);
     EXPECT_EQ(failedSpy.count(), 1);
+}
+
+TEST(RestLibraryClientTest, TestsMixManConnectionSuccessfully) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client, &RestLibraryClient::requestDiagnosticUpdated);
+    QSignalSpy finishedSpy(&client, &RestLibraryClient::connectionTestFinished);
+    MockNetworkReply* pHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            200,
+            R"json({"ok":true})json");
+    MockNetworkReply* pIndexReply = network.ExpectGet(
+            QStringLiteral("/recommendations/index_status"),
+            {},
+            200,
+            R"json({"ready":true,"count":3,"dim":4})json");
+    MockNetworkReply* pTracksReply = network.ExpectGet(
+            QStringLiteral("/configured-list"),
+            {{"limit", "1"}},
+            200,
+            R"json([{"id":1,"title":"One"}])json");
+    MockNetworkReply* pSessionReply = network.ExpectPost(
+            QStringLiteral("/sessions"),
+            {},
+            {QStringLiteral("\"client_id\":\"mixxx-connection-test\""),
+                    QStringLiteral("\"connection_test\":true")},
+            201,
+            R"json({"session":{"id":"session-1"},"clients":[],"recent_events":[]})json");
+
+    client.testMixManConnection(newMixManSettings(), {}, true);
+    pHealthReply->Done();
+    pIndexReply->Done();
+    pTracksReply->Done();
+    pSessionReply->Done();
+
+    EXPECT_EQ(diagnosticsSpy.count(), 4);
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_TRUE(finishedSpy.takeFirst().at(0).toBool());
+}
+
+TEST(RestLibraryClientTest, TestMixManConnectionReportsInvalidJson) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client, &RestLibraryClient::requestDiagnosticUpdated);
+    QSignalSpy finishedSpy(&client, &RestLibraryClient::connectionTestFinished);
+    MockNetworkReply* pHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            200,
+            R"json({"ok":true})json");
+    MockNetworkReply* pIndexReply = network.ExpectGet(
+            QStringLiteral("/recommendations/index_status"),
+            {},
+            200,
+            QByteArrayLiteral("{"));
+
+    client.testMixManConnection(newMixManSettings());
+    pHealthReply->Done();
+    pIndexReply->Done();
+
+    ASSERT_EQ(diagnosticsSpy.count(), 2);
+    const auto diagnostic =
+            qvariant_cast<RestLibraryRequestDiagnostic>(diagnosticsSpy.takeLast().at(0));
+    EXPECT_FALSE(diagnostic.success);
+    EXPECT_TRUE(diagnostic.summary.contains(QStringLiteral("not valid JSON")));
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_FALSE(finishedSpy.takeFirst().at(0).toBool());
+}
+
+TEST(RestLibraryClientTest, TestMixManConnectionReportsIndexNotReady) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client, &RestLibraryClient::requestDiagnosticUpdated);
+    QSignalSpy finishedSpy(&client, &RestLibraryClient::connectionTestFinished);
+    MockNetworkReply* pHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            200,
+            R"json({"ok":true})json");
+    MockNetworkReply* pIndexReply = network.ExpectGet(
+            QStringLiteral("/recommendations/index_status"),
+            {},
+            200,
+            R"json({"ready":false,"count":3,"dim":4})json");
+
+    client.testMixManConnection(newMixManSettings());
+    pHealthReply->Done();
+    pIndexReply->Done();
+
+    ASSERT_EQ(diagnosticsSpy.count(), 2);
+    const auto diagnostic =
+            qvariant_cast<RestLibraryRequestDiagnostic>(diagnosticsSpy.takeLast().at(0));
+    EXPECT_FALSE(diagnostic.success);
+    EXPECT_TRUE(diagnostic.summary.contains(QStringLiteral("not ready")));
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_FALSE(finishedSpy.takeFirst().at(0).toBool());
+}
+
+TEST(RestLibraryClientTest, TestMixManConnectionReportsNetworkError) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client, &RestLibraryClient::requestDiagnosticUpdated);
+    QSignalSpy finishedSpy(&client, &RestLibraryClient::connectionTestFinished);
+    MockNetworkReply* pHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            0,
+            QByteArray());
+
+    client.testMixManConnection(newMixManSettings());
+    static_cast<QNetworkReply*>(pHealthReply)->abort();
+
+    ASSERT_EQ(diagnosticsSpy.count(), 1);
+    const auto diagnostic =
+            qvariant_cast<RestLibraryRequestDiagnostic>(diagnosticsSpy.takeFirst().at(0));
+    EXPECT_FALSE(diagnostic.success);
+    EXPECT_NE(diagnostic.networkError, static_cast<int>(QNetworkReply::NoError));
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_FALSE(finishedSpy.takeFirst().at(0).toBool());
+}
+
+TEST(RestLibraryClientTest, IgnoresStaleMixManConnectionTestReply) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client, &RestLibraryClient::requestDiagnosticUpdated);
+    QSignalSpy finishedSpy(&client, &RestLibraryClient::connectionTestFinished);
+    ::testing::InSequence sequence;
+    MockNetworkReply* pOldHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            500,
+            R"json({"detail":"old"})json");
+    MockNetworkReply* pCurrentHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            200,
+            R"json({"ok":true})json");
+    MockNetworkReply* pCurrentIndexReply = network.ExpectGet(
+            QStringLiteral("/recommendations/index_status"),
+            {},
+            200,
+            R"json({"ready":true,"count":3,"dim":4})json");
+    MockNetworkReply* pCurrentTracksReply = network.ExpectGet(
+            QStringLiteral("/configured-list"),
+            {{"limit", "1"}},
+            200,
+            R"json([{"id":1,"title":"One"}])json");
+    MockNetworkReply* pCurrentSessionReply = network.ExpectPost(
+            QStringLiteral("/sessions"),
+            {},
+            {QStringLiteral("\"client_id\":\"mixxx-connection-test\"")},
+            201,
+            R"json({"session":{"id":"session-1"},"clients":[],"recent_events":[]})json");
+
+    client.testMixManConnection(newMixManSettings(), {}, true);
+    client.testMixManConnection(newMixManSettings(), {}, true);
+    pCurrentHealthReply->Done();
+    pCurrentIndexReply->Done();
+    pCurrentTracksReply->Done();
+    pCurrentSessionReply->Done();
+    pOldHealthReply->Done();
+
+    EXPECT_EQ(diagnosticsSpy.count(), 4);
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_TRUE(finishedSpy.takeFirst().at(0).toBool());
 }
 
 TEST(RestLibraryClientTest, LooksUpCurrentTrackWithConfiguredTemplate) {
@@ -440,6 +636,90 @@ TEST(RestLibraryClientTest, FetchesRecommendationsWithConfiguredTemplate) {
     ASSERT_EQ(tracks.size(), 2);
     EXPECT_EQ(tracks.at(0).remoteId, QStringLiteral("remote-8"));
     EXPECT_EQ(tracks.at(1).remoteId, QStringLiteral("remote-9"));
+}
+
+TEST(RestLibraryClientTest, RecommendationDetailsUseOriginalSettingsAfterDiagnosticsRequest) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::recommendationsFetched);
+    MockNetworkReply* pListReply = network.ExpectGet(
+            QStringLiteral("/configured-related/source-1"),
+            {{"limit", "5"}},
+            200,
+            R"json(["remote-8"])json");
+    MockNetworkReply* pHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            200,
+            R"json({"ok":true})json");
+    MockNetworkReply* pIndexReply = network.ExpectGet(
+            QStringLiteral("/recommendations/index_status"),
+            {},
+            200,
+            R"json({"ready":true,"count":3,"dim":4})json");
+    MockNetworkReply* pDetailReply = network.ExpectGet(
+            QStringLiteral("/configured-detail/remote-8"),
+            {},
+            200,
+            R"json({"id":"remote-8","title":"Original Detail Path"})json");
+
+    client.fetchRecommendations(newRecommendationSettings(), QStringLiteral("source-1"));
+    client.fetchMixManDiagnostics(newMixManSettings());
+    pHealthReply->Done();
+    pIndexReply->Done();
+    pListReply->Done();
+    pDetailReply->Done();
+
+    ASSERT_EQ(fetchedSpy.count(), 1);
+    const auto tracks = qvariant_cast<QList<mixxx::library::rest::RestLibraryTrack>>(
+            fetchedSpy.takeFirst().at(0));
+    ASSERT_EQ(tracks.size(), 1);
+    EXPECT_EQ(tracks.at(0).title, QStringLiteral("Original Detail Path"));
+}
+
+TEST(RestLibraryClientTest, ConnectionTestUsesOriginalSettingsAfterDiagnosticsRequest) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy finishedSpy(&client, &RestLibraryClient::connectionTestFinished);
+    ::testing::InSequence sequence;
+    MockNetworkReply* pConnectionHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            200,
+            R"json({"ok":true})json");
+    MockNetworkReply* pDiagnosticsHealthReply = network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            200,
+            R"json({"ok":true})json");
+    MockNetworkReply* pDiagnosticsIndexReply = network.ExpectGet(
+            QStringLiteral("/recommendations/index_status"),
+            {},
+            200,
+            R"json({"ready":true,"count":3,"dim":4})json");
+    MockNetworkReply* pConnectionIndexReply = network.ExpectGet(
+            QStringLiteral("/recommendations/index_status"),
+            {},
+            200,
+            R"json({"ready":true,"count":3,"dim":4})json");
+    MockNetworkReply* pTracksReply = network.ExpectGet(
+            QStringLiteral("/connection-list"),
+            {{"limit", "1"}},
+            200,
+            R"json([{"id":1,"title":"One"}])json");
+    RestLibrarySettings connectionSettings = newSettings();
+    connectionSettings.trackListPath = QStringLiteral("/connection-list");
+
+    client.testMixManConnection(connectionSettings);
+    client.fetchMixManDiagnostics(newMixManSettings());
+    pConnectionHealthReply->Done();
+    pDiagnosticsHealthReply->Done();
+    pDiagnosticsIndexReply->Done();
+    pConnectionIndexReply->Done();
+    pTracksReply->Done();
+
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_TRUE(finishedSpy.takeFirst().at(0).toBool());
 }
 
 TEST(RestLibraryClientTest, FetchesMixManPolicyPathWithConfiguredTargets) {
@@ -763,7 +1043,8 @@ TEST(RestLibraryClientTest, UpdatesMixManSessionIntent) {
                     QStringLiteral("\"status\":\"active\""),
                     QStringLiteral("\"policy_preset\":\"build_energy\""),
                     QStringLiteral("\"target_energy\":0.8"),
-                    QStringLiteral("\"target_color\":\"#ff6600\"")},
+                    QStringLiteral("\"target_color\":\"#ff6600\""),
+                    QStringLiteral("\"target_bpm\":132")},
             200,
             R"json({"session_id":"session-1","revision":1})json");
 
@@ -776,6 +1057,8 @@ TEST(RestLibraryClientTest, UpdatesMixManSessionIntent) {
     intent.targetEnergy = 0.8;
     intent.targetColorEnabled = true;
     intent.targetColor = QStringLiteral("#ff6600");
+    intent.targetBpmEnabled = true;
+    intent.targetBpm = 132;
 
     client.updateMixManSessionIntent(
             newMixManSettings(),

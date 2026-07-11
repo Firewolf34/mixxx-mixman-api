@@ -199,6 +199,12 @@ void DlgRestLibrary::setPolicyPresets(
     const int presetIndex = m_ui->comboBoxPolicyPreset->findData(currentPreset);
     if (presetIndex >= 0) {
         m_ui->comboBoxPolicyPreset->setCurrentIndex(presetIndex);
+    } else if (!currentPreset.trimmed().isEmpty()) {
+        m_ui->comboBoxPolicyPreset->insertItem(
+                0,
+                tr("%1 (configured)").arg(currentPreset.trimmed()),
+                currentPreset.trimmed());
+        m_ui->comboBoxPolicyPreset->setCurrentIndex(0);
     }
 }
 

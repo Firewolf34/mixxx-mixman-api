@@ -9,6 +9,7 @@
 #include <QString>
 
 #include "library/rest/restlibrarysettings.h"
+#include "library/rest/restlibrarymixman.h"
 #include "library/rest/restlibrarytrack.h"
 
 class QFile;
@@ -51,6 +52,8 @@ class RestLibraryCacheManager final : public QObject {
   signals:
     void trackCacheStateChanged(
             const mixxx::library::rest::RestLibraryCacheResult& result);
+    void requestDiagnosticUpdated(
+            const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic);
 
   private slots:
     void slotReadyRead();
@@ -59,6 +62,7 @@ class RestLibraryCacheManager final : public QObject {
   private:
     struct ActiveDownload {
         RestLibraryTrack track;
+        RestLibrarySettings settings;
         QPointer<QNetworkReply> reply;
         QFile* pFile = nullptr;
         QString tempFilePath;
@@ -75,6 +79,7 @@ class RestLibraryCacheManager final : public QObject {
     QList<QFileInfo> cachedFileInfos() const;
     QString existingCachedFilePath(const QString& remoteId) const;
     QString finalCachedFilePath(
+            const RestLibrarySettings& settings,
             const RestLibraryTrack& track,
             const QNetworkReply& reply) const;
     void emitState(

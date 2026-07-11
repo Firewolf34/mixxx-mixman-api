@@ -16,6 +16,7 @@ namespace {
 using mixxx::library::rest::RestLibraryCacheManager;
 using mixxx::library::rest::RestLibraryCacheResult;
 using mixxx::library::rest::RestLibraryCacheState;
+using mixxx::library::rest::RestLibraryRequestDiagnostic;
 using mixxx::library::rest::RestLibrarySettings;
 using mixxx::library::rest::RestLibraryTrack;
 
@@ -194,6 +195,24 @@ TEST(RestLibraryCacheManagerTest, DownloadsAudioToFinalCacheFile) {
     EXPECT_TRUE(result.cachedFilePath.endsWith(QStringLiteral(".mp3")));
 }
 
+TEST(RestLibraryCacheManagerTest, DownloadPreservesBaseUrlPath) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MockNetworkAccessManager network;
+    RestLibraryCacheManager manager(&network);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/api/configured-audio/42"),
+            {},
+            200,
+            QByteArrayLiteral("audio bytes"));
+    RestLibrarySettings settings = newSettings(tempDir.path());
+    settings.baseUrl = QUrl(QStringLiteral("http://example.invalid/api"));
+
+    manager.cacheTracks({newTrack(QStringLiteral("42"))}, settings);
+    pReply->Done();
+}
+
 TEST(RestLibraryCacheManagerTest, DownloadPrunesOlderFilesButKeepsNewFile) {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -284,11 +303,14 @@ TEST(RestLibraryCacheManagerTest, ReportsFailedForHttpError) {
     QSignalSpy spy(
             &manager,
             &RestLibraryCacheManager::trackCacheStateChanged);
+    QSignalSpy diagnosticSpy(
+            &manager,
+            &RestLibraryCacheManager::requestDiagnosticUpdated);
     MockNetworkReply* pReply = network.ExpectGet(
             QStringLiteral("/configured-audio/42"),
             {},
             401,
-            QByteArrayLiteral("nope"));
+            R"json({"detail":"bad token"})json");
 
     manager.cacheTracks({newTrack(QStringLiteral("42"))}, newSettings(tempDir.path()));
     pReply->Done();
@@ -297,6 +319,12 @@ TEST(RestLibraryCacheManagerTest, ReportsFailedForHttpError) {
     const RestLibraryCacheResult result = lastResult(spy);
     EXPECT_EQ(result.cacheState, RestLibraryCacheState::Failed);
     EXPECT_FALSE(result.errorText.isEmpty());
+    ASSERT_EQ(diagnosticSpy.count(), 1);
+    const auto diagnostic =
+            qvariant_cast<RestLibraryRequestDiagnostic>(diagnosticSpy.takeFirst().at(0));
+    EXPECT_EQ(diagnostic.statusCode, 401);
+    EXPECT_FALSE(diagnostic.success);
+    EXPECT_EQ(diagnostic.errorText, QStringLiteral("bad token"));
 }
 
 TEST(RestLibraryCacheManagerTest, ReportsFailedForEmptyBody) {

@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QDateTime>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QUrlQuery>
@@ -32,6 +33,9 @@ const QString kSessionControlClaimOperation = QStringLiteral("session_control_cl
 const QString kSessionCandidateSelectOperation = QStringLiteral("session_candidate_select");
 const QString kSessionPolicyRefreshOperation = QStringLiteral("session_policy_refresh");
 const char* kRequestGenerationProperty = "requestGeneration";
+const char* kRequestStartedAtProperty = "requestStartedAt";
+const char* kRequestStageProperty = "requestStage";
+const char* kAuthoritativeGenerationProperty = "authoritativeGeneration";
 
 bool isSuccessStatus(int statusCode) {
     return statusCode >= 200 && statusCode < 300;
@@ -62,15 +66,6 @@ QString valueToString(const QJsonValue& value) {
         return QString::number(number);
     }
     return {};
-}
-
-QUrl urlWithPath(const QUrl& baseUrl, const QString& path) {
-    QUrl url = baseUrl;
-    const QUrl relativeUrl(path);
-    const QString relativePath = relativeUrl.path().isEmpty() ? path : relativeUrl.path();
-    url.setPath(relativePath.startsWith('/') ? relativePath : QStringLiteral("/") + relativePath);
-    url.setQuery(relativeUrl.query());
-    return url;
 }
 
 QString percentEncode(const QString& value) {
@@ -148,6 +143,55 @@ QString responseSnippet(const QByteArray& body) {
     return snippet;
 }
 
+QString valueToDiagnosticString(const QJsonValue& value) {
+    if (value.isString()) {
+        return value.toString();
+    }
+    if (value.isDouble() || value.isBool()) {
+        if (value.isBool()) {
+            return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+        }
+        return valueToString(value);
+    }
+    if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        const QStringList keys{
+                QStringLiteral("message"),
+                QStringLiteral("reason"),
+                QStringLiteral("code"),
+                QStringLiteral("error")};
+        QStringList parts;
+        for (const QString& key : keys) {
+            const QString text = valueToDiagnosticString(object.value(key));
+            if (!text.isEmpty()) {
+                parts.append(text);
+            }
+        }
+        return parts.join(QStringLiteral(": "));
+    }
+    return {};
+}
+
+QString errorTextFromResponse(const QByteArray& body) {
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        return {};
+    }
+    const QJsonObject object = document.object();
+    const QStringList keys{
+            QStringLiteral("detail"),
+            QStringLiteral("error"),
+            QStringLiteral("message")};
+    for (const QString& key : keys) {
+        const QString text = valueToDiagnosticString(object.value(key));
+        if (!text.isEmpty()) {
+            return text;
+        }
+    }
+    return {};
+}
+
 QByteArray jsonBody(const QJsonObject& object) {
     return QJsonDocument(object).toJson(QJsonDocument::Compact);
 }
@@ -185,6 +229,8 @@ RestLibraryClient::RestLibraryClient(
     qRegisterMetaType<RestLibraryTrack>("mixxx::library::rest::RestLibraryTrack");
     qRegisterMetaType<QList<RestLibraryTrack>>("QList<mixxx::library::rest::RestLibraryTrack>");
     qRegisterMetaType<RestLibraryDiagnostics>("mixxx::library::rest::RestLibraryDiagnostics");
+    qRegisterMetaType<RestLibraryRequestDiagnostic>(
+            "mixxx::library::rest::RestLibraryRequestDiagnostic");
     qRegisterMetaType<RestLibrarySession>("mixxx::library::rest::RestLibrarySession");
     qRegisterMetaType<RestLibrarySessionWriteStatus>(
             "mixxx::library::rest::RestLibrarySessionWriteStatus");
@@ -197,10 +243,6 @@ void RestLibraryClient::fetchTracks(const RestLibrarySettings& settings) {
     const int requestGeneration = ++m_trackListRequestGeneration;
     clearPendingDetails();
     m_settings = settings;
-    m_requestPurpose = RequestPurpose::Tracks;
-    m_pendingTracks.clear();
-    m_finishedDetailCount = 0;
-    m_detailBatchFailed = false;
 
     if (!m_pNetworkAccessManager) {
         emit fetchFailed(tr("Network access is not available."));
@@ -211,10 +253,25 @@ void RestLibraryClient::fetchTracks(const RestLibrarySettings& settings) {
         return;
     }
 
+    m_trackBatches.insert(requestGeneration, TrackRequestBatch{
+            m_settings,
+            RequestPurpose::Tracks,
+            {},
+            {},
+            0,
+            false});
     QNetworkReply* pReply = m_pNetworkAccessManager->get(
-            newRequest(m_settings.trackListPath, m_settings.pageSize));
+            newRequest(m_settings, m_settings.trackListPath, m_settings.pageSize));
     pReply->setParent(this);
     pReply->setProperty(kRequestGenerationProperty, requestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    m_requestContexts.insert(pReply, RequestContext{
+            m_settings,
+            RequestPurpose::Tracks,
+            requestGeneration,
+            tr("Track list"),
+            QStringLiteral("GET"),
+            {}});
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotTrackListFinished);
 }
 
@@ -224,10 +281,6 @@ void RestLibraryClient::lookupTrack(
     const int requestGeneration = ++m_trackListRequestGeneration;
     clearPendingDetails();
     m_settings = settings;
-    m_requestPurpose = RequestPurpose::TrackLookup;
-    m_pendingTracks.clear();
-    m_finishedDetailCount = 0;
-    m_detailBatchFailed = false;
 
     if (!m_pNetworkAccessManager) {
         emit trackLookupMissed(tr("Network access is not available."));
@@ -238,10 +291,28 @@ void RestLibraryClient::lookupTrack(
         return;
     }
 
+    m_trackBatches.insert(requestGeneration, TrackRequestBatch{
+            m_settings,
+            RequestPurpose::TrackLookup,
+            {},
+            {},
+            0,
+            false});
     QNetworkReply* pReply = m_pNetworkAccessManager->get(
-            newRequest(pathForTrackLookup(m_settings.trackLookupPathTemplate, pTrack), 1));
+            newRequest(
+                    m_settings,
+                    pathForTrackLookup(m_settings.trackLookupPathTemplate, pTrack),
+                    1));
     pReply->setParent(this);
     pReply->setProperty(kRequestGenerationProperty, requestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    m_requestContexts.insert(pReply, RequestContext{
+            m_settings,
+            RequestPurpose::TrackLookup,
+            requestGeneration,
+            tr("Track lookup"),
+            QStringLiteral("GET"),
+            {}});
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotTrackListFinished);
 }
 
@@ -251,10 +322,6 @@ void RestLibraryClient::fetchRecommendations(
     const int requestGeneration = ++m_trackListRequestGeneration;
     clearPendingDetails();
     m_settings = settings;
-    m_requestPurpose = RequestPurpose::Recommendations;
-    m_pendingTracks.clear();
-    m_finishedDetailCount = 0;
-    m_detailBatchFailed = false;
 
     if (!m_pNetworkAccessManager) {
         emit fetchFailed(tr("Network access is not available."));
@@ -265,12 +332,28 @@ void RestLibraryClient::fetchRecommendations(
         return;
     }
 
+    m_trackBatches.insert(requestGeneration, TrackRequestBatch{
+            m_settings,
+            RequestPurpose::Recommendations,
+            {},
+            {},
+            0,
+            false});
     QNetworkReply* pReply = m_pNetworkAccessManager->get(
             newRequest(
+                    m_settings,
                     pathForRemoteId(m_settings.recommendationPathTemplate, remoteId),
                     m_settings.recommendationLimit));
     pReply->setParent(this);
     pReply->setProperty(kRequestGenerationProperty, requestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    m_requestContexts.insert(pReply, RequestContext{
+            m_settings,
+            RequestPurpose::Recommendations,
+            requestGeneration,
+            tr("Recommendations"),
+            QStringLiteral("GET"),
+            remoteId});
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotTrackListFinished);
 }
 
@@ -285,12 +368,14 @@ void RestLibraryClient::fetchMixManDiagnostics(const RestLibrarySettings& settin
             newRequest(config::mixManHealthPath(), 0));
     pHealthReply->setParent(this);
     pHealthReply->setProperty(kRequestGenerationProperty, requestGeneration);
+    pHealthReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pHealthReply, &QNetworkReply::finished, this, &RestLibraryClient::slotHealthFinished);
 
     QNetworkReply* pIndexReply = m_pNetworkAccessManager->get(
             newRequest(config::mixManIndexStatusPath(), 0));
     pIndexReply->setParent(this);
     pIndexReply->setProperty(kRequestGenerationProperty, requestGeneration);
+    pIndexReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pIndexReply,
             &QNetworkReply::finished,
             this,
@@ -309,6 +394,7 @@ void RestLibraryClient::fetchMixManPolicyPresets(const RestLibrarySettings& sett
             newRequest(config::mixManPolicyPresetsPath(), 0));
     pReply->setParent(this);
     pReply->setProperty(kRequestGenerationProperty, requestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotPolicyPresetsFinished);
 }
 
@@ -402,6 +488,7 @@ void RestLibraryClient::fetchMixManPolicyPath(
     QNetworkReply* pReply = m_pNetworkAccessManager->get(newRequest(path, 0));
     pReply->setParent(this);
     pReply->setProperty(kRequestGenerationProperty, requestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotPolicyPathFinished);
 }
 
@@ -427,6 +514,7 @@ void RestLibraryClient::createMixManSession(
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionCreateOperation);
     pReply->setProperty(kRequestGenerationProperty, requestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionCreateFinished);
 }
 
@@ -439,11 +527,14 @@ void RestLibraryClient::fetchMixManSession(
         return;
     }
 
+    const int authoritativeGeneration = ++m_sessionAuthoritativeGeneration;
     QNetworkReply* pReply = m_pNetworkAccessManager->get(
             newJsonRequest(QStringLiteral("%1/%2")
                             .arg(config::mixManSessionsPath(), sessionId.trimmed())));
     pReply->setParent(this);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionFetchFinished);
 }
 
@@ -463,8 +554,14 @@ void RestLibraryClient::publishMixManSessionPlayback(
     QJsonObject payload = baseSessionClientObject(playback.clientId);
     insertIfNotEmpty(&payload, QStringLiteral("surface"), playback.surface);
     insertIfNotEmpty(&payload, QStringLiteral("source"), playback.source);
-    insertIntegerStringIfValid(&payload, QStringLiteral("current_track_id"), playback.currentTrackId);
-    insertIntegerStringIfValid(&payload, QStringLiteral("previous_track_id"), playback.previousTrackId);
+    insertIntegerStringIfValid(
+            &payload,
+            QStringLiteral("current_track_id"),
+            playback.currentTrackId);
+    insertIntegerStringIfValid(
+            &payload,
+            QStringLiteral("previous_track_id"),
+            playback.previousTrackId);
     insertIfNotEmpty(&payload, QStringLiteral("cue"), playback.cue);
     insertIfNotEmpty(&payload, QStringLiteral("playback_state"), playback.playbackState);
     if (!playback.currentTrack.isEmpty()) {
@@ -474,12 +571,15 @@ void RestLibraryClient::publishMixManSessionPlayback(
         payload.insert(QStringLiteral("metadata"), playback.metadata);
     }
 
+    const int authoritativeGeneration = ++m_sessionAuthoritativeGeneration;
     QNetworkReply* pReply = m_pNetworkAccessManager->post(
             newJsonRequest(config::mixManSessionPlaybackPath(sessionId.trimmed())),
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionPlaybackOperation);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
 
@@ -499,7 +599,10 @@ void RestLibraryClient::publishMixManSessionSnapshot(
     QJsonObject payload = baseSessionClientObject(snapshot.clientId);
     insertIfNotEmpty(&payload, QStringLiteral("surface"), snapshot.surface);
     insertIfNotEmpty(&payload, QStringLiteral("source"), snapshot.source);
-    insertIntegerStringIfValid(&payload, QStringLiteral("current_track_id"), snapshot.currentTrackId);
+    insertIntegerStringIfValid(
+            &payload,
+            QStringLiteral("current_track_id"),
+            snapshot.currentTrackId);
     insertIfNotEmpty(&payload, QStringLiteral("cue"), snapshot.cue);
     insertIfNotEmpty(&payload, QStringLiteral("playback_state"), snapshot.playbackState);
     payload.insert(QStringLiteral("snapshot"), snapshot.snapshot);
@@ -513,6 +616,7 @@ void RestLibraryClient::publishMixManSessionSnapshot(
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionSnapshotOperation);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
 
@@ -540,6 +644,9 @@ void RestLibraryClient::updateMixManSessionIntent(
     if (intent.targetColorEnabled && !intent.targetColor.trimmed().isEmpty()) {
         payload.insert(QStringLiteral("target_color"), intent.targetColor.trimmed());
     }
+    if (intent.targetBpmEnabled && intent.targetBpm > 0) {
+        payload.insert(QStringLiteral("target_bpm"), intent.targetBpm);
+    }
     if (!intent.metadata.isEmpty()) {
         payload.insert(QStringLiteral("metadata"), intent.metadata);
     }
@@ -550,6 +657,7 @@ void RestLibraryClient::updateMixManSessionIntent(
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionIntentOperation);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
 
@@ -574,6 +682,7 @@ void RestLibraryClient::sendMixManSessionHeartbeat(
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionHeartbeatOperation);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
 
@@ -593,12 +702,15 @@ void RestLibraryClient::claimMixManSessionControl(
         payload.insert(QStringLiteral("metadata"), metadata);
     }
 
+    const int authoritativeGeneration = ++m_sessionAuthoritativeGeneration;
     QNetworkReply* pReply = m_pNetworkAccessManager->post(
             newJsonRequest(config::mixManSessionControlClaimPath(sessionId.trimmed())),
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionControlClaimOperation);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
 
@@ -632,6 +744,7 @@ void RestLibraryClient::selectMixManSessionCandidate(
         payload.insert(QStringLiteral("metadata"), metadata);
     }
 
+    const int authoritativeGeneration = ++m_sessionAuthoritativeGeneration;
     QNetworkReply* pReply = m_pNetworkAccessManager->post(
             newJsonRequest(config::mixManSessionCandidateSelectPath(
                     sessionId.trimmed(),
@@ -640,6 +753,8 @@ void RestLibraryClient::selectMixManSessionCandidate(
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionCandidateSelectOperation);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
 
@@ -679,13 +794,56 @@ void RestLibraryClient::publishMixManPolicyRefreshAction(
         payload.insert(QStringLiteral("metadata"), metadata);
     }
 
+    const int authoritativeGeneration = ++m_sessionAuthoritativeGeneration;
     QNetworkReply* pReply = m_pNetworkAccessManager->post(
             newJsonRequest(config::mixManSessionActionsPath(sessionId.trimmed())),
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionPolicyRefreshOperation);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
+}
+
+void RestLibraryClient::testMixManConnection(
+        const RestLibrarySettings& settings,
+        const QString& clientId,
+        bool createSession) {
+    ++m_connectionTestRequestGeneration;
+    m_connectionTestSettings = settings;
+    m_connectionTestClientId = clientId.trimmed().isEmpty()
+            ? QStringLiteral("mixxx-connection-test")
+            : clientId.trimmed();
+    m_connectionTestCreateSession = createSession;
+    m_connectionTestFailed = false;
+    m_settings = settings;
+
+    if (!m_pNetworkAccessManager) {
+        emitConfigurationDiagnostic(tr("Network access is not available."));
+        emit connectionTestFinished(false);
+        return;
+    }
+    if (!m_settings.enabled) {
+        emitConfigurationDiagnostic(tr("REST Library is disabled."));
+        emit connectionTestFinished(false);
+        return;
+    }
+    if (!m_settings.baseUrl.isValid() || m_settings.baseUrl.isEmpty() ||
+            m_settings.baseUrl.isRelative()) {
+        emitConfigurationDiagnostic(tr("Base URL is not valid."));
+        emit connectionTestFinished(false);
+        return;
+    }
+
+    QNetworkReply* pReply = startConnectionTestGet(
+            config::mixManHealthPath(),
+            0,
+            tr("Health check"));
+    connect(pReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotConnectionTestHealthFinished);
 }
 
 void RestLibraryClient::invalidateMixManRequests() {
@@ -693,10 +851,19 @@ void RestLibraryClient::invalidateMixManRequests() {
     ++m_policyPresetsRequestGeneration;
     ++m_policyPathRequestGeneration;
     ++m_sessionRequestGeneration;
+    ++m_sessionAuthoritativeGeneration;
+    ++m_connectionTestRequestGeneration;
 }
 
 QNetworkRequest RestLibraryClient::newRequest(const QString& path, int limit) const {
-    QUrl url = urlWithPath(m_settings.baseUrl, path);
+    return newRequest(m_settings, path, limit);
+}
+
+QNetworkRequest RestLibraryClient::newRequest(
+        const RestLibrarySettings& settings,
+        const QString& path,
+        int limit) const {
+    QUrl url = config::urlWithRestPath(settings.baseUrl, path);
     QUrlQuery query(url);
     if (limit > 0 && !query.hasQueryItem(QStringLiteral("limit"))) {
         query.addQueryItem(QStringLiteral("limit"), QString::number(limit));
@@ -708,10 +875,10 @@ QNetworkRequest RestLibraryClient::newRequest(const QString& path, int limit) co
             QNetworkRequest::RedirectPolicyAttribute,
             QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setTransferTimeout(kRequestTimeoutMillis);
-    if (!m_settings.bearerToken.isEmpty()) {
+    if (!settings.bearerToken.isEmpty()) {
         request.setRawHeader(
                 "Authorization",
-                QByteArray("Bearer ") + m_settings.bearerToken.toUtf8());
+                QByteArray("Bearer ") + settings.bearerToken.toUtf8());
     }
     kLogger.info() << "REST library request" << url.toString(QUrl::RemoveUserInfo);
     return request;
@@ -723,8 +890,340 @@ QNetworkRequest RestLibraryClient::newJsonRequest(const QString& path) const {
     return request;
 }
 
-QNetworkRequest RestLibraryClient::newDetailRequest(const QString& remoteId) const {
-    return newRequest(pathForRemoteId(m_settings.trackDetailPathTemplate, remoteId), 0);
+QNetworkRequest RestLibraryClient::newDetailRequest(
+        const RestLibrarySettings& settings,
+        const QString& remoteId) const {
+    return newRequest(pathForRemoteId(settings.trackDetailPathTemplate, remoteId), 0);
+}
+
+QNetworkReply* RestLibraryClient::startConnectionTestGet(
+        const QString& path,
+        int limit,
+        const QString& stage) {
+    QNetworkReply* pReply = m_pNetworkAccessManager->get(
+            newRequest(m_connectionTestSettings, path, limit));
+    pReply->setParent(this);
+    pReply->setProperty(kRequestGenerationProperty, m_connectionTestRequestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    pReply->setProperty(kRequestStageProperty, stage);
+    return pReply;
+}
+
+QNetworkReply* RestLibraryClient::startConnectionTestPost(
+        const QString& path,
+        const QJsonObject& payload,
+        const QString& stage) {
+    QNetworkRequest request = newRequest(m_connectionTestSettings, path, 0);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(request, jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty(kRequestGenerationProperty, m_connectionTestRequestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    pReply->setProperty(kRequestStageProperty, stage);
+    return pReply;
+}
+
+void RestLibraryClient::finishConnectionTestStep(
+        QNetworkReply* pReply,
+        const QString& failureSummary,
+        bool* pSuccess) {
+    if (!pReply) {
+        if (pSuccess) {
+            *pSuccess = false;
+        }
+        return;
+    }
+    const QByteArray responseBody = pReply->readAll();
+    const bool success =
+            pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(statusCodeFromReply(*pReply));
+    emitReplyDiagnostic(
+            *pReply,
+            responseBody,
+            pReply->property(kRequestStageProperty).toString(),
+            QStringLiteral("GET"),
+            failureSummary,
+            success);
+    if (!success) {
+        m_connectionTestFailed = true;
+    }
+    if (pSuccess) {
+        *pSuccess = success;
+    }
+}
+
+RestLibraryRequestDiagnostic RestLibraryClient::diagnosticForReply(
+        const QNetworkReply& reply,
+        const QByteArray& responseBody,
+        const QString& stage,
+        const QString& method,
+        const QString& fallbackSummary,
+        bool success) const {
+    RestLibraryRequestDiagnostic diagnostic;
+    diagnostic.stage = stage;
+    diagnostic.method = method;
+    diagnostic.url = reply.request().url().toString(QUrl::RemoveUserInfo);
+    diagnostic.success = success;
+    diagnostic.statusCode = statusCodeFromReply(reply);
+    diagnostic.networkError = static_cast<int>(reply.error());
+    const qint64 startedAt = reply.property(kRequestStartedAtProperty).toLongLong();
+    if (startedAt > 0) {
+        diagnostic.elapsedMillis = static_cast<int>(
+                std::max<qint64>(0, QDateTime::currentMSecsSinceEpoch() - startedAt));
+    }
+    diagnostic.errorText = reply.error() == QNetworkReply::NoError
+            ? QString()
+            : reply.errorString();
+    diagnostic.responseSnippet = responseSnippet(responseBody);
+    if (diagnostic.errorText.isEmpty() && !success) {
+        diagnostic.errorText = errorTextFromResponse(responseBody);
+    }
+    diagnostic.summary = diagnosticSummary(diagnostic, fallbackSummary);
+    return diagnostic;
+}
+
+QString RestLibraryClient::diagnosticSummary(
+        const RestLibraryRequestDiagnostic& diagnostic,
+        const QString& fallbackSummary) const {
+    if (diagnostic.success) {
+        return diagnostic.statusCode > 0
+                ? tr("%1 succeeded (%2).").arg(diagnostic.stage).arg(diagnostic.statusCode)
+                : tr("%1 succeeded.").arg(diagnostic.stage);
+    }
+    if (diagnostic.networkError != static_cast<int>(QNetworkReply::NoError) &&
+            !diagnostic.errorText.isEmpty()) {
+        return tr("%1 failed: %2.").arg(diagnostic.stage, diagnostic.errorText);
+    }
+    if (diagnostic.statusCode > 0 && !isSuccessStatus(diagnostic.statusCode)) {
+        if (!diagnostic.errorText.isEmpty()) {
+            return tr("%1 failed with HTTP %2: %3.")
+                    .arg(diagnostic.stage)
+                    .arg(diagnostic.statusCode)
+                    .arg(diagnostic.errorText);
+        }
+        return tr("%1 failed with HTTP %2.").arg(diagnostic.stage).arg(diagnostic.statusCode);
+    }
+    return fallbackSummary;
+}
+
+void RestLibraryClient::emitReplyDiagnostic(
+        const QNetworkReply& reply,
+        const QByteArray& responseBody,
+        const QString& stage,
+        const QString& method,
+        const QString& fallbackSummary,
+        bool success) {
+    emit requestDiagnosticUpdated(diagnosticForReply(
+            reply,
+            responseBody,
+            stage,
+            method,
+            fallbackSummary,
+            success));
+}
+
+void RestLibraryClient::emitConfigurationDiagnostic(const QString& summary) {
+    RestLibraryRequestDiagnostic diagnostic;
+    diagnostic.stage = tr("Configuration");
+    diagnostic.method = QStringLiteral("-");
+    diagnostic.url = m_settings.baseUrl.toString(QUrl::RemoveUserInfo);
+    diagnostic.success = false;
+    diagnostic.summary = summary;
+    diagnostic.errorText = summary;
+    emit requestDiagnosticUpdated(diagnostic);
+}
+
+void RestLibraryClient::slotConnectionTestHealthFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit connectionTestFinished(false);
+        return;
+    }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_connectionTestRequestGeneration;
+    pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
+
+    bool success = false;
+    finishConnectionTestStep(pReply, tr("MixMan health check failed."), &success);
+    if (!success) {
+        emit connectionTestFinished(false);
+        return;
+    }
+
+    QNetworkReply* pIndexReply = startConnectionTestGet(
+            config::mixManIndexStatusPath(),
+            0,
+            tr("Index status"));
+    connect(pIndexReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotConnectionTestIndexFinished);
+}
+
+void RestLibraryClient::slotConnectionTestIndexFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit connectionTestFinished(false);
+        return;
+    }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_connectionTestRequestGeneration;
+    pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
+
+    const QByteArray responseBody = pReply->readAll();
+    bool success =
+            pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(statusCodeFromReply(*pReply));
+    QString fallbackSummary = tr("MixMan index status request failed.");
+    if (success) {
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+        if (parseError.error != QJsonParseError::NoError) {
+            success = false;
+            fallbackSummary = tr("MixMan index status was not valid JSON.");
+        } else {
+            const RestLibraryDiagnostics diagnostics = parseIndexStatusDocument(document);
+            if (!diagnostics.lastError.isEmpty()) {
+                success = false;
+                fallbackSummary = diagnostics.lastError;
+            } else if (!diagnostics.indexReady) {
+                success = false;
+                fallbackSummary = tr("Index status returned but the index is not ready.");
+            }
+        }
+    }
+    emitReplyDiagnostic(
+            *pReply,
+            responseBody,
+            pReply->property(kRequestStageProperty).toString(),
+            QStringLiteral("GET"),
+            fallbackSummary,
+            success);
+    if (!success) {
+        m_connectionTestFailed = true;
+        emit connectionTestFinished(false);
+        return;
+    }
+
+    QNetworkReply* pTracksReply = startConnectionTestGet(
+            m_connectionTestSettings.trackListPath.trimmed().isEmpty()
+                    ? config::mixManTrackListPath()
+                    : m_connectionTestSettings.trackListPath,
+            1,
+            tr("Track probe"));
+    connect(pTracksReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotConnectionTestTracksFinished);
+}
+
+void RestLibraryClient::slotConnectionTestTracksFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit connectionTestFinished(false);
+        return;
+    }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_connectionTestRequestGeneration;
+    pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
+
+    const QByteArray responseBody = pReply->readAll();
+    bool success =
+            pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(statusCodeFromReply(*pReply));
+    QString fallbackSummary = tr("REST track probe failed.");
+    if (success) {
+        QJsonParseError parseError;
+        QJsonDocument::fromJson(responseBody, &parseError);
+        if (parseError.error != QJsonParseError::NoError) {
+            success = false;
+            fallbackSummary = tr("REST track probe response was not valid JSON.");
+        }
+    }
+    emitReplyDiagnostic(
+            *pReply,
+            responseBody,
+            pReply->property(kRequestStageProperty).toString(),
+            QStringLiteral("GET"),
+            fallbackSummary,
+            success);
+    if (!success) {
+        m_connectionTestFailed = true;
+        emit connectionTestFinished(false);
+        return;
+    }
+    if (!m_connectionTestSettings.useMixManDefaults || !m_connectionTestCreateSession) {
+        emit connectionTestFinished(!m_connectionTestFailed);
+        return;
+    }
+
+    QJsonObject payload = baseSessionClientObject(m_connectionTestClientId);
+    payload.insert(
+            QStringLiteral("metadata"),
+            QJsonObject{{QStringLiteral("connection_test"), true}});
+    QNetworkReply* pSessionReply = startConnectionTestPost(
+            config::mixManSessionsPath(),
+            payload,
+            tr("Session create"));
+    connect(pSessionReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotConnectionTestSessionFinished);
+}
+
+void RestLibraryClient::slotConnectionTestSessionFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit connectionTestFinished(false);
+        return;
+    }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_connectionTestRequestGeneration;
+    pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
+
+    const QByteArray responseBody = pReply->readAll();
+    bool success =
+            pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(statusCodeFromReply(*pReply));
+    QString fallbackSummary = tr("MixMan session creation failed.");
+    if (success) {
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+        if (parseError.error != QJsonParseError::NoError) {
+            success = false;
+            fallbackSummary = tr("MixMan session response was not valid JSON.");
+        } else if (parseSessionDocument(document).id.isEmpty()) {
+            success = false;
+            fallbackSummary = tr("MixMan session response did not include a session ID.");
+        }
+    }
+    emitReplyDiagnostic(
+            *pReply,
+            responseBody,
+            pReply->property(kRequestStageProperty).toString(),
+            QStringLiteral("POST"),
+            fallbackSummary,
+            success);
+    if (!success) {
+        m_connectionTestFailed = true;
+    }
+    emit connectionTestFinished(!m_connectionTestFailed);
 }
 
 void RestLibraryClient::slotTrackListFinished() {
@@ -733,17 +1232,25 @@ void RestLibraryClient::slotTrackListFinished() {
         emit fetchFailed(tr("Remote library request failed."));
         return;
     }
+    const RequestContext context = m_requestContexts.take(pReply);
     const bool staleReply =
             pReply->property(kRequestGenerationProperty).toInt() !=
             m_trackListRequestGeneration;
     pReply->deleteLater();
     if (staleReply) {
+        m_trackBatches.remove(context.generation);
         return;
     }
+    auto batchIt = m_trackBatches.find(context.generation);
+    if (batchIt == m_trackBatches.end()) {
+        emit fetchFailed(tr("Remote library request failed."));
+        return;
+    }
+    TrackRequestBatch* pBatch = &batchIt.value();
 
     const QByteArray responseBody = pReply->readAll();
     const int statusCode = statusCodeFromReply(*pReply);
-    if (!isSuccessStatus(statusCode)) {
+    if (pReply->error() != QNetworkReply::NoError || !isSuccessStatus(statusCode)) {
         kLogger.warning()
                 << "REST library request failed"
                 << pReply->request().url().toString(QUrl::RemoveUserInfo)
@@ -751,8 +1258,16 @@ void RestLibraryClient::slotTrackListFinished() {
                 << "network error" << pReply->error()
                 << pReply->errorString()
                 << "body" << responseSnippet(responseBody);
-        emitFailureForCurrentPurpose(
-                tr("Remote library request returned an unsuccessful status."));
+        const auto diagnostic = diagnosticForReply(
+                *pReply,
+                responseBody,
+                context.stage,
+                context.method,
+                tr("Remote library request returned an unsuccessful status."),
+                false);
+        emit requestDiagnosticUpdated(diagnostic);
+        emitFailureForPurpose(context.purpose, diagnostic.summary);
+        m_trackBatches.remove(context.generation);
         return;
     }
 
@@ -763,50 +1278,80 @@ void RestLibraryClient::slotTrackListFinished() {
                 << "Failed to parse remote library JSON response from"
                 << pReply->request().url().toString(QUrl::RemoveUserInfo)
                 << "body" << responseSnippet(responseBody);
-        emitFailureForCurrentPurpose(tr("Remote library response was not valid JSON."));
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                context.stage,
+                context.method,
+                tr("Remote library response was not valid JSON."),
+                false);
+        emitFailureForPurpose(context.purpose, tr("Remote library response was not valid JSON."));
+        m_trackBatches.remove(context.generation);
         return;
     }
 
     QStringList remoteIds;
-    m_pendingTracks = parseTrackListDocument(document, &remoteIds);
-    if (m_requestPurpose == RequestPurpose::TrackLookup) {
-        if (!m_pendingTracks.isEmpty()) {
-            emit trackLookupSucceeded(m_pendingTracks.constFirst().remoteId);
+    pBatch->pendingTracks = parseTrackListDocument(document, &remoteIds);
+    if (context.purpose == RequestPurpose::TrackLookup) {
+        if (!pBatch->pendingTracks.isEmpty()) {
+            emit trackLookupSucceeded(pBatch->pendingTracks.constFirst().remoteId);
+            m_trackBatches.remove(context.generation);
             return;
         }
         if (!remoteIds.isEmpty()) {
             emit trackLookupSucceeded(remoteIds.constFirst());
+            m_trackBatches.remove(context.generation);
             return;
         }
         emit trackLookupMissed(tr("No matching remote track was found."));
+        m_trackBatches.remove(context.generation);
         return;
     }
 
-    if (remoteIds.isEmpty() || m_settings.trackDetailPathTemplate.trimmed().isEmpty()) {
-        emitTracksForCurrentPurpose(m_pendingTracks);
+    if (remoteIds.isEmpty() || context.settings.trackDetailPathTemplate.trimmed().isEmpty()) {
+        emitTracksForPurpose(context.purpose, pBatch->pendingTracks);
+        m_trackBatches.remove(context.generation);
         return;
     }
-    startDetailRequests(remoteIds);
+    startDetailRequests(context.generation, remoteIds);
 }
 
-void RestLibraryClient::startDetailRequests(const QStringList& remoteIds) {
+void RestLibraryClient::startDetailRequests(int requestGeneration, const QStringList& remoteIds) {
     if (!m_pNetworkAccessManager) {
-        emitTracksForCurrentPurpose(m_pendingTracks);
+        auto batchIt = m_trackBatches.find(requestGeneration);
+        if (batchIt != m_trackBatches.end()) {
+            emitTracksForPurpose(batchIt.value().purpose, batchIt.value().pendingTracks);
+            m_trackBatches.erase(batchIt);
+        }
         return;
     }
+    auto batchIt = m_trackBatches.find(requestGeneration);
+    if (batchIt == m_trackBatches.end()) {
+        return;
+    }
+    TrackRequestBatch& batch = batchIt.value();
 
     const int requestCount = std::min(
             static_cast<int>(remoteIds.size()),
-            m_requestPurpose == RequestPurpose::Recommendations
-                    ? m_settings.recommendationLimit
-                    : m_settings.pageSize);
-    m_pendingDetails.reserve(requestCount);
+            batch.purpose == RequestPurpose::Recommendations
+                    ? batch.settings.recommendationLimit
+                    : batch.settings.pageSize);
+    batch.pendingDetails.reserve(requestCount);
     for (int i = 0; i < requestCount; ++i) {
-        QNetworkReply* pReply = m_pNetworkAccessManager->get(newDetailRequest(remoteIds.at(i)));
+        QNetworkReply* pReply = m_pNetworkAccessManager->get(
+                newDetailRequest(batch.settings, remoteIds.at(i)));
         pReply->setParent(this);
-        pReply->setProperty(kRequestGenerationProperty, m_trackListRequestGeneration);
-        m_pendingDetails.push_back(PendingDetail{
+        pReply->setProperty(kRequestGenerationProperty, requestGeneration);
+        pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+        batch.pendingDetails.push_back(PendingDetail{
                 QPointer<QNetworkReply>(pReply),
+                remoteIds.at(i)});
+        m_requestContexts.insert(pReply, RequestContext{
+                batch.settings,
+                batch.purpose,
+                requestGeneration,
+                tr("Track detail"),
+                QStringLiteral("GET"),
                 remoteIds.at(i)});
         connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotTrackDetailFinished);
     }
@@ -817,18 +1362,25 @@ void RestLibraryClient::slotTrackDetailFinished() {
     if (!pReply) {
         return;
     }
+    const RequestContext context = m_requestContexts.take(pReply);
     const bool staleReply =
             pReply->property(kRequestGenerationProperty).toInt() !=
             m_trackListRequestGeneration;
     pReply->deleteLater();
     if (staleReply) {
+        m_trackBatches.remove(context.generation);
         return;
     }
-    ++m_finishedDetailCount;
+    auto batchIt = m_trackBatches.find(context.generation);
+    if (batchIt == m_trackBatches.end()) {
+        return;
+    }
+    TrackRequestBatch& batch = batchIt.value();
+    ++batch.finishedDetailCount;
 
     const QByteArray responseBody = pReply->readAll();
     const int statusCode = statusCodeFromReply(*pReply);
-    if (!isSuccessStatus(statusCode)) {
+    if (pReply->error() != QNetworkReply::NoError || !isSuccessStatus(statusCode)) {
         kLogger.warning()
                 << "REST library track detail request failed"
                 << pReply->request().url().toString(QUrl::RemoveUserInfo)
@@ -836,8 +1388,15 @@ void RestLibraryClient::slotTrackDetailFinished() {
                 << "network error" << pReply->error()
                 << pReply->errorString()
                 << "body" << responseSnippet(responseBody);
-        m_detailBatchFailed = true;
-        finishDetailBatchIfComplete();
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                context.stage,
+                context.method,
+                tr("Remote library track detail request failed."),
+                false);
+        batch.detailBatchFailed = true;
+        finishDetailBatchIfComplete(context.generation);
         return;
     }
 
@@ -848,25 +1407,35 @@ void RestLibraryClient::slotTrackDetailFinished() {
                 << "REST library track detail response was not a JSON object from"
                 << pReply->request().url().toString(QUrl::RemoveUserInfo)
                 << "body" << responseSnippet(responseBody);
-        m_detailBatchFailed = true;
-        finishDetailBatchIfComplete();
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                context.stage,
+                context.method,
+                tr("Remote library track detail response was not valid JSON."),
+                false);
+        batch.detailBatchFailed = true;
+        finishDetailBatchIfComplete(context.generation);
         return;
     }
 
     RestLibraryTrack track = parseTrackObject(document.object());
     if (track.remoteId.isEmpty()) {
-        for (const auto& detail : std::as_const(m_pendingDetails)) {
+        for (const auto& detail : std::as_const(batch.pendingDetails)) {
             if (detail.reply == pReply) {
                 track.remoteId = detail.remoteId;
                 break;
             }
         }
+        if (track.remoteId.isEmpty()) {
+            track.remoteId = context.remoteId;
+        }
     }
     if (!track.remoteId.isEmpty()) {
-        m_pendingTracks.append(std::move(track));
+        batch.pendingTracks.append(std::move(track));
     }
 
-    finishDetailBatchIfComplete();
+    finishDetailBatchIfComplete(context.generation);
 }
 
 void RestLibraryClient::slotHealthFinished() {
@@ -883,11 +1452,31 @@ void RestLibraryClient::slotHealthFinished() {
     }
 
     RestLibraryDiagnostics diagnostics;
+    const QByteArray responseBody = pReply->readAll();
     diagnostics.healthKnown = true;
     diagnostics.lastStatusCode = statusCodeFromReply(*pReply);
-    diagnostics.healthOk = isSuccessStatus(diagnostics.lastStatusCode);
+    diagnostics.healthOk =
+            pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(diagnostics.lastStatusCode);
     if (!diagnostics.healthOk) {
-        diagnostics.lastError = tr("MixMan health check failed.");
+        const auto requestDiagnostic = diagnosticForReply(
+                *pReply,
+                responseBody,
+                tr("Health check"),
+                QStringLiteral("GET"),
+                tr("MixMan health check failed."),
+                false);
+        diagnostics.lastError = requestDiagnostic.summary;
+        diagnostics.healthError = requestDiagnostic.summary;
+        emit requestDiagnosticUpdated(requestDiagnostic);
+    } else {
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                tr("Health check"),
+                QStringLiteral("GET"),
+                {},
+                true);
     }
     emit diagnosticsUpdated(diagnostics);
 }
@@ -909,8 +1498,18 @@ void RestLibraryClient::slotIndexStatusFinished() {
     RestLibraryDiagnostics diagnostics;
     diagnostics.indexKnown = true;
     diagnostics.lastStatusCode = statusCodeFromReply(*pReply);
-    if (!isSuccessStatus(diagnostics.lastStatusCode)) {
-        diagnostics.lastError = tr("MixMan index status request failed.");
+    if (pReply->error() != QNetworkReply::NoError ||
+            !isSuccessStatus(diagnostics.lastStatusCode)) {
+        const auto requestDiagnostic = diagnosticForReply(
+                *pReply,
+                responseBody,
+                tr("Index status"),
+                QStringLiteral("GET"),
+                tr("MixMan index status request failed."),
+                false);
+        diagnostics.lastError = requestDiagnostic.summary;
+        diagnostics.indexError = requestDiagnostic.summary;
+        emit requestDiagnosticUpdated(requestDiagnostic);
         emit diagnosticsUpdated(diagnostics);
         return;
     }
@@ -919,12 +1518,27 @@ void RestLibraryClient::slotIndexStatusFinished() {
     const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
     if (parseError.error != QJsonParseError::NoError) {
         diagnostics.lastError = tr("MixMan index status was not valid JSON.");
+        diagnostics.indexError = diagnostics.lastError;
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                tr("Index status"),
+                QStringLiteral("GET"),
+                diagnostics.lastError,
+                false);
         emit diagnosticsUpdated(diagnostics);
         return;
     }
 
     diagnostics = parseIndexStatusDocument(document);
     diagnostics.lastStatusCode = statusCodeFromReply(*pReply);
+    emitReplyDiagnostic(
+            *pReply,
+            responseBody,
+            tr("Index status"),
+            QStringLiteral("GET"),
+            {},
+            true);
     emit diagnosticsUpdated(diagnostics);
 }
 
@@ -943,7 +1557,14 @@ void RestLibraryClient::slotPolicyPresetsFinished() {
 
     const QByteArray responseBody = pReply->readAll();
     const int statusCode = statusCodeFromReply(*pReply);
-    if (!isSuccessStatus(statusCode)) {
+    if (pReply->error() != QNetworkReply::NoError || !isSuccessStatus(statusCode)) {
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                tr("Policy presets"),
+                QStringLiteral("GET"),
+                tr("MixMan policy presets request failed."),
+                false);
         emit policyPresetsFetched({});
         return;
     }
@@ -951,6 +1572,13 @@ void RestLibraryClient::slotPolicyPresetsFinished() {
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
     if (parseError.error != QJsonParseError::NoError) {
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                tr("Policy presets"),
+                QStringLiteral("GET"),
+                tr("MixMan policy presets response was not valid JSON."),
+                false);
         emit policyPresetsFetched({});
         return;
     }
@@ -973,19 +1601,34 @@ void RestLibraryClient::slotPolicyPathFinished() {
 
     const QByteArray responseBody = pReply->readAll();
     const int statusCode = statusCodeFromReply(*pReply);
-    if (!isSuccessStatus(statusCode)) {
+    if (pReply->error() != QNetworkReply::NoError || !isSuccessStatus(statusCode)) {
         kLogger.warning()
                 << "MixMan policy path request failed"
                 << pReply->request().url().toString(QUrl::RemoveUserInfo)
                 << "status" << statusCode
                 << "body" << responseSnippet(responseBody);
-        emit fetchFailed(tr("MixMan policy path request returned an unsuccessful status."));
+        const auto diagnostic = diagnosticForReply(
+                *pReply,
+                responseBody,
+                tr("Policy path"),
+                QStringLiteral("GET"),
+                tr("MixMan policy path request returned an unsuccessful status."),
+                false);
+        emit requestDiagnosticUpdated(diagnostic);
+        emit fetchFailed(diagnostic.summary);
         return;
     }
 
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
     if (parseError.error != QJsonParseError::NoError) {
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                tr("Policy path"),
+                QStringLiteral("GET"),
+                tr("MixMan policy path response was not valid JSON."),
+                false);
         emit fetchFailed(tr("MixMan policy path response was not valid JSON."));
         return;
     }
@@ -1009,14 +1652,24 @@ void RestLibraryClient::slotSessionCreateFinished() {
     RestLibrarySessionWriteStatus status;
     status.operation = kSessionCreateOperation;
     status.statusCode = statusCodeFromReply(*pReply);
-    status.success = isSuccessStatus(status.statusCode);
+    status.success =
+            pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(status.statusCode);
     if (!status.success) {
-        status.errorText = tr("MixMan session creation failed.");
+        const auto diagnostic = diagnosticForReply(
+                *pReply,
+                responseBody,
+                tr("Session create"),
+                QStringLiteral("POST"),
+                tr("MixMan session creation failed."),
+                false);
+        status.errorText = diagnostic.summary;
         kLogger.warning()
                 << "MixMan session creation failed"
                 << pReply->request().url().toString(QUrl::RemoveUserInfo)
                 << "status" << status.statusCode
                 << "body" << responseSnippet(responseBody);
+        emit requestDiagnosticUpdated(diagnostic);
         emit mixManSessionWriteStatusUpdated(status);
         return;
     }
@@ -1026,6 +1679,13 @@ void RestLibraryClient::slotSessionCreateFinished() {
     if (parseError.error != QJsonParseError::NoError) {
         status.success = false;
         status.errorText = tr("MixMan session response was not valid JSON.");
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                tr("Session create"),
+                QStringLiteral("POST"),
+                status.errorText,
+                false);
         emit mixManSessionWriteStatusUpdated(status);
         return;
     }
@@ -1034,6 +1694,13 @@ void RestLibraryClient::slotSessionCreateFinished() {
     if (session.id.isEmpty()) {
         status.success = false;
         status.errorText = tr("MixMan session response did not include a session ID.");
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                tr("Session create"),
+                QStringLiteral("POST"),
+                status.errorText,
+                false);
         emit mixManSessionWriteStatusUpdated(status);
         return;
     }
@@ -1051,19 +1718,29 @@ void RestLibraryClient::slotSessionFetchFinished() {
     const bool staleReply =
             pReply->property(kRequestGenerationProperty).toInt() !=
             m_sessionRequestGeneration;
+    const bool staleAuthoritativeReply =
+            pReply->property(kAuthoritativeGenerationProperty).toInt() !=
+            m_sessionAuthoritativeGeneration;
     pReply->deleteLater();
-    if (staleReply) {
+    if (staleReply || staleAuthoritativeReply) {
         return;
     }
 
     const QByteArray responseBody = pReply->readAll();
     const int statusCode = statusCodeFromReply(*pReply);
-    if (!isSuccessStatus(statusCode)) {
+    if (pReply->error() != QNetworkReply::NoError || !isSuccessStatus(statusCode)) {
         kLogger.warning()
                 << "MixMan session fetch failed"
                 << pReply->request().url().toString(QUrl::RemoveUserInfo)
                 << "status" << statusCode
                 << "body" << responseSnippet(responseBody);
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                tr("Session fetch"),
+                QStringLiteral("GET"),
+                tr("MixMan session fetch failed."),
+                false);
         emit mixManSessionFetched({});
         return;
     }
@@ -1071,6 +1748,13 @@ void RestLibraryClient::slotSessionFetchFinished() {
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
     if (parseError.error != QJsonParseError::NoError) {
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                tr("Session fetch"),
+                QStringLiteral("GET"),
+                tr("MixMan session response was not valid JSON."),
+                false);
         emit mixManSessionFetched({});
         return;
     }
@@ -1094,22 +1778,35 @@ void RestLibraryClient::slotSessionWriteFinished() {
     RestLibrarySessionWriteStatus status;
     status.operation = pReply->property("operation").toString();
     status.statusCode = statusCodeFromReply(*pReply);
-    status.success = isSuccessStatus(status.statusCode);
+    status.success =
+            pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(status.statusCode);
     if (!status.success) {
-        status.errorText = tr("MixMan session write failed.");
+        const auto diagnostic = diagnosticForReply(
+                *pReply,
+                responseBody,
+                tr("Session write"),
+                QStringLiteral("POST"),
+                tr("MixMan session write failed."),
+                false);
+        status.errorText = diagnostic.summary;
         kLogger.warning()
                 << "MixMan session write failed"
                 << status.operation
                 << pReply->request().url().toString(QUrl::RemoveUserInfo)
                 << "status" << status.statusCode
                 << "body" << responseSnippet(responseBody);
+        emit requestDiagnosticUpdated(diagnostic);
     } else if (status.operation == kSessionPlaybackOperation ||
             status.operation == kSessionControlClaimOperation ||
             status.operation == kSessionCandidateSelectOperation ||
             status.operation == kSessionPolicyRefreshOperation) {
+        const bool staleAuthoritativeReply =
+                pReply->property(kAuthoritativeGenerationProperty).toInt() !=
+                m_sessionAuthoritativeGeneration;
         QJsonParseError parseError;
         const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
-        if (parseError.error == QJsonParseError::NoError) {
+        if (!staleAuthoritativeReply && parseError.error == QJsonParseError::NoError) {
             const RestLibrarySession session = parseSessionDocument(document);
             if (!session.id.isEmpty() || !session.authoritative.raw.isEmpty()) {
                 emit mixManSessionFetched(session);
@@ -1119,32 +1816,44 @@ void RestLibraryClient::slotSessionWriteFinished() {
     emit mixManSessionWriteStatusUpdated(status);
 }
 
-void RestLibraryClient::finishDetailBatchIfComplete() {
-    if (m_finishedDetailCount < m_pendingDetails.size()) {
+void RestLibraryClient::finishDetailBatchIfComplete(int requestGeneration) {
+    auto batchIt = m_trackBatches.find(requestGeneration);
+    if (batchIt == m_trackBatches.end()) {
         return;
     }
-    if (m_pendingTracks.isEmpty() && m_detailBatchFailed) {
-        emitFailureForCurrentPurpose(tr("Remote library track details could not be loaded."));
-    } else {
-        emitTracksForCurrentPurpose(m_pendingTracks);
+    TrackRequestBatch batch = batchIt.value();
+    if (batch.finishedDetailCount < batch.pendingDetails.size()) {
+        return;
     }
-    m_pendingDetails.clear();
+    if (batch.pendingTracks.isEmpty() && batch.detailBatchFailed) {
+        emitFailureForPurpose(
+                batch.purpose,
+                tr("Remote library track details could not be loaded."));
+    } else {
+        emitTracksForPurpose(batch.purpose, batch.pendingTracks);
+    }
+    m_trackBatches.erase(batchIt);
 }
 
 void RestLibraryClient::clearPendingDetails() {
-    for (const auto& detail : std::as_const(m_pendingDetails)) {
-        if (detail.reply) {
-            if (!detail.reply->isFinished()) {
-                detail.reply->abort();
+    for (auto batchIt = m_trackBatches.begin(); batchIt != m_trackBatches.end(); ++batchIt) {
+        for (const auto& detail : std::as_const(batchIt.value().pendingDetails)) {
+            if (detail.reply) {
+                m_requestContexts.remove(detail.reply);
+                if (!detail.reply->isFinished()) {
+                    detail.reply->abort();
+                }
+                detail.reply->deleteLater();
             }
-            detail.reply->deleteLater();
         }
     }
-    m_pendingDetails.clear();
+    m_trackBatches.clear();
 }
 
-void RestLibraryClient::emitTracksForCurrentPurpose(const QList<RestLibraryTrack>& tracks) {
-    switch (m_requestPurpose) {
+void RestLibraryClient::emitTracksForPurpose(
+        RequestPurpose purpose,
+        const QList<RestLibraryTrack>& tracks) {
+    switch (purpose) {
     case RequestPurpose::Recommendations:
         emit recommendationsFetched(tracks);
         break;
@@ -1161,8 +1870,10 @@ void RestLibraryClient::emitTracksForCurrentPurpose(const QList<RestLibraryTrack
     }
 }
 
-void RestLibraryClient::emitFailureForCurrentPurpose(const QString& message) {
-    switch (m_requestPurpose) {
+void RestLibraryClient::emitFailureForPurpose(
+        RequestPurpose purpose,
+        const QString& message) {
+    switch (purpose) {
     case RequestPurpose::TrackLookup:
         emit trackLookupMissed(message);
         break;
@@ -1572,6 +2283,7 @@ RestLibraryDiagnostics RestLibraryClient::parseIndexStatusDocument(const QJsonDo
     diagnostics.indexKnown = true;
     if (!document.isObject()) {
         diagnostics.lastError = QObject::tr("MixMan index status was not a JSON object.");
+        diagnostics.indexError = diagnostics.lastError;
         return diagnostics;
     }
     const QJsonObject object = document.object();

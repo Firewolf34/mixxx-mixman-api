@@ -256,3 +256,25 @@ TEST_F(DlgPrefRestLibraryTest, InvalidEnabledSettingsBlockApply) {
 
     EXPECT_TRUE(page.okayToClose());
 }
+
+TEST_F(DlgPrefRestLibraryTest, TestConnectionRequiresValidInputAndShowsDetails) {
+    DlgPrefRestLibrary page(nullptr, config());
+
+    auto* pEnabled = requireChild<QCheckBox>(&page, "checkBoxEnabled");
+    auto* pBaseUrl = requireChild<QLineEdit>(&page, "lineEditBaseUrl");
+    auto* pButton = requireChild<QPushButton>(&page, "pushButtonTestConnection");
+    auto* pCreateSession =
+            requireChild<QCheckBox>(&page, "checkBoxTestConnectionCreateSession");
+    auto* pDetails = requireChild<QLabel>(&page, "labelConnectionTestDetails");
+
+    EXPECT_FALSE(pCreateSession->isChecked());
+
+    pEnabled->setChecked(true);
+    pBaseUrl->setText(QStringLiteral("relative-url"));
+
+    pButton->click();
+
+    EXPECT_TRUE(pButton->isEnabled());
+    EXPECT_TRUE(pDetails->text().contains(QStringLiteral("Configuration")));
+    EXPECT_TRUE(pDetails->text().contains(QStringLiteral("FAIL")));
+}

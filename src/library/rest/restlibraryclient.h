@@ -2,6 +2,7 @@
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QHash>
 #include <QList>
 #include <QNetworkReply>
 #include <QObject>
@@ -82,6 +83,10 @@ class RestLibraryClient final : public QObject {
             const QString& sessionId,
             const QString& clientId,
             const QJsonObject& metadata = {});
+    void testMixManConnection(
+            const RestLibrarySettings& settings,
+            const QString& clientId = {},
+            bool createSession = false);
     void invalidateMixManRequests();
 
     static QList<RestLibraryTrack> parseTrackListDocumentForTesting(
@@ -117,6 +122,9 @@ class RestLibraryClient final : public QObject {
             const mixxx::library::rest::RestLibrarySession& session);
     void mixManSessionWriteStatusUpdated(
             const mixxx::library::rest::RestLibrarySessionWriteStatus& status);
+    void requestDiagnosticUpdated(
+            const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic);
+    void connectionTestFinished(bool success);
     void fetchFailed(const QString& message);
 
   private slots:
@@ -129,6 +137,10 @@ class RestLibraryClient final : public QObject {
     void slotSessionCreateFinished();
     void slotSessionFetchFinished();
     void slotSessionWriteFinished();
+    void slotConnectionTestHealthFinished();
+    void slotConnectionTestIndexFinished();
+    void slotConnectionTestTracksFinished();
+    void slotConnectionTestSessionFinished();
 
   private:
     struct PendingDetail {
@@ -142,14 +154,70 @@ class RestLibraryClient final : public QObject {
         Recommendations,
     };
 
+    struct RequestContext {
+        RestLibrarySettings settings;
+        RequestPurpose purpose = RequestPurpose::Tracks;
+        int generation = 0;
+        QString stage;
+        QString method;
+        QString remoteId;
+    };
+
+    struct TrackRequestBatch {
+        RestLibrarySettings settings;
+        RequestPurpose purpose = RequestPurpose::Tracks;
+        QList<RestLibraryTrack> pendingTracks;
+        QVector<PendingDetail> pendingDetails;
+        int finishedDetailCount = 0;
+        bool detailBatchFailed = false;
+    };
+
     QNetworkRequest newRequest(const QString& path, int limit) const;
+    QNetworkRequest newRequest(
+            const RestLibrarySettings& settings,
+            const QString& path,
+            int limit) const;
     QNetworkRequest newJsonRequest(const QString& path) const;
-    QNetworkRequest newDetailRequest(const QString& remoteId) const;
-    void startDetailRequests(const QStringList& remoteIds);
-    void finishDetailBatchIfComplete();
+    QNetworkRequest newDetailRequest(
+            const RestLibrarySettings& settings,
+            const QString& remoteId) const;
+    QNetworkReply* startConnectionTestGet(
+            const QString& path,
+            int limit,
+            const QString& stage);
+    QNetworkReply* startConnectionTestPost(
+            const QString& path,
+            const QJsonObject& payload,
+            const QString& stage);
+    void finishConnectionTestStep(
+            QNetworkReply* pReply,
+            const QString& failureSummary,
+            bool* pSuccess);
+    void emitReplyDiagnostic(
+            const QNetworkReply& reply,
+            const QByteArray& responseBody,
+            const QString& stage,
+            const QString& method,
+            const QString& fallbackSummary,
+            bool success);
+    RestLibraryRequestDiagnostic diagnosticForReply(
+            const QNetworkReply& reply,
+            const QByteArray& responseBody,
+            const QString& stage,
+            const QString& method,
+            const QString& fallbackSummary,
+            bool success) const;
+    QString diagnosticSummary(
+            const RestLibraryRequestDiagnostic& diagnostic,
+            const QString& fallbackSummary) const;
+    void emitConfigurationDiagnostic(const QString& summary);
+    void startDetailRequests(int requestGeneration, const QStringList& remoteIds);
+    void finishDetailBatchIfComplete(int requestGeneration);
     void clearPendingDetails();
-    void emitTracksForCurrentPurpose(const QList<RestLibraryTrack>& tracks);
-    void emitFailureForCurrentPurpose(const QString& message);
+    void emitTracksForPurpose(
+            RequestPurpose purpose,
+            const QList<RestLibraryTrack>& tracks);
+    void emitFailureForPurpose(RequestPurpose purpose, const QString& message);
 
     static QList<RestLibraryTrack> parseTrackListDocument(
             const QJsonDocument& document,
@@ -172,16 +240,19 @@ class RestLibraryClient final : public QObject {
 
     QPointer<QNetworkAccessManager> m_pNetworkAccessManager;
     RestLibrarySettings m_settings;
-    RequestPurpose m_requestPurpose = RequestPurpose::Tracks;
-    QList<RestLibraryTrack> m_pendingTracks;
-    QVector<PendingDetail> m_pendingDetails;
-    int m_finishedDetailCount = 0;
+    QHash<QNetworkReply*, RequestContext> m_requestContexts;
+    QHash<int, TrackRequestBatch> m_trackBatches;
     int m_trackListRequestGeneration = 0;
     int m_policyPathRequestGeneration = 0;
     int m_mixManDiagnosticsRequestGeneration = 0;
     int m_policyPresetsRequestGeneration = 0;
     int m_sessionRequestGeneration = 0;
-    bool m_detailBatchFailed = false;
+    int m_sessionAuthoritativeGeneration = 0;
+    int m_connectionTestRequestGeneration = 0;
+    bool m_connectionTestFailed = false;
+    RestLibrarySettings m_connectionTestSettings;
+    QString m_connectionTestClientId;
+    bool m_connectionTestCreateSession = false;
 };
 
 } // namespace mixxx::library::rest

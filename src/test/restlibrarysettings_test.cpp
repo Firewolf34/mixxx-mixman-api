@@ -146,3 +146,30 @@ TEST_F(RestLibrarySettingsTest, UsesLocalDevBearerTokenFallback) {
 
     EXPECT_EQ(settings.bearerToken, QStringLiteral("fallback-token"));
 }
+
+TEST_F(RestLibrarySettingsTest, UrlWithRestPathPreservesBasePath) {
+    EXPECT_EQ(
+            restConfig::urlWithRestPath(
+                    QUrl(QStringLiteral("https://example.com/api")),
+                    QStringLiteral("/tracks"))
+                    .toString(),
+            QStringLiteral("https://example.com/api/tracks"));
+    EXPECT_EQ(
+            restConfig::urlWithRestPath(
+                    QUrl(QStringLiteral("https://example.com/api/")),
+                    QStringLiteral("tracks?limit=1"))
+                    .toString(),
+            QStringLiteral("https://example.com/api/tracks?limit=1"));
+    EXPECT_EQ(
+            restConfig::urlWithRestPath(
+                    QUrl(QStringLiteral("https://example.com")),
+                    QStringLiteral("/tracks"))
+                    .toString(),
+            QStringLiteral("https://example.com/tracks"));
+    EXPECT_EQ(
+            restConfig::urlWithRestPath(
+                    QUrl(QStringLiteral("https://example.com/api")),
+                    QStringLiteral("https://cdn.example.test/audio/1"))
+                    .toString(),
+            QStringLiteral("https://cdn.example.test/audio/1"));
+}

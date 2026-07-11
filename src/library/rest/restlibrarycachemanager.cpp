@@ -7,9 +7,14 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QJsonValue>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QStringList>
 
 #include "moc_restlibrarycachemanager.cpp"
 #include "util/logger.h"
@@ -40,6 +45,55 @@ QString responseSnippet(const QByteArray& body) {
     return snippet;
 }
 
+QString diagnosticStringFromValue(const QJsonValue& value) {
+    if (value.isString()) {
+        return value.toString();
+    }
+    if (value.isDouble()) {
+        return QString::number(value.toDouble());
+    }
+    if (value.isBool()) {
+        return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    }
+    if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        const QStringList keys{
+                QStringLiteral("message"),
+                QStringLiteral("reason"),
+                QStringLiteral("code"),
+                QStringLiteral("error")};
+        QStringList parts;
+        for (const QString& key : keys) {
+            const QString text = diagnosticStringFromValue(object.value(key));
+            if (!text.isEmpty()) {
+                parts.append(text);
+            }
+        }
+        return parts.join(QStringLiteral(": "));
+    }
+    return {};
+}
+
+QString errorTextFromResponse(const QByteArray& body) {
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        return {};
+    }
+    const QJsonObject object = document.object();
+    const QStringList keys{
+            QStringLiteral("detail"),
+            QStringLiteral("error"),
+            QStringLiteral("message")};
+    for (const QString& key : keys) {
+        const QString text = diagnosticStringFromValue(object.value(key));
+        if (!text.isEmpty()) {
+            return text;
+        }
+    }
+    return {};
+}
+
 } // namespace
 
 RestLibraryCacheManager::RestLibraryCacheManager(
@@ -49,6 +103,8 @@ RestLibraryCacheManager::RestLibraryCacheManager(
           m_pNetworkAccessManager(pNetworkAccessManager) {
     qRegisterMetaType<RestLibraryCacheResult>(
             "mixxx::library::rest::RestLibraryCacheResult");
+    qRegisterMetaType<RestLibraryRequestDiagnostic>(
+            "mixxx::library::rest::RestLibraryRequestDiagnostic");
 }
 
 RestLibraryCacheManager::~RestLibraryCacheManager() {
@@ -228,6 +284,7 @@ void RestLibraryCacheManager::startDownload(const RestLibraryTrack& track) {
     pReply->setParent(this);
     m_activeDownloads.push_back(ActiveDownload{
             track,
+            m_settings,
             QPointer<QNetworkReply>(pReply),
             pFile,
             tempFilePath,
@@ -270,6 +327,27 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
                     << pReply->errorString()
                     << "bytes written" << pDownload->bytesWritten
                     << "body" << responseSnippet(remainingBody);
+            RestLibraryRequestDiagnostic diagnostic;
+            diagnostic.stage = tr("Audio download");
+            diagnostic.method = QStringLiteral("GET");
+            diagnostic.url = pReply->request().url().toString(QUrl::RemoveUserInfo);
+            diagnostic.success = false;
+            diagnostic.statusCode = statusCode;
+            diagnostic.networkError = static_cast<int>(pReply->error());
+            diagnostic.errorText = pReply->error() == QNetworkReply::NoError
+                    ? errorTextFromResponse(remainingBody)
+                    : pReply->errorString();
+            diagnostic.responseSnippet = responseSnippet(remainingBody);
+            if (diagnostic.networkError != static_cast<int>(QNetworkReply::NoError) &&
+                    !diagnostic.errorText.isEmpty()) {
+                diagnostic.summary = tr("Audio download failed: %1.").arg(diagnostic.errorText);
+            } else if (diagnostic.statusCode > 0) {
+                diagnostic.summary = tr("Audio download failed with HTTP %1.")
+                                             .arg(diagnostic.statusCode);
+            } else {
+                diagnostic.summary = tr("Audio download failed.");
+            }
+            emit requestDiagnosticUpdated(diagnostic);
         } else {
             kLogger.warning() << "REST library audio download failed without a reply";
         }
@@ -286,7 +364,10 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
         return;
     }
 
-    const QString finalFilePath = finalCachedFilePath(pDownload->track, *pReply);
+    const QString finalFilePath = finalCachedFilePath(
+            pDownload->settings,
+            pDownload->track,
+            *pReply);
     if (finalFilePath.isEmpty()) {
         QFile::remove(pDownload->tempFilePath);
         emitState(
@@ -317,7 +398,7 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
     }
 
     if (QFileInfo(finalFilePath).size() >
-            static_cast<qint64>(m_settings.cacheMaxMegabytes) * kBytesPerMegabyte) {
+            static_cast<qint64>(pDownload->settings.cacheMaxMegabytes) * kBytesPerMegabyte) {
         QFile::remove(finalFilePath);
         emitState(
                 remoteId,
@@ -428,6 +509,7 @@ QString RestLibraryCacheManager::existingCachedFilePath(const QString& remoteId)
 }
 
 QString RestLibraryCacheManager::finalCachedFilePath(
+        const RestLibrarySettings& settings,
         const RestLibraryTrack& track,
         const QNetworkReply& reply) const {
     QString extension = normalizedExtension(track.audioFileExtension);
@@ -445,7 +527,7 @@ QString RestLibraryCacheManager::finalCachedFilePath(
     if (extension.isEmpty()) {
         return {};
     }
-    return QDir::fromNativeSeparators(QDir(m_settings.cacheDirectoryPath)
+    return QDir::fromNativeSeparators(QDir(settings.cacheDirectoryPath)
                                               .filePath(cacheFileStem(track.remoteId) +
                                                       QStringLiteral(".") +
                                                       extension));
@@ -553,9 +635,7 @@ QUrl RestLibraryCacheManager::urlWithPathTemplate(
         return templateUrl;
     }
 
-    QUrl url = settings.baseUrl;
-    url.setPath(path.startsWith(QLatin1Char('/')) ? path : QStringLiteral("/") + path);
-    return url;
+    return config::urlWithRestPath(settings.baseUrl, path);
 }
 
 } // namespace mixxx::library::rest

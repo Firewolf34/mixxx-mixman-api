@@ -59,6 +59,8 @@ class RestLibraryFeature final : public LibraryFeature {
             const mixxx::library::rest::RestLibrarySession& session);
     void slotMixManSessionWriteStatusUpdated(
             const mixxx::library::rest::RestLibrarySessionWriteStatus& status);
+    void slotRequestDiagnosticUpdated(
+            const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic);
     void slotSessionHeartbeat();
     void slotPolicyPresetChanged(const QString& presetKey);
     void slotTargetEnergyChanged(bool enabled, int energy);
@@ -127,6 +129,7 @@ class RestLibraryFeature final : public LibraryFeature {
     QString m_mixManSessionConfigKey;
     QString m_clientId;
     QString m_sessionStatusText;
+    QString m_requestDiagnosticText;
     QString m_statusText;
     int m_recommendationCount = 0;
     double m_averageQuality = 0.0;

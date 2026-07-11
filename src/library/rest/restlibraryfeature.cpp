@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMenu>
+#include <QNetworkReply>
 #include <QStringList>
 #include <QUrl>
 #include <QUuid>
@@ -102,6 +103,10 @@ RestLibraryFeature::RestLibraryFeature(
             this,
             &RestLibraryFeature::slotMixManSessionWriteStatusUpdated);
     connect(&m_client,
+            &RestLibraryClient::requestDiagnosticUpdated,
+            this,
+            &RestLibraryFeature::slotRequestDiagnosticUpdated);
+    connect(&m_client,
             &RestLibraryClient::fetchFailed,
             this,
             &RestLibraryFeature::slotFetchFailed);
@@ -109,6 +114,10 @@ RestLibraryFeature::RestLibraryFeature(
             &RestLibraryCacheManager::trackCacheStateChanged,
             this,
             &RestLibraryFeature::slotTrackCacheStateChanged);
+    connect(&m_cacheManager,
+            &RestLibraryCacheManager::requestDiagnosticUpdated,
+            this,
+            &RestLibraryFeature::slotRequestDiagnosticUpdated);
     connect(&PlayerInfo::instance(),
             &PlayerInfo::currentPlayingTrackChanged,
             this,
@@ -335,18 +344,24 @@ void RestLibraryFeature::slotDiagnosticsUpdated(const RestLibraryDiagnostics& di
     if (diagnostics.healthKnown) {
         m_diagnostics.healthKnown = true;
         m_diagnostics.healthOk = diagnostics.healthOk;
+        m_diagnostics.healthError = diagnostics.healthError;
     }
     if (diagnostics.indexKnown) {
         m_diagnostics.indexKnown = true;
         m_diagnostics.indexReady = diagnostics.indexReady;
         m_diagnostics.indexCount = diagnostics.indexCount;
         m_diagnostics.indexDimension = diagnostics.indexDimension;
+        m_diagnostics.indexError = diagnostics.indexError;
     }
     if (diagnostics.lastStatusCode > 0) {
         m_diagnostics.lastStatusCode = diagnostics.lastStatusCode;
     }
-    if (diagnostics.healthKnown || diagnostics.indexKnown) {
-        m_diagnostics.lastError = diagnostics.lastError;
+    if (!m_diagnostics.healthError.isEmpty()) {
+        m_diagnostics.lastError = m_diagnostics.healthError;
+    } else if (!m_diagnostics.indexError.isEmpty()) {
+        m_diagnostics.lastError = m_diagnostics.indexError;
+    } else if (diagnostics.healthKnown || diagnostics.indexKnown) {
+        m_diagnostics.lastError.clear();
     }
     updateDiagnosticsText();
 }
@@ -402,6 +417,15 @@ void RestLibraryFeature::slotMixManSessionFetched(const RestLibrarySession& sess
     if (session.authoritative.raw.isEmpty()) {
         return;
     }
+    if (m_authoritativeState.revision > 0 &&
+            session.authoritative.revision <= 0) {
+        return;
+    }
+    if (m_authoritativeState.revision > 0 &&
+            session.authoritative.revision > 0 &&
+            session.authoritative.revision < m_authoritativeState.revision) {
+        return;
+    }
 
     m_authoritativeState = session.authoritative;
     setPathSummary(m_authoritativeState.policyPath);
@@ -438,6 +462,33 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
                 : tr("Publishing session %1").arg(m_mixManSession.displayName);
         updateDiagnosticsText();
     }
+}
+
+void RestLibraryFeature::slotRequestDiagnosticUpdated(
+        const RestLibraryRequestDiagnostic& diagnostic) {
+    if (diagnostic.success) {
+        if (!m_requestDiagnosticText.isEmpty() &&
+                (diagnostic.stage == tr("Health check") ||
+                        diagnostic.stage == tr("Index status"))) {
+            m_requestDiagnosticText.clear();
+            updateDiagnosticsText();
+        }
+        return;
+    }
+
+    QStringList parts;
+    if (!diagnostic.summary.isEmpty()) {
+        parts.append(diagnostic.summary);
+    }
+    if (diagnostic.statusCode > 0) {
+        parts.append(tr("HTTP %1").arg(diagnostic.statusCode));
+    }
+    if (diagnostic.networkError != static_cast<int>(QNetworkReply::NoError) &&
+            !diagnostic.errorText.isEmpty()) {
+        parts.append(diagnostic.errorText);
+    }
+    m_requestDiagnosticText = parts.join(QStringLiteral(" | "));
+    updateDiagnosticsText();
 }
 
 void RestLibraryFeature::slotSessionHeartbeat() {
@@ -508,7 +559,11 @@ void RestLibraryFeature::slotLoadTrackToPlayerRequested(
     const QString remoteId = remoteIdForTrack(pTrack);
     if (!remoteId.isEmpty()) {
         rememberRemoteId(remoteId);
-        publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("loaded"));
+        publishMixManPlayback(
+                settings,
+                pTrack,
+                remoteId,
+                play ? QStringLiteral("playing") : QStringLiteral("loaded"));
     }
     emit loadTrackToPlayer(pTrack, group, play);
 }
@@ -620,6 +675,7 @@ void RestLibraryFeature::resetMixManSessionState() {
     m_authoritativeState = {};
     m_sessionCreateAttempted = false;
     m_sessionStatusText.clear();
+    m_requestDiagnosticText.clear();
     m_mixManSessionConfigKey.clear();
     m_sessionHeartbeatTimer.stop();
     updateDiagnosticsText();
@@ -795,6 +851,8 @@ void RestLibraryFeature::updateMixManIntent(const RestLibrarySettings& settings)
     intent.targetEnergy = settings.mixManTargetEnergyNormalized();
     intent.targetColorEnabled = settings.mixManTargetColorEnabled;
     intent.targetColor = settings.mixManTargetColor;
+    intent.targetBpmEnabled = settings.mixManTargetBpmEnabled;
+    intent.targetBpm = settings.mixManTargetBpm;
     intent.metadata = mixManSessionMetadata();
     m_client.updateMixManSessionIntent(settings, m_mixManSession.id, intent);
 }
@@ -837,6 +895,9 @@ QJsonObject RestLibraryFeature::mixManTrackSnapshot(
     }
     if (settings.mixManTargetColorEnabled && !settings.mixManTargetColor.trimmed().isEmpty()) {
         policy.insert(QStringLiteral("target_color"), settings.mixManTargetColor.trimmed());
+    }
+    if (settings.mixManTargetBpmEnabled) {
+        policy.insert(QStringLiteral("target_bpm"), settings.mixManTargetBpm);
     }
     snapshot.insert(QStringLiteral("policy"), policy);
 
@@ -903,6 +964,10 @@ void RestLibraryFeature::updateDiagnosticsText() {
     }
     if (!m_diagnostics.lastError.isEmpty()) {
         parts.append(m_diagnostics.lastError);
+    }
+    if (!m_requestDiagnosticText.isEmpty() &&
+            m_requestDiagnosticText != m_diagnostics.lastError) {
+        parts.append(m_requestDiagnosticText);
     }
     if (!m_sessionStatusText.isEmpty()) {
         parts.append(m_sessionStatusText);

@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QLineEdit>
+#include <QNetworkReply>
 #include <QPushButton>
 #include <QUrl>
 #include <utility>
@@ -15,6 +16,7 @@
 namespace {
 
 using mixxx::library::rest::RestLibrarySettings;
+using mixxx::library::rest::RestLibraryClient;
 namespace restConfig = mixxx::library::rest::config;
 
 bool isEmptyOrRemoteIdTemplate(const QString& pathTemplate) {
@@ -26,7 +28,8 @@ bool isEmptyOrRemoteIdTemplate(const QString& pathTemplate) {
 DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pConfig)
         : DlgPreferencePage(pParent),
           m_pUi(new Ui::DlgPrefRestLibraryDlg),
-          m_pConfig(std::move(pConfig)) {
+          m_pConfig(std::move(pConfig)),
+          m_connectionTestClient(&m_networkAccessManager, this) {
     m_pUi->setupUi(this);
 
     m_pUi->spinBoxPageSize->setRange(restConfig::kMinPageSize, restConfig::kMaxPageSize);
@@ -52,6 +55,10 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pCo
             &QPushButton::clicked,
             this,
             &DlgPrefRestLibrary::slotBrowseCacheDirectory);
+    connect(m_pUi->pushButtonTestConnection,
+            &QPushButton::clicked,
+            this,
+            &DlgPrefRestLibrary::slotTestConnection);
     connect(m_pUi->checkBoxCacheEnabled,
             &QCheckBox::toggled,
             this,
@@ -80,6 +87,14 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pCo
             &QLineEdit::textChanged,
             this,
             updateValidation);
+    connect(&m_connectionTestClient,
+            &RestLibraryClient::requestDiagnosticUpdated,
+            this,
+            &DlgPrefRestLibrary::slotConnectionDiagnosticUpdated);
+    connect(&m_connectionTestClient,
+            &RestLibraryClient::connectionTestFinished,
+            this,
+            &DlgPrefRestLibrary::slotConnectionTestFinished);
 
     setScrollSafeGuardForAllInputWidgets(this);
     slotUpdate();
@@ -203,6 +218,36 @@ void DlgPrefRestLibrary::slotUpdateValidationState() {
     m_pUi->labelValidationWarning->setVisible(!isInputValid());
 }
 
+void DlgPrefRestLibrary::slotTestConnection() {
+    slotUpdateValidationState();
+    m_connectionTestClient.invalidateMixManRequests();
+    m_connectionTestLines.clear();
+    if (!isInputValid()) {
+        appendConnectionTestLine(
+                tr("Configuration: FAIL - Fix the highlighted REST Library settings before testing."));
+        return;
+    }
+
+    m_pUi->pushButtonTestConnection->setEnabled(false);
+    appendConnectionTestLine(tr("Testing REST Library connection..."));
+    m_connectionTestClient.testMixManConnection(
+            settingsFromUi(),
+            {},
+            m_pUi->checkBoxTestConnectionCreateSession->isChecked());
+}
+
+void DlgPrefRestLibrary::slotConnectionDiagnosticUpdated(
+        const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic) {
+    appendConnectionTestLine(formatDiagnostic(diagnostic));
+}
+
+void DlgPrefRestLibrary::slotConnectionTestFinished(bool success) {
+    m_pUi->pushButtonTestConnection->setEnabled(true);
+    appendConnectionTestLine(success
+                    ? tr("Connection test passed.")
+                    : tr("Connection test failed."));
+}
+
 bool DlgPrefRestLibrary::isInputValid() const {
     if (!m_pUi->checkBoxEnabled->isChecked()) {
         return true;
@@ -226,6 +271,72 @@ bool DlgPrefRestLibrary::hasValidBaseUrl() const {
 
 bool DlgPrefRestLibrary::hasValidRemoteIdTemplate(const QString& pathTemplate) const {
     return isEmptyOrRemoteIdTemplate(pathTemplate);
+}
+
+RestLibrarySettings DlgPrefRestLibrary::settingsFromUi() const {
+    RestLibrarySettings settings;
+    settings.enabled = m_pUi->checkBoxEnabled->isChecked();
+    settings.baseUrl = QUrl(m_pUi->lineEditBaseUrl->text().trimmed());
+    settings.bearerToken = m_pUi->lineEditBearerToken->text();
+    settings.pageSize = m_pUi->spinBoxPageSize->value();
+    settings.useMixManDefaults = m_pUi->checkBoxUseMixManDefaults->isChecked();
+    settings.mixManPathDepth = m_pUi->spinBoxMixManPathDepth->value();
+    settings.mixManAdminApprovedOnly = m_pUi->checkBoxMixManAdminApprovedOnly->isChecked();
+    settings.recommendationLimit = m_pUi->spinBoxRecommendationLimit->value();
+    if (settings.useMixManDefaults) {
+        settings.trackListPath = restConfig::mixManTrackListPath();
+        settings.trackDetailPathTemplate = restConfig::mixManTrackDetailPathTemplate();
+        settings.trackLookupPathTemplate = restConfig::mixManTrackLookupPathTemplate();
+        settings.recommendationPathTemplate = restConfig::mixManRecommendationPathTemplate();
+        settings.audioDownloadPathTemplate = restConfig::mixManAudioDownloadPathTemplate();
+    } else {
+        settings.trackListPath = m_pUi->lineEditTrackListPath->text().trimmed();
+        settings.trackDetailPathTemplate =
+                m_pUi->lineEditTrackDetailPathTemplate->text().trimmed();
+        settings.trackLookupPathTemplate =
+                m_pUi->lineEditTrackLookupPathTemplate->text().trimmed();
+        settings.recommendationPathTemplate =
+                m_pUi->lineEditRecommendationPathTemplate->text().trimmed();
+        settings.audioDownloadPathTemplate =
+                m_pUi->lineEditAudioDownloadPathTemplate->text().trimmed();
+    }
+    return settings;
+}
+
+QString DlgPrefRestLibrary::formatDiagnostic(
+        const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic) const {
+    QStringList parts;
+    parts.append(QStringLiteral("%1: %2 - %3")
+                    .arg(
+                            diagnostic.stage,
+                            diagnostic.success ? tr("OK") : tr("FAIL"),
+                            diagnostic.summary));
+    if (!diagnostic.method.isEmpty() && !diagnostic.url.isEmpty()) {
+        parts.append(QStringLiteral("%1 %2").arg(diagnostic.method, diagnostic.url));
+    }
+    if (diagnostic.statusCode > 0) {
+        parts.append(tr("HTTP %1").arg(diagnostic.statusCode));
+    }
+    if (diagnostic.networkError != static_cast<int>(QNetworkReply::NoError) &&
+            !diagnostic.errorText.isEmpty()) {
+        parts.append(tr("Network error: %1").arg(diagnostic.errorText));
+    }
+    if (diagnostic.elapsedMillis > 0) {
+        parts.append(tr("%1 ms").arg(diagnostic.elapsedMillis));
+    }
+    if (!diagnostic.responseSnippet.isEmpty()) {
+        parts.append(tr("Response: %1").arg(diagnostic.responseSnippet));
+    }
+    return parts.join(QStringLiteral(" | "));
+}
+
+void DlgPrefRestLibrary::appendConnectionTestLine(const QString& line) {
+    if (line.isEmpty()) {
+        return;
+    }
+    m_connectionTestLines.append(line);
+    m_pUi->labelConnectionTestDetails->setText(
+            m_connectionTestLines.join(QStringLiteral("\n")));
 }
 
 void DlgPrefRestLibrary::writeSettings() {

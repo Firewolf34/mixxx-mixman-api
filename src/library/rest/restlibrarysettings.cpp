@@ -123,6 +123,37 @@ QString mixManSessionActionsPath(const QString& sessionId) {
     return QStringLiteral("/sessions/%1/actions").arg(sessionId);
 }
 
+QUrl urlWithRestPath(const QUrl& baseUrl, const QString& path) {
+    const QUrl pathUrl(path);
+    if (pathUrl.isValid() && !pathUrl.isRelative()) {
+        return pathUrl;
+    }
+
+    QUrl url = baseUrl;
+    const QString basePath = url.path();
+    const QString relativePath = pathUrl.path().isEmpty() ? path : pathUrl.path();
+    QString joinedPath;
+    if (relativePath.startsWith(QLatin1Char('/'))) {
+        joinedPath = basePath;
+        if (joinedPath.endsWith(QLatin1Char('/'))) {
+            joinedPath.chop(1);
+        }
+        joinedPath += relativePath;
+    } else {
+        joinedPath = basePath;
+        if (!joinedPath.endsWith(QLatin1Char('/'))) {
+            joinedPath += QLatin1Char('/');
+        }
+        joinedPath += relativePath;
+    }
+    if (joinedPath.isEmpty()) {
+        joinedPath = QStringLiteral("/");
+    }
+    url.setPath(joinedPath);
+    url.setQuery(pathUrl.query());
+    return url;
+}
+
 } // namespace config
 
 RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& pConfig) {
