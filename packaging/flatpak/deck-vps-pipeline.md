@@ -449,8 +449,8 @@ The infrastructure agent must:
 1. deploy the latest `total-infra` implementation containing the 2 GiB safety
    corrections, Actions, and the Caddy artifact route;
 2. inspect RAM, swap, disk, Docker usage, and memory pressure;
-3. attach sufficient provider storage and configure separate runner-data and
-   artifact filesystems, with at least 20 GiB and 4 GiB free respectively;
+3. attach at least 25 GiB provider storage and configure separate runner-data
+   and artifact filesystems, with at least 20 GiB and 4 GiB free respectively;
 4. require at least 512 MiB host swap and 1536 MiB free memory-plus-swap;
 5. validate `docker compose config` with and without the `mixxx-build` profile;
 6. recreate Forgejo and Caddy;

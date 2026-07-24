@@ -79,6 +79,8 @@ Before changing the deck pipeline, read:
   rather than bypassing preflight, raising concurrency, or using the deck.
 - Runner data and artifacts must be required bind mounts backed by separate
   provider-mounted filesystems, never Docker named volumes stored on `/`.
+- Request at least 25 GiB attached storage and retain the 20 GiB data plus
+  4 GiB artifact free-space gates after formatting.
 - Caddy mounts artifacts read-only.
 - Runner uses a dedicated network through Caddy and does not join the internal
   application/database network.

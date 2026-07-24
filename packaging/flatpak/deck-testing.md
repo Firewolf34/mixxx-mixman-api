@@ -31,12 +31,12 @@ https://forge.polinaria.world/mixxx-deck/builds/<source-sha>/
 
 `latest.json` is changed only after a successful build and validation.
 
-The current VPS has only 2 GiB RAM. The workflow therefore requires at least
-512 MiB host swap, 1536 MiB currently free memory-plus-swap, and 20 GiB free
-runner data disk, plus 4 GiB free on a separate artifact filesystem. The runner
-has a hard 1536 MiB combined RAM+swap ceiling. Flatpak Builder uses one job and
-a Release/no-debug, low-memory-linker manifest. If it OOMs, keep the ceiling
-and investigate; never fall back to the deck.
+The current VPS has only 2 GiB RAM. Provision at least 25 GiB attached storage.
+The workflow requires at least 512 MiB host swap, 1536 MiB currently free
+memory-plus-swap, 20 GiB free runner data disk, and 4 GiB free on a separate
+artifact filesystem. The runner has a hard 1536 MiB combined RAM+swap ceiling.
+Flatpak Builder uses one job and a Release/no-debug, low-memory-linker manifest.
+If it OOMs, keep the ceiling and investigate; never fall back to the deck.
 
 ## Laptop Setup
 
