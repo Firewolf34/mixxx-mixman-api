@@ -58,11 +58,11 @@ host job inside dedicated VPS container
         |
         | Flatpak build + OSTree validation + smoke test
         v
-Docker volume: mixxx-deck-artifacts
+provider-backed artifact bind mount
         |
         | read-only Caddy mount
         v
-https://polinaria.world/mixxx-deck/
+https://forge.polinaria.world/mixxx-deck/
         |
         | HTTPS manifest + immutable bundle
         v
@@ -79,7 +79,7 @@ tools/deck_flatpak_deploy.sh on the DJ laptop
 | Build/publish behavior | `tools/deck_flatpak_publish.sh` |
 | Deck behavior | `tools/deck_flatpak_deploy.sh` |
 | VPS orchestration | `andrew/total-infra`, branch `dev` |
-| Latest candidate | `https://polinaria.world/mixxx-deck/latest.json` |
+| Latest candidate | `https://forge.polinaria.world/mixxx-deck/latest.json` |
 | Immutable artifacts | `/mixxx-deck/builds/<source-sha>/` |
 | Flatpak app/ref | `app/org.mixxx.Mixxx/x86_64/master` |
 
@@ -142,7 +142,7 @@ The runner:
 - has no Docker socket;
 - is not privileged;
 - has no arbitrary container volume allowlist;
-- writes only its persistent data/cache volume and the artifact volume;
+- writes only its provider-backed data/cache and artifact bind mounts;
 - uses a dedicated bridge shared with Caddy;
 - does not join the internal application/database network;
 - restarts with `unless-stopped`.
@@ -157,7 +157,9 @@ publisher. It fails closed unless:
 
 - host swap totals at least 512 MiB;
 - current `MemAvailable + SwapFree` totals at least 1536 MiB;
-- the runner `/data` volume has at least 20 GiB free;
+- the runner `/data` filesystem has at least 20 GiB free;
+- the separate `/srv/mixxx-deck` artifact filesystem has at least 4 GiB free;
+- runner data and artifacts resolve to different filesystems;
 - the runner cgroup allows at least 1 GiB resident memory;
 - the runner cgroup allows at least 256 MiB swap;
 - numeric cgroup v2 RAM plus swap limits total no more than 1536 MiB.
@@ -175,13 +177,18 @@ manifest except for these intentional low-memory changes:
 - GNU BFD forced for executable and shared-library links;
 - `--no-keep-memory` makes BFD reread symbols instead of retaining them;
 - `--reduce-memory-overheads` selects slower, smaller linker data structures.
+- Source publication compression is restricted to one Zstandard worker.
 
 The normal manifest retains its existing developer/debug behavior.
 `tools/check_deck_flatpak_manifest.sh` normalizes the intentional deck-only
 differences and compares the result with the normal manifest. Both the workflow
 and publisher refuse to build if any other manifest content drifts.
 
-The artifact volume is writable by the runner and read-only in Caddy.
+The infrastructure uses two explicit, provider-backed bind mounts rather than
+Docker named volumes under `/`. Runner data is writable only by the runner.
+Artifacts are writable by the runner and mounted read-only in Caddy. Compose
+refuses to create missing host paths; the VPS operator must provide both
+dedicated mount paths in the ignored `.env`.
 
 ## Build And Publication Algorithm
 
@@ -235,10 +242,10 @@ A failure before step 19 leaves the previous `latest.json` unchanged.
 Public layout:
 
 ```text
-https://polinaria.world/mixxx-deck/latest.json
-https://polinaria.world/mixxx-deck/builds/<sha>/manifest.json
-https://polinaria.world/mixxx-deck/builds/<sha>/Mixxx.flatpak
-https://polinaria.world/mixxx-deck/builds/<sha>/source.tar.zst
+https://forge.polinaria.world/mixxx-deck/latest.json
+https://forge.polinaria.world/mixxx-deck/builds/<sha>/manifest.json
+https://forge.polinaria.world/mixxx-deck/builds/<sha>/Mixxx.flatpak
+https://forge.polinaria.world/mixxx-deck/builds/<sha>/source.tar.zst
 ```
 
 Caddy serves `latest.json` with `Cache-Control: no-store`. Build paths receive
@@ -260,8 +267,8 @@ Example:
   "source_sha": "<40-character-source-sha>",
   "source_ref": "refs/heads/deck/candidate",
   "built_at": "2026-07-24T00:00:00Z",
-  "bundle_url": "https://polinaria.world/mixxx-deck/builds/<source-sha>/Mixxx.flatpak",
-  "source_url": "https://polinaria.world/mixxx-deck/builds/<source-sha>/source.tar.zst",
+  "bundle_url": "https://forge.polinaria.world/mixxx-deck/builds/<source-sha>/Mixxx.flatpak",
+  "source_url": "https://forge.polinaria.world/mixxx-deck/builds/<source-sha>/source.tar.zst",
   "sha256": "<64 lowercase hex>",
   "source_sha256": "<64 lowercase hex>",
   "size_bytes": 123456789
@@ -395,7 +402,7 @@ Wait for **Deck Flatpak Build** to succeed.
 ### Public verification
 
 ```bash
-curl --fail https://polinaria.world/mixxx-deck/latest.json | jq .
+curl --fail https://forge.polinaria.world/mixxx-deck/latest.json | jq .
 ```
 
 Confirm the exact candidate SHA and contract fields.
@@ -442,18 +449,19 @@ The infrastructure agent must:
 1. deploy the latest `total-infra` implementation containing the 2 GiB safety
    corrections, Actions, and the Caddy artifact route;
 2. inspect RAM, swap, disk, Docker usage, and memory pressure;
-3. require at least 512 MiB host swap, 1536 MiB free memory-plus-swap, and
-   20 GiB free runner data disk;
-4. validate `docker compose config` with and without the `mixxx-build` profile;
-5. recreate Forgejo and Caddy;
-6. enable the Actions unit for `andrew/mixxx`;
-7. create a repository-scoped runner;
-8. store runner UUID/token in the ignored server `.env`;
-9. build and start `mixxx-runner`;
-10. verify label, isolation, volumes, networks, resource limits, and logs;
-11. manually dispatch the first build off-hours on `deck/candidate` if its push predates
+3. attach sufficient provider storage and configure separate runner-data and
+   artifact filesystems, with at least 20 GiB and 4 GiB free respectively;
+4. require at least 512 MiB host swap and 1536 MiB free memory-plus-swap;
+5. validate `docker compose config` with and without the `mixxx-build` profile;
+6. recreate Forgejo and Caddy;
+7. enable the Actions unit for `andrew/mixxx`;
+8. create a repository-scoped runner;
+9. store runner UUID/token in the ignored server `.env`;
+10. build and start `mixxx-runner`;
+11. verify label, isolation, mounts, networks, resource limits, and logs;
+12. manually dispatch the first build off-hours on `deck/candidate` if its push predates
    Actions enablement;
-12. watch host pressure and verify `latest.json` plus all immutable files.
+13. watch host pressure and verify `latest.json` plus all immutable files.
 
 See `docs/OPERATIONS.md` in the `andrew/total-infra` repository for exact
 server commands.
@@ -488,9 +496,9 @@ Public:
 
 ```bash
 curl --fail --dump-header - \
-  https://polinaria.world/mixxx-deck/latest.json
+  https://forge.polinaria.world/mixxx-deck/latest.json
 curl --fail --head \
-  https://polinaria.world/mixxx-deck/builds/<sha>/Mixxx.flatpak
+  https://forge.polinaria.world/mixxx-deck/builds/<sha>/Mixxx.flatpak
 ```
 
 Deck:
@@ -511,13 +519,14 @@ docker compose logs --tail=200 forgejo caddy
 docker compose exec caddy caddy validate --config /etc/caddy/Caddyfile
 ```
 
-Do not destroy or recreate named volumes as a troubleshooting shortcut.
+Do not destroy existing volumes or replace the required provider-backed mounts
+with root-backed Docker storage as a troubleshooting shortcut.
 
 ## Security Notes
 
 - Write access to `deck/candidate` is deployment authority.
 - Workflow code runs as the runner user inside the dedicated container and can
-  write the artifact volume.
+  write the artifact bind mount.
 - The outer container is the host-job isolation boundary.
 - The runner token is repository-scoped and must not be committed.
 - Caddy gets only read access to artifacts.

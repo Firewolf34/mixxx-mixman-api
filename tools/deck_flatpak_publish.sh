@@ -9,7 +9,7 @@ EXPECTED_REF="app/${APP_ID}/${EXPECTED_ARCH}/master"
 CHANNEL="deck-candidate"
 KEEP_BUILDS="${MIXXX_DECK_KEEP_BUILDS:-10}"
 PUBLISH_ROOT="${MIXXX_DECK_PUBLISH_ROOT:-}"
-PUBLIC_BASE_URL="${MIXXX_DECK_PUBLIC_BASE_URL:-https://polinaria.world/mixxx-deck}"
+PUBLIC_BASE_URL="${MIXXX_DECK_PUBLIC_BASE_URL:-https://forge.polinaria.world/mixxx-deck}"
 SOURCE_REF="${MIXXX_DECK_SOURCE_REF:-refs/heads/deck/candidate}"
 EVENT_SHA="${MIXXX_DECK_EVENT_SHA:-}"
 LOCK_FILE="${MIXXX_DECK_LOCK_FILE:-/data/locks/mixxx-deck-build.lock}"
@@ -112,7 +112,7 @@ timeout 30 flatpak build \
 
 SOURCE_ARCHIVE="${TEMP_DIR}/source.tar.zst"
 git archive --format=tar --prefix="mixxx-${SOURCE_SHA}/" HEAD |
-    zstd -T0 -19 -o "${SOURCE_ARCHIVE}"
+    zstd -T1 -19 -o "${SOURCE_ARCHIVE}"
 
 BUNDLE_SHA256="$(sha256sum "${BUNDLE_PATH}" | awk '{print $1}')"
 SOURCE_SHA256="$(sha256sum "${SOURCE_ARCHIVE}" | awk '{print $1}')"

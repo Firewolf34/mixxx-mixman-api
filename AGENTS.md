@@ -73,20 +73,22 @@ Before changing the deck pipeline, read:
   `tools/check_deck_flatpak_manifest.sh` must pass.
 - Require the hard-budget preflight: numeric cgroup v2 limits, no more than
   1536 MiB combined RAM+swap, at least 512 MiB host swap, 1536 MiB currently
-  free memory-plus-swap, and 20 GiB free runner data disk.
+  free memory-plus-swap, 20 GiB free runner data disk, and 4 GiB free artifact
+  disk.
 - Build off-hours. If the job OOMs, keep the hard ceiling and optimize the build
   rather than bypassing preflight, raising concurrency, or using the deck.
-- Persistent runner cache/data and artifact volumes are allowed.
+- Runner data and artifacts must be required bind mounts backed by separate
+  provider-mounted filesystems, never Docker named volumes stored on `/`.
 - Caddy mounts artifacts read-only.
 - Runner uses a dedicated network through Caddy and does not join the internal
   application/database network.
-- Preserve Docker named volumes. Never use `docker compose down -v`.
+- Preserve all existing Docker volumes. Never use `docker compose down -v`.
 - Server orchestration lives in `andrew/total-infra`, not in this repository.
 
 ## Client Invariants
 
 - Default manifest:
-  `https://polinaria.world/mixxx-deck/latest.json`
+  `https://forge.polinaria.world/mixxx-deck/latest.json`
 - Accept only HTTPS `latest.json` publication roots.
 - Validate schema, channel, app, architecture, source ref, SHA formats, size,
   and exact immutable URLs.

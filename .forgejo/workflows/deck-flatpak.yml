@@ -20,7 +20,7 @@ jobs:
       CCACHE_DIR: /data/ccache
       XDG_CACHE_HOME: /data/cache
       MIXXX_DECK_PUBLISH_ROOT: /srv/mixxx-deck
-      MIXXX_DECK_PUBLIC_BASE_URL: https://polinaria.world/mixxx-deck
+      MIXXX_DECK_PUBLIC_BASE_URL: https://forge.polinaria.world/mixxx-deck
       MIXXX_DECK_SOURCE_REF: ${{ forgejo.ref }}
       MIXXX_DECK_EVENT_SHA: ${{ forgejo.sha }}
       FLATPAK_BUILDER_JOBS: "1"
