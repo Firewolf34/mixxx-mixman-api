@@ -3,6 +3,10 @@
 The deck laptop is a resource-constrained DJ appliance. It downloads and runs
 VPS-built Flatpaks; it does not compile Mixxx or run heavyweight tests.
 
+For the complete architecture, manifest contract, runner isolation model,
+command semantics, one-time VPS bootstrap, failure recovery, and security
+notes, read [deck-vps-pipeline.md](deck-vps-pipeline.md).
+
 ## Source And Build
 
 Forgejo is the source of truth:
@@ -86,3 +90,10 @@ source revisions.
 If a laptop-specific issue cannot be reproduced from the artifact, collect the
 logs and debug it on the VPS or another development machine. Do not build Mixxx
 on the deck laptop.
+
+## Documentation Maintenance
+
+When the workflow, publisher, manifest, client, runner, Caddy route, retention,
+or safety behavior changes, update both this quick guide and
+`deck-vps-pipeline.md`. Server orchestration changes must also update
+`andrew/total-infra/docs/OPERATIONS.md`.
