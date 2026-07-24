@@ -59,6 +59,7 @@ for command_name in \
 done
 
 cd "${REPO_ROOT}"
+tools/check_deck_flatpak_manifest.sh
 tools/deck_build_preflight.sh
 SOURCE_SHA="$(git rev-parse --verify HEAD)"
 if [[ -n "${EVENT_SHA}" && "${SOURCE_SHA}" != "${EVENT_SHA}" ]]; then
@@ -73,7 +74,8 @@ exec 9>"${LOCK_FILE}"
 flock 9
 
 echo "Building ${APP_ID} from ${SOURCE_SHA}..."
-packaging/flatpak/flatpak_build.sh bundle
+packaging/flatpak/flatpak_build.sh bundle \
+    --manifest packaging/flatpak/org.mixxx.Mixxx.deck.yaml
 
 BUNDLE_PATH="${REPO_ROOT}/Mixxx.flatpak"
 [[ -s "${BUNDLE_PATH}" ]] || die "Flatpak bundle was not created."

@@ -135,8 +135,9 @@ The runner:
 - provides Node 24 for host JavaScript actions;
 - runs workflow steps in host mode inside a dedicated outer container;
 - runs on a VPS with only 2 GiB physical RAM alongside production services;
-- is limited to one CPU, 1400 MiB resident memory, a 5 GiB combined
-  memory/swap allowance, and 512 processes;
+- is limited to one CPU, 1152 MiB resident memory, 384 MiB swap, a hard
+  1536 MiB combined RAM+swap ceiling, and 512 processes;
+- runs at CPU niceness 15 and best-effort I/O priority 7;
 - handles one job at a time;
 - has no Docker socket;
 - is not privileged;
@@ -154,17 +155,31 @@ later builds. The workflow sets `FLATPAK_BUILDER_JOBS=1`, and
 `tools/deck_build_preflight.sh` runs before SDK setup and again from the
 publisher. It fails closed unless:
 
-- host swap totals at least 4 GiB;
-- current `MemAvailable + SwapFree` totals at least 3 GiB;
+- host swap totals at least 512 MiB;
+- current `MemAvailable + SwapFree` totals at least 1536 MiB;
 - the runner `/data` volume has at least 20 GiB free;
 - the runner cgroup allows at least 1 GiB resident memory;
-- the runner cgroup allows at least 3 GiB swap.
+- the runner cgroup allows at least 256 MiB swap;
+- numeric cgroup v2 RAM plus swap limits total no more than 1536 MiB.
 
 These gates make an attempt less dangerous; they do not guarantee that Mixxx
-will link successfully on a 2 GiB production host. Builds should run off-hours
-while an operator watches memory pressure and service health. If the host
-thrashes, OOMs, or degrades services, stop the runner and move builds to a
-larger or dedicated VPS.
+will link successfully within 1536 MiB. A failure should be contained inside
+the runner cgroup rather than thrashing through gigabytes of host swap.
+
+Deck publication uses `org.mixxx.Mixxx.deck.yaml`, synchronized with the normal
+manifest except for these intentional low-memory changes:
+
+- Release `-O2` build with no debug information;
+- Flatpak debug extraction disabled and binaries stripped;
+- interprocedural optimization/LTO explicitly disabled;
+- GNU BFD forced for executable and shared-library links;
+- `--no-keep-memory` makes BFD reread symbols instead of retaining them;
+- `--reduce-memory-overheads` selects slower, smaller linker data structures.
+
+The normal manifest retains its existing developer/debug behavior.
+`tools/check_deck_flatpak_manifest.sh` normalizes the intentional deck-only
+differences and compares the result with the normal manifest. Both the workflow
+and publisher refuse to build if any other manifest content drifts.
 
 The artifact volume is writable by the runner and read-only in Caddy.
 
@@ -427,8 +442,8 @@ The infrastructure agent must:
 1. deploy the latest `total-infra` implementation containing the 2 GiB safety
    corrections, Actions, and the Caddy artifact route;
 2. inspect RAM, swap, disk, Docker usage, and memory pressure;
-3. require at least 4 GiB swap, 3 GiB free memory-plus-swap, and 20 GiB free
-   runner data disk;
+3. require at least 512 MiB host swap, 1536 MiB free memory-plus-swap, and
+   20 GiB free runner data disk;
 4. validate `docker compose config` with and without the `mixxx-build` profile;
 5. recreate Forgejo and Caddy;
 6. enable the Actions unit for `andrew/mixxx`;
@@ -453,8 +468,9 @@ After bootstrap, routine builds require no server login.
 | Job is queued | repository runner is offline or label does not match |
 | Publisher rejects ref | manual dispatch selected a branch other than `deck/candidate` |
 | SDK/build dependency failure | diagnose VPS network/cache; never shift build to deck |
-| Low-memory preflight fails | add approved swap/headroom or move the runner; do not bypass |
-| Host thrashes/OOMs/services degrade | stop the runner and use a larger/dedicated VPS |
+| Hard-budget preflight fails | correct cgroup/headroom/disk configuration; do not bypass |
+| Build OOMs inside 1536 MiB | keep the ceiling and reduce build/link requirements further |
+| Host thrashes/services degrade | stop the runner; verify the cgroup ceiling is actually active |
 | OSTree check fails | bundle is not publishable |
 | Smoke test fails | binary is not publishable |
 | Existing SHA checksum differs | artifact integrity incident; do not overwrite |
@@ -520,6 +536,7 @@ When changing workflow, publisher, client, manifest, or infrastructure:
 - update `andrew/total-infra/docs/OPERATIONS.md` for server changes;
 - update deck-local `AGENTS.md` and operator docs for changed safety behavior;
 - run `bash -n` on shell scripts;
+- run `tools/check_deck_flatpak_manifest.sh`;
 - validate the Forgejo workflow schema;
 - run `git diff --check`;
 - perform the actual build only on the VPS runner;

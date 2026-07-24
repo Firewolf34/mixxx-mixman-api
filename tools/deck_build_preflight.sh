@@ -3,12 +3,14 @@
 
 set -euo pipefail
 
-MIN_SWAP_KIB="${MIXXX_BUILD_MIN_SWAP_KIB:-4194304}"
-MIN_HEADROOM_KIB="${MIXXX_BUILD_MIN_HEADROOM_KIB:-3145728}"
+MIN_SWAP_KIB="${MIXXX_BUILD_MIN_SWAP_KIB:-524288}"
+MIN_HEADROOM_KIB="${MIXXX_BUILD_MIN_HEADROOM_KIB:-1572864}"
 MIN_DATA_DISK_KIB="${MIXXX_BUILD_MIN_DATA_DISK_KIB:-20971520}"
 MIN_CGROUP_MEMORY_BYTES="${MIXXX_BUILD_MIN_CGROUP_MEMORY_BYTES:-1073741824}"
-MIN_CGROUP_SWAP_BYTES="${MIXXX_BUILD_MIN_CGROUP_SWAP_BYTES:-3221225472}"
+MIN_CGROUP_SWAP_BYTES="${MIXXX_BUILD_MIN_CGROUP_SWAP_BYTES:-268435456}"
+MAX_CGROUP_TOTAL_BYTES="${MIXXX_BUILD_MAX_CGROUP_TOTAL_BYTES:-1610612736}"
 DATA_PATH="${MIXXX_BUILD_DATA_PATH:-/data}"
+CGROUP_ROOT="${MIXXX_BUILD_CGROUP_ROOT:-/sys/fs/cgroup}"
 
 die() {
     echo "Error: $*" >&2
@@ -20,13 +22,16 @@ for value_name in \
         MIN_HEADROOM_KIB \
         MIN_DATA_DISK_KIB \
         MIN_CGROUP_MEMORY_BYTES \
-        MIN_CGROUP_SWAP_BYTES; do
+        MIN_CGROUP_SWAP_BYTES \
+        MAX_CGROUP_TOTAL_BYTES; do
     value="${!value_name}"
     [[ "${value}" =~ ^[1-9][0-9]*$ ]] ||
         die "${value_name} must be a positive integer."
 done
 [[ "${DATA_PATH}" == /* && -d "${DATA_PATH}" ]] ||
     die "MIXXX_BUILD_DATA_PATH must name an existing absolute directory."
+[[ "${CGROUP_ROOT}" == /* && -d "${CGROUP_ROOT}" ]] ||
+    die "MIXXX_BUILD_CGROUP_ROOT must name an existing absolute directory."
 
 mem_total_kib="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
 mem_available_kib="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)"
@@ -47,29 +52,26 @@ echo "Build data disk available at ${DATA_PATH}: ${data_disk_available_kib} KiB"
 ((data_disk_available_kib >= MIN_DATA_DISK_KIB)) ||
     die "At least ${MIN_DATA_DISK_KIB} KiB free at ${DATA_PATH} is required before building."
 
-if [[ -r /sys/fs/cgroup/memory.max ]]; then
-    cgroup_memory_max="$(</sys/fs/cgroup/memory.max)"
-    if [[ "${cgroup_memory_max}" != "max" ]]; then
-        [[ "${cgroup_memory_max}" =~ ^[0-9]+$ ]] ||
-            die "Unexpected cgroup memory.max value: ${cgroup_memory_max}"
-        ((cgroup_memory_max >= MIN_CGROUP_MEMORY_BYTES)) ||
-            die "Runner cgroup memory.max is below ${MIN_CGROUP_MEMORY_BYTES} bytes."
-    fi
-fi
-
-if [[ -r /sys/fs/cgroup/memory.swap.max ]]; then
-    cgroup_swap_max="$(</sys/fs/cgroup/memory.swap.max)"
-    if [[ "${cgroup_swap_max}" != "max" ]]; then
-        [[ "${cgroup_swap_max}" =~ ^[0-9]+$ ]] ||
-            die "Unexpected cgroup memory.swap.max value: ${cgroup_swap_max}"
-        ((cgroup_swap_max >= MIN_CGROUP_SWAP_BYTES)) ||
-            die "Runner cgroup swap allowance is below ${MIN_CGROUP_SWAP_BYTES} bytes."
-    fi
-fi
+[[ -r "${CGROUP_ROOT}/memory.max" && -r "${CGROUP_ROOT}/memory.swap.max" ]] ||
+    die "A cgroup v2 memory and swap limit is required."
+cgroup_memory_max="$(<"${CGROUP_ROOT}/memory.max")"
+cgroup_swap_max="$(<"${CGROUP_ROOT}/memory.swap.max")"
+[[ "${cgroup_memory_max}" =~ ^[0-9]+$ ]] ||
+    die "Runner cgroup memory.max must be a numeric limit, not ${cgroup_memory_max}."
+[[ "${cgroup_swap_max}" =~ ^[0-9]+$ ]] ||
+    die "Runner cgroup memory.swap.max must be a numeric limit, not ${cgroup_swap_max}."
+((cgroup_memory_max >= MIN_CGROUP_MEMORY_BYTES)) ||
+    die "Runner cgroup memory.max is below ${MIN_CGROUP_MEMORY_BYTES} bytes."
+((cgroup_swap_max >= MIN_CGROUP_SWAP_BYTES)) ||
+    die "Runner cgroup swap allowance is below ${MIN_CGROUP_SWAP_BYTES} bytes."
+cgroup_total_max=$((cgroup_memory_max + cgroup_swap_max))
+((cgroup_total_max <= MAX_CGROUP_TOTAL_BYTES)) ||
+    die "Runner cgroup RAM+swap budget ${cgroup_total_max} exceeds ${MAX_CGROUP_TOTAL_BYTES} bytes."
+echo "Runner cgroup budget: RAM=${cgroup_memory_max} swap=${cgroup_swap_max} total=${cgroup_total_max} bytes"
 
 if [[ -r /proc/pressure/memory ]]; then
     echo "Current memory pressure:"
     sed -n '1,2p' /proc/pressure/memory
 fi
 
-echo "Low-memory build preflight passed. Flatpak compilation must remain at one job."
+echo "Hard-budget build preflight passed. Flatpak compilation must remain at one job."

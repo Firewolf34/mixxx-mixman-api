@@ -64,13 +64,18 @@ Before changing the deck pipeline, read:
 - Host workflow steps run inside a dedicated outer container.
 - No Docker socket, privileged mode, or arbitrary volume mounts.
 - The current VPS has only 2 GiB physical RAM and also hosts production.
-- One concurrent job, one CPU, 1400-MiB resident-memory, 5-GiB combined
-  memory/swap, 512-PID, and three-hour limits.
+- One concurrent job, one CPU, 1152-MiB resident-memory, 384-MiB swap,
+  1536-MiB combined RAM+swap, 512-PID, and three-hour limits.
 - Flatpak Builder must run with one job.
-- Require the low-memory preflight: at least 4 GiB host swap and 3 GiB
-  currently free memory-plus-swap, plus 20 GiB free runner data disk.
-- Build off-hours and move to a larger/dedicated VPS if the host thrashes,
-  OOMs, or degrades services. Do not bypass the preflight or raise concurrency.
+- Deck candidates use the dedicated Release/no-debug manifest, GNU BFD
+  low-memory flags, disabled LTO, and inherited low CPU/I/O priority.
+- Keep `org.mixxx.Mixxx.deck.yaml` synchronized with the normal manifest.
+  `tools/check_deck_flatpak_manifest.sh` must pass.
+- Require the hard-budget preflight: numeric cgroup v2 limits, no more than
+  1536 MiB combined RAM+swap, at least 512 MiB host swap, 1536 MiB currently
+  free memory-plus-swap, and 20 GiB free runner data disk.
+- Build off-hours. If the job OOMs, keep the hard ceiling and optimize the build
+  rather than bypassing preflight, raising concurrency, or using the deck.
 - Persistent runner cache/data and artifact volumes are allowed.
 - Caddy mounts artifacts read-only.
 - Runner uses a dedicated network through Caddy and does not join the internal
@@ -107,8 +112,10 @@ Before changing the deck pipeline, read:
 5. Run lightweight validation:
 
    ```bash
-   bash -n tools/deck_build_preflight.sh \
-     tools/deck_flatpak_publish.sh tools/deck_flatpak_deploy.sh
+   bash -n tools/check_deck_flatpak_manifest.sh \
+     tools/deck_build_preflight.sh tools/deck_flatpak_publish.sh \
+     tools/deck_flatpak_deploy.sh
+   tools/check_deck_flatpak_manifest.sh
    forgejo-runner validate --workflow \
      --path .forgejo/workflows/deck-flatpak.yml
    git diff --check

@@ -33,7 +33,9 @@ jobs:
           submodules: recursive
 
       - name: Check low-memory VPS build headroom
-        run: tools/deck_build_preflight.sh
+        run: |
+          tools/check_deck_flatpak_manifest.sh
+          tools/deck_build_preflight.sh
 
       - name: Ensure the Flatpak SDK is available
         run: tools/flatpak_buildenv.sh setup --user
