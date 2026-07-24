@@ -64,8 +64,8 @@ Before changing the deck pipeline, read:
 - Host workflow steps run inside a dedicated outer container.
 - No Docker socket, privileged mode, or arbitrary volume mounts.
 - The current VPS has only 2 GiB physical RAM and also hosts production.
-- One concurrent job, one CPU, 1152-MiB resident-memory, 384-MiB swap,
-  1536-MiB combined RAM+swap, 512-PID, and three-hour limits.
+- One concurrent job, one CPU, 768-MiB resident-memory, 768-MiB swap,
+  1536-MiB combined RAM+swap, 512-PID, and 24-hour limits.
 - Flatpak Builder must run with one job.
 - Deck candidates use the dedicated Release/no-debug manifest, GNU BFD
   low-memory flags, disabled LTO, and inherited low CPU/I/O priority.
@@ -73,14 +73,17 @@ Before changing the deck pipeline, read:
   `tools/check_deck_flatpak_manifest.sh` must pass.
 - Require the hard-budget preflight: numeric cgroup v2 limits, no more than
   1536 MiB combined RAM+swap, at least 512 MiB host swap, 1536 MiB currently
-  free memory-plus-swap, 20 GiB free runner data disk, and 4 GiB free artifact
-  disk.
+  free memory-plus-swap, 15 GiB free runner data disk, 1 GiB free artifact
+  disk, and startup PSI within the encoded thresholds.
+- Run the publisher through `tools/deck_pressure_guard.sh`; severe PSI for one
+  minute must terminate the build.
 - Build off-hours. If the job OOMs, keep the hard ceiling and optimize the build
   rather than bypassing preflight, raising concurrency, or using the deck.
 - Runner data and artifacts must be required bind mounts backed by separate
   provider-mounted filesystems, never Docker named volumes stored on `/`.
-- Request at least 25 GiB attached storage and retain the 20 GiB data plus
-  4 GiB artifact free-space gates after formatting.
+- The fixed 25 GiB attached storage is sufficient only with shallow checkout,
+  runner-backed temporary data, a 512 MiB ccache, two retained builds, and
+  transient-work cleanup. Preserve those limits.
 - Caddy mounts artifacts read-only.
 - Runner uses a dedicated network through Caddy and does not join the internal
   application/database network.
@@ -117,8 +120,8 @@ Before changing the deck pipeline, read:
 
    ```bash
    bash -n tools/check_deck_flatpak_manifest.sh \
-     tools/deck_build_preflight.sh tools/deck_flatpak_publish.sh \
-     tools/deck_flatpak_deploy.sh
+     tools/deck_build_preflight.sh tools/deck_pressure_guard.sh \
+     tools/deck_flatpak_publish.sh tools/deck_flatpak_deploy.sh
    tools/check_deck_flatpak_manifest.sh
    forgejo-runner validate --workflow \
      --path .forgejo/workflows/deck-flatpak.yml

@@ -15,12 +15,16 @@ jobs:
   flatpak-x86_64:
     name: Build and publish x86_64 deck Flatpak
     runs-on: mixxx-flatpak-x86_64
-    timeout-minutes: 180
+    timeout-minutes: 1440
     env:
       CCACHE_DIR: /data/ccache
+      CCACHE_MAXSIZE: 512M
+      CCACHE_COMPRESS: "true"
       XDG_CACHE_HOME: /data/cache
+      TMPDIR: /data/tmp
       MIXXX_DECK_PUBLISH_ROOT: /srv/mixxx-deck
       MIXXX_DECK_PUBLIC_BASE_URL: https://forge.polinaria.world/mixxx-deck
+      MIXXX_DECK_KEEP_BUILDS: "2"
       MIXXX_DECK_SOURCE_REF: ${{ forgejo.ref }}
       MIXXX_DECK_EVENT_SHA: ${{ forgejo.sha }}
       FLATPAK_BUILDER_JOBS: "1"
@@ -29,8 +33,8 @@ jobs:
       - name: Check out the exact source commit
         uses: https://data.forgejo.org/actions/checkout@v6
         with:
-          fetch-depth: 0
-          submodules: recursive
+          fetch-depth: 1
+          submodules: false
 
       - name: Check low-memory VPS build headroom
         run: |
@@ -38,7 +42,13 @@ jobs:
           tools/deck_build_preflight.sh
 
       - name: Ensure the Flatpak SDK is available
-        run: tools/flatpak_buildenv.sh setup --user
+        run: tools/deck_pressure_guard.sh tools/flatpak_buildenv.sh setup --user
 
       - name: Build, validate, and publish
-        run: tools/deck_flatpak_publish.sh
+        run: tools/deck_pressure_guard.sh tools/deck_flatpak_publish.sh
+
+      - name: Remove transient build data
+        if: always()
+        run: |
+          ccache --cleanup || true
+          rm -rf -- build_flatpak flatpak_repo Mixxx.flatpak .flatpak-builder

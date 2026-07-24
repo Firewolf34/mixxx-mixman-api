@@ -118,9 +118,9 @@ The workflow selects the custom runner label:
 mixxx-flatpak-x86_64
 ```
 
-It has a 180-minute job timeout, checks out the exact Forgejo event SHA with
-history and submodules, installs the required Flatpak SDK for the runner user,
-and calls the publisher.
+It has a 24-hour job timeout, checks out a shallow copy of the exact Forgejo
+event SHA without unused submodules, installs the required Flatpak SDK for the
+runner user, and calls the publisher through the PSI pressure guard.
 
 The runner is repository-scoped so unrelated repositories cannot schedule
 work. It accepts one job at a time.
@@ -135,7 +135,7 @@ The runner:
 - provides Node 24 for host JavaScript actions;
 - runs workflow steps in host mode inside a dedicated outer container;
 - runs on a VPS with only 2 GiB physical RAM alongside production services;
-- is limited to one CPU, 1152 MiB resident memory, 384 MiB swap, a hard
+- is limited to one CPU, 768 MiB resident memory, 768 MiB swap, a hard
   1536 MiB combined RAM+swap ceiling, and 512 processes;
 - runs at CPU niceness 15 and best-effort I/O priority 7;
 - handles one job at a time;
@@ -157,16 +157,20 @@ publisher. It fails closed unless:
 
 - host swap totals at least 512 MiB;
 - current `MemAvailable + SwapFree` totals at least 1536 MiB;
-- the runner `/data` filesystem has at least 20 GiB free;
-- the separate `/srv/mixxx-deck` artifact filesystem has at least 4 GiB free;
+- the runner `/data` filesystem has at least 15 GiB free;
+- the separate `/srv/mixxx-deck` artifact filesystem has at least 1 GiB free;
 - runner data and artifacts resolve to different filesystems;
-- the runner cgroup allows at least 1 GiB resident memory;
-- the runner cgroup allows at least 256 MiB swap;
+- the runner cgroup allows at least 768 MiB resident memory;
+- the runner cgroup allows at least 768 MiB swap;
 - numeric cgroup v2 RAM plus swap limits total no more than 1536 MiB.
+- host PSI `some avg60` is no more than 5% and `full avg60` no more than 1.5%.
 
 These gates make an attempt less dangerous; they do not guarantee that Mixxx
 will link successfully within 1536 MiB. A failure should be contained inside
 the runner cgroup rather than thrashing through gigabytes of host swap.
+During the build, `tools/deck_pressure_guard.sh` samples host PSI every ten
+seconds. Six consecutive samples above either 60% `some avg10` or 20%
+`full avg10` terminate the build.
 
 Deck publication uses `org.mixxx.Mixxx.deck.yaml`, synchronized with the normal
 manifest except for these intentional low-memory changes:
@@ -177,7 +181,7 @@ manifest except for these intentional low-memory changes:
 - GNU BFD forced for executable and shared-library links;
 - `--no-keep-memory` makes BFD reread symbols instead of retaining them;
 - `--reduce-memory-overheads` selects slower, smaller linker data structures.
-- Source publication compression is restricted to one Zstandard worker.
+- Source publication compression uses one Zstandard worker at level 3.
 
 The normal manifest retains its existing developer/debug behavior.
 `tools/check_deck_flatpak_manifest.sh` normalizes the intentional deck-only
@@ -189,6 +193,16 @@ Docker named volumes under `/`. Runner data is writable only by the runner.
 Artifacts are writable by the runner and mounted read-only in Caddy. Compose
 refuses to create missing host paths; the VPS operator must provide both
 dedicated mount paths in the ignored `.env`.
+
+The fixed storage budget is made workable by:
+
+- checkout depth 1 with no unused submodules;
+- `/data/tmp` for temporary validation and archives instead of Docker `/tmp`;
+- a compressed 512 MiB ccache;
+- disabled Forgejo action caching for this runner;
+- two retained immutable server builds;
+- explicit cleanup of build trees, the temporary Flatpak repository, and
+  Flatpak Builder state after every job.
 
 ## Build And Publication Algorithm
 
@@ -449,8 +463,8 @@ The infrastructure agent must:
 1. deploy the latest `total-infra` implementation containing the 2 GiB safety
    corrections, Actions, and the Caddy artifact route;
 2. inspect RAM, swap, disk, Docker usage, and memory pressure;
-3. attach at least 25 GiB provider storage and configure separate runner-data
-   and artifact filesystems, with at least 20 GiB and 4 GiB free respectively;
+3. use the attached 25 GiB provider storage with separate runner-data and
+   artifact filesystems, with at least 15 GiB and 1 GiB free respectively;
 4. require at least 512 MiB host swap and 1536 MiB free memory-plus-swap;
 5. validate `docker compose config` with and without the `mixxx-build` profile;
 6. recreate Forgejo and Caddy;
@@ -476,7 +490,8 @@ After bootstrap, routine builds require no server login.
 | Job is queued | repository runner is offline or label does not match |
 | Publisher rejects ref | manual dispatch selected a branch other than `deck/candidate` |
 | SDK/build dependency failure | diagnose VPS network/cache; never shift build to deck |
-| Hard-budget preflight fails | correct cgroup/headroom/disk configuration; do not bypass |
+| Hard-budget preflight fails | correct cgroup/headroom/disk/PSI configuration; do not bypass |
+| PSI guard exits 75 | host pressure remained severe for one minute; let production recover before retrying |
 | Build OOMs inside 1536 MiB | keep the ceiling and reduce build/link requirements further |
 | Host thrashes/services degrade | stop the runner; verify the cgroup ceiling is actually active |
 | OSTree check fails | bundle is not publishable |
