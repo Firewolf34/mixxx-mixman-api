@@ -1,105 +1,88 @@
 # Deck Laptop Flatpak Testing
 
-This workflow is for testing LAN-built or GitHub-built Mixxx changes on a Debian laptop connected to DJ hardware. Keep the laptop focused on installing and running artifacts; avoid rebuilding Mixxx there unless you need to debug a laptop-only issue.
+The deck laptop is a resource-constrained DJ appliance. It downloads and runs
+VPS-built Flatpaks; it does not compile Mixxx or run heavyweight tests.
 
-## Build Artifact
+## Source And Build
 
-Keep the LAN repo as the source of truth:
+Forgejo is the source of truth:
 
-```bash
-git push blue codex/rest-library-phase1-2.5.6
+```text
+ssh://git@forge.polinaria.world:900/andrew/mixxx.git
 ```
 
-For a local Linux build machine:
+Promote an exact development commit to the deck channel:
 
 ```bash
-git fetch blue
-git switch codex/rest-library-phase1-2.5.6
-git pull --ff-only blue codex/rest-library-phase1-2.5.6
-tools/flatpak_buildenv.sh setup --system
-packaging/flatpak/flatpak_build.sh bundle
+git push origin HEAD:refs/heads/deck/candidate
 ```
 
-For the GitHub build mirror, add the fork as a remote once:
+Forgejo Actions builds the `x86_64` Flatpak on the isolated VPS runner, validates
+the OSTree bundle and Mixxx binary, then publishes immutable build files and
+corresponding source at:
 
-```bash
-git remote add github https://github.com/Firewolf34/mixxx-mixman-api.git
+```text
+https://polinaria.world/mixxx-deck/builds/<source-sha>/
 ```
 
-Then push the branch to GitHub and run the manual workflow:
-
-```bash
-git push github codex/rest-library-phase1-2.5.6
-```
-
-In GitHub, run **Actions > Deck Flatpak Build > Run workflow** for `codex/rest-library-phase1-2.5.6`, then download the `Mixxx-flatpak-x86_64` artifact. GitHub downloads artifacts as `.zip` files, so extract it first; the file inside is `Mixxx.flatpak`.
-
-Copy the resulting Flatpak artifact to the deck laptop:
-
-```bash
-Mixxx.flatpak
-```
-
-The matching `Debug.flatpak` artifact is only needed when you need debug symbols.
-
-If the build machine publishes named artifacts, use the `x86_64` bundle and keep the filename or commit hash with the test notes:
-
-```bash
-Mixxx-<git-description>-x86_64.flatpak
-```
+`latest.json` is changed only after a successful build and validation.
 
 ## Laptop Setup
 
-The laptop needs Flatpak, Flathub, and Mixxx's USB udev rules. From a Mixxx source checkout:
+From a current Mixxx checkout, install the lightweight client and USB rules:
 
 ```bash
 tools/deck_flatpak_deploy.sh setup
 ```
 
-Unplug and replug USB controllers after setup so the new udev rules apply.
+This installs `~/.local/bin/mixxx-deck`. Reconnect controllers after the first
+udev setup.
 
-## Install And Run
+## Stage, Activate, And Roll Back
 
-Install a copied Flatpak artifact:
-
-```bash
-tools/deck_flatpak_deploy.sh install ~/Downloads/mixxx-artifacts/Mixxx.flatpak
-```
-
-Launch Mixxx:
+Checking and staging are safe while Mixxx is running:
 
 ```bash
-tools/deck_flatpak_deploy.sh run
+mixxx-deck check
+mixxx-deck stage
 ```
 
-For the common one-step deploy loop:
+Activation is deliberately blocked while Mixxx runs. Stop Mixxx, then:
 
 ```bash
-tools/deck_flatpak_deploy.sh install-run ~/Downloads/mixxx-artifacts/Mixxx.flatpak
+mixxx-deck activate
+mixxx-deck run
 ```
 
-Check local setup state with:
+Before replacing a different installed build, activation exports it from the
+local Flatpak repository into the rollback cache. This does not compile Mixxx.
+
+The combined command still refuses to interrupt a running session:
 
 ```bash
-tools/deck_flatpak_deploy.sh status
+mixxx-deck deploy
 ```
 
-## Test Checklist
+Return to the previously cached build with:
 
-- Confirm Mixxx launches from the Flatpak.
+```bash
+mixxx-deck rollback
+```
+
+Use `mixxx-deck status` to show installed, staged, previous, and available
+source revisions.
+
+## Acceptance Checklist
+
+- Confirm the manifest and bundle identify the requested source commit.
+- Confirm Mixxx launches from the user Flatpak.
 - Confirm audio input and output devices appear.
 - Confirm decks and controllers are detected after reconnecting them.
-- Exercise the feature under test and note the artifact filename or source commit.
-- If a behavior differs from a source build, keep the artifact and run output for comparison.
+- Exercise the REST recommendation library, MixMan session steering, and
+  request diagnostics.
+- Verify rollback launches with the same library database and controller
+  configuration.
 
-## Source Build Fallback
-
-Only build on the laptop when artifact testing is not enough. Use the normal Debian build environment and keep the build directory for incremental rebuilds:
-
-```bash
-tools/debian_buildenv.sh setup
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DQT6=ON -DQML=ON -DBULK=ON -DFFMPEG=ON -DLOCALECOMPARE=ON -DMAD=ON -DMODPLUG=ON -DWAVPACK=ON -DINSTALL_USER_UDEV_RULES=OFF
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
-./build/mixxx
-```
+If a laptop-specific issue cannot be reproduced from the artifact, collect the
+logs and debug it on the VPS or another development machine. Do not build Mixxx
+on the deck laptop.
