@@ -13,6 +13,7 @@ PUBLIC_BASE_URL="${MIXXX_DECK_PUBLIC_BASE_URL:-https://polinaria.world/mixxx-dec
 SOURCE_REF="${MIXXX_DECK_SOURCE_REF:-refs/heads/deck/candidate}"
 EVENT_SHA="${MIXXX_DECK_EVENT_SHA:-}"
 LOCK_FILE="${MIXXX_DECK_LOCK_FILE:-/data/locks/mixxx-deck-build.lock}"
+BUILDER_JOBS="${FLATPAK_BUILDER_JOBS:-}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -38,6 +39,9 @@ fi
 if [[ "$(uname -m)" != "${EXPECTED_ARCH}" ]]; then
     die "This workflow must run on ${EXPECTED_ARCH}."
 fi
+if [[ "${BUILDER_JOBS}" != "1" ]]; then
+    die "FLATPAK_BUILDER_JOBS must be exactly 1 on the 2 GiB VPS."
+fi
 
 for command_name in \
         ccache \
@@ -55,6 +59,7 @@ for command_name in \
 done
 
 cd "${REPO_ROOT}"
+tools/deck_build_preflight.sh
 SOURCE_SHA="$(git rev-parse --verify HEAD)"
 if [[ -n "${EVENT_SHA}" && "${SOURCE_SHA}" != "${EVENT_SHA}" ]]; then
     die "Checked-out SHA ${SOURCE_SHA} does not match event SHA ${EVENT_SHA}."

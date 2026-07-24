@@ -63,7 +63,14 @@ Before changing the deck pipeline, read:
 - Use a repository-scoped Forgejo runner, not a global runner.
 - Host workflow steps run inside a dedicated outer container.
 - No Docker socket, privileged mode, or arbitrary volume mounts.
-- One concurrent job, four-CPU and 8-GiB container limits, three-hour timeout.
+- The current VPS has only 2 GiB physical RAM and also hosts production.
+- One concurrent job, one CPU, 1400-MiB resident-memory, 5-GiB combined
+  memory/swap, 512-PID, and three-hour limits.
+- Flatpak Builder must run with one job.
+- Require the low-memory preflight: at least 4 GiB host swap and 3 GiB
+  currently free memory-plus-swap, plus 20 GiB free runner data disk.
+- Build off-hours and move to a larger/dedicated VPS if the host thrashes,
+  OOMs, or degrades services. Do not bypass the preflight or raise concurrency.
 - Persistent runner cache/data and artifact volumes are allowed.
 - Caddy mounts artifacts read-only.
 - Runner uses a dedicated network through Caddy and does not join the internal
@@ -100,7 +107,8 @@ Before changing the deck pipeline, read:
 5. Run lightweight validation:
 
    ```bash
-   bash -n tools/deck_flatpak_publish.sh tools/deck_flatpak_deploy.sh
+   bash -n tools/deck_build_preflight.sh \
+     tools/deck_flatpak_publish.sh tools/deck_flatpak_deploy.sh
    forgejo-runner validate --workflow \
      --path .forgejo/workflows/deck-flatpak.yml
    git diff --check

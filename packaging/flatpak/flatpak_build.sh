@@ -27,6 +27,9 @@ FS_PERMISSIONS=("--filesystem=$(pwd)")
 # Default build options
 BUILD_OPTIONS=("--force-clean")
 
+# Optional global concurrency limit for constrained builders
+BUILDER_JOBS="${FLATPAK_BUILDER_JOBS:-}"
+
 # Prints usage information
 print_usage() {
     echo ""
@@ -190,6 +193,14 @@ check_commands "flatpak"
 check_flathub
 
 check_packages "${REQUIRED_PACKAGES[@]}"
+
+if [[ -n $BUILDER_JOBS ]]; then
+    if [[ ! $BUILDER_JOBS =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: FLATPAK_BUILDER_JOBS must be a positive integer." >&2
+        exit 1
+    fi
+    BUILD_OPTIONS+=("--jobs=$BUILDER_JOBS")
+fi
 
 if [[ $BUILDER == "org.flatpak.Builder" ]]; then
     check_packages "org.flatpak.Builder"

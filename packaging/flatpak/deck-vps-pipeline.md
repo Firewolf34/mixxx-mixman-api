@@ -134,7 +134,9 @@ The runner:
 - uses Forgejo Runner `12.7.3`, downloaded with a pinned SHA-256;
 - provides Node 24 for host JavaScript actions;
 - runs workflow steps in host mode inside a dedicated outer container;
-- is limited to four CPUs and 8 GiB RAM;
+- runs on a VPS with only 2 GiB physical RAM alongside production services;
+- is limited to one CPU, 1400 MiB resident memory, a 5 GiB combined
+  memory/swap allowance, and 512 processes;
 - handles one job at a time;
 - has no Docker socket;
 - is not privileged;
@@ -146,7 +148,23 @@ The runner:
 
 Persistent runner data includes Flatpak SDK/dependency state, ccache, action
 cache, and job work directories. A cold first build may be much slower than
-later builds.
+later builds. The workflow sets `FLATPAK_BUILDER_JOBS=1`, and
+`packaging/flatpak/flatpak_build.sh` passes that as `--jobs=1`.
+
+`tools/deck_build_preflight.sh` runs before SDK setup and again from the
+publisher. It fails closed unless:
+
+- host swap totals at least 4 GiB;
+- current `MemAvailable + SwapFree` totals at least 3 GiB;
+- the runner `/data` volume has at least 20 GiB free;
+- the runner cgroup allows at least 1 GiB resident memory;
+- the runner cgroup allows at least 3 GiB swap.
+
+These gates make an attempt less dangerous; they do not guarantee that Mixxx
+will link successfully on a 2 GiB production host. Builds should run off-hours
+while an operator watches memory pressure and service health. If the host
+thrashes, OOMs, or degrades services, stop the runner and move builds to a
+larger or dedicated VPS.
 
 The artifact volume is writable by the runner and read-only in Caddy.
 
@@ -156,35 +174,36 @@ The artifact volume is writable by the runner and read-only in Caddy.
 
 1. Validate absolute publication root, positive retention, `x86_64`, and exact
    candidate ref.
-2. Require build, Flatpak, Git, OSTree, checksum, compression, timeout, and
+2. Enforce the host/cgroup memory and swap preflight.
+3. Require build, Flatpak, Git, OSTree, checksum, compression, timeout, and
    locking tools.
-3. Resolve checked-out `HEAD` and compare it with the Forgejo event SHA.
-4. Reject tracked checkout modifications.
-5. Acquire a publication lock so concurrent jobs cannot race publication.
-6. Build `Mixxx.flatpak` with:
+4. Resolve checked-out `HEAD` and compare it with the Forgejo event SHA.
+5. Reject tracked checkout modifications.
+6. Acquire a publication lock so concurrent jobs cannot race publication.
+7. Build `Mixxx.flatpak` with one Flatpak Builder job:
 
    ```bash
    packaging/flatpak/flatpak_build.sh bundle
    ```
 
-7. Import the bundle into a temporary OSTree repository.
-8. Run `ostree fsck`.
-9. Require `app/org.mixxx.Mixxx/x86_64/master`.
-10. Require the bundle commit subject to identify the Git source SHA.
-11. Run a 30-second headless `/app/bin/mixxx --version` smoke test.
-12. Create a `git archive` source tarball compressed with Zstandard.
-13. Calculate bundle/source SHA-256 values and bundle byte length.
-14. Write manifest schema version 1.
-15. Atomically move files from a staging directory into the immutable build
+8. Import the bundle into a temporary OSTree repository.
+9. Run `ostree fsck`.
+10. Require `app/org.mixxx.Mixxx/x86_64/master`.
+11. Require the bundle commit subject to identify the Git source SHA.
+12. Run a 30-second headless `/app/bin/mixxx --version` smoke test.
+13. Create a `git archive` source tarball compressed with Zstandard.
+14. Calculate bundle/source SHA-256 values and bundle byte length.
+15. Write manifest schema version 1.
+16. Atomically move files from a staging directory into the immutable build
     directory.
-16. If the immutable directory already exists, require the bundle checksum to
+17. If the immutable directory already exists, require the bundle checksum to
     match.
-17. Query the remote candidate ref. If a newer candidate exists, retain this
+18. Query the remote candidate ref. If a newer candidate exists, retain this
     immutable build but do not promote it.
-18. Atomically replace `latest.json`.
-19. Retain the ten most recent server build directories by default.
+19. Atomically replace `latest.json`.
+20. Retain the ten most recent server build directories by default.
 
-A failure before step 18 leaves the previous `latest.json` unchanged.
+A failure before step 19 leaves the previous `latest.json` unchanged.
 
 ## Artifact Layout
 
@@ -405,18 +424,21 @@ Record the candidate SHA and logs. Fix forward with a new commit.
 
 The infrastructure agent must:
 
-1. deploy the `total-infra` implementation that enables Actions and the Caddy
-   artifact route;
-2. validate `docker compose config` with and without the `mixxx-build` profile;
-3. recreate Forgejo and Caddy;
-4. enable the Actions unit for `andrew/mixxx`;
-5. create a repository-scoped runner;
-6. store runner UUID/token in the ignored server `.env`;
-7. build and start `mixxx-runner`;
-8. verify label, isolation, volumes, networks, resource limits, and logs;
-9. manually dispatch the first build on `deck/candidate` if its push predates
+1. deploy the latest `total-infra` implementation containing the 2 GiB safety
+   corrections, Actions, and the Caddy artifact route;
+2. inspect RAM, swap, disk, Docker usage, and memory pressure;
+3. require at least 4 GiB swap, 3 GiB free memory-plus-swap, and 20 GiB free
+   runner data disk;
+4. validate `docker compose config` with and without the `mixxx-build` profile;
+5. recreate Forgejo and Caddy;
+6. enable the Actions unit for `andrew/mixxx`;
+7. create a repository-scoped runner;
+8. store runner UUID/token in the ignored server `.env`;
+9. build and start `mixxx-runner`;
+10. verify label, isolation, volumes, networks, resource limits, and logs;
+11. manually dispatch the first build off-hours on `deck/candidate` if its push predates
    Actions enablement;
-10. verify `latest.json` and all immutable files return HTTP 200.
+12. watch host pressure and verify `latest.json` plus all immutable files.
 
 See `docs/OPERATIONS.md` in the `andrew/total-infra` repository for exact
 server commands.
@@ -431,6 +453,8 @@ After bootstrap, routine builds require no server login.
 | Job is queued | repository runner is offline or label does not match |
 | Publisher rejects ref | manual dispatch selected a branch other than `deck/candidate` |
 | SDK/build dependency failure | diagnose VPS network/cache; never shift build to deck |
+| Low-memory preflight fails | add approved swap/headroom or move the runner; do not bypass |
+| Host thrashes/OOMs/services degrade | stop the runner and use a larger/dedicated VPS |
 | OSTree check fails | bundle is not publishable |
 | Smoke test fails | binary is not publishable |
 | Existing SHA checksum differs | artifact integrity incident; do not overwrite |

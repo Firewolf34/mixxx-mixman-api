@@ -23,6 +23,7 @@ jobs:
       MIXXX_DECK_PUBLIC_BASE_URL: https://polinaria.world/mixxx-deck
       MIXXX_DECK_SOURCE_REF: ${{ forgejo.ref }}
       MIXXX_DECK_EVENT_SHA: ${{ forgejo.sha }}
+      FLATPAK_BUILDER_JOBS: "1"
 
     steps:
       - name: Check out the exact source commit
@@ -30,6 +31,9 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+
+      - name: Check low-memory VPS build headroom
+        run: tools/deck_build_preflight.sh
 
       - name: Ensure the Flatpak SDK is available
         run: tools/flatpak_buildenv.sh setup --user

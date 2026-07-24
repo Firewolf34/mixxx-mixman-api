@@ -31,6 +31,12 @@ https://polinaria.world/mixxx-deck/builds/<source-sha>/
 
 `latest.json` is changed only after a successful build and validation.
 
+The current VPS has only 2 GiB RAM. The workflow therefore requires at least
+4 GiB host swap, 3 GiB currently free memory-plus-swap, and 20 GiB free runner
+data disk, then limits Flatpak Builder to one job. Run builds off-hours and move
+the runner to a larger host if it OOMs or harms production services; never fall
+back to building on the deck.
+
 ## Laptop Setup
 
 From a current Mixxx checkout, install the lightweight client and USB rules:
