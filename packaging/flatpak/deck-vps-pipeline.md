@@ -101,6 +101,21 @@ git push origin <candidate-sha>:refs/heads/deck/candidate
 The workflow triggers automatically for pushes to that branch. It also supports
 manual dispatch, but the dispatch must select `deck/candidate`.
 
+Forgejo Actions is the source of truth for build success or failure. Within
+roughly a minute of promotion, sign in at
+`https://forge.polinaria.world/andrew/mixxx/actions`, open the newest
+**Deck Flatpak Build**, and verify:
+
+- runner `mixxx-flatpak-x86_64`;
+- checkout SHA exactly equals the promoted candidate;
+- hard-budget preflight passed;
+- Flatpak Builder used one job;
+- no pressure-guard exit 75 or cgroup OOM;
+- final job state is **Success**.
+
+If no run appears, manually dispatch the workflow once with branch
+`deck/candidate`. Do not dispatch another branch or repeatedly enqueue retries.
+
 The publisher rejects any source ref other than:
 
 ```text
@@ -411,12 +426,24 @@ git show --stat <candidate-sha>
 git push origin <candidate-sha>:refs/heads/deck/candidate
 ```
 
-Wait for **Deck Flatpak Build** to succeed.
+Open the newest **Deck Flatpak Build** in Forgejo Actions and validate the
+runner, exact SHA, preflight, one-job build, absence of PSI/OOM termination,
+and final **Success** state. If the push did not create a run within roughly a
+minute, dispatch it once on `deck/candidate`.
 
 ### Public verification
 
 ```bash
+candidate_sha="<the successful deck/candidate SHA>"
+
 curl --fail https://forge.polinaria.world/mixxx-deck/latest.json | jq .
+curl --fail --head https://forge.polinaria.world/mixxx-deck/latest.json
+curl --fail --head \
+  "https://forge.polinaria.world/mixxx-deck/builds/${candidate_sha}/Mixxx.flatpak"
+curl --fail --head \
+  "https://forge.polinaria.world/mixxx-deck/builds/${candidate_sha}/manifest.json"
+curl --fail --head \
+  "https://forge.polinaria.world/mixxx-deck/builds/${candidate_sha}/source.tar.zst"
 ```
 
 Confirm the exact candidate SHA and contract fields.

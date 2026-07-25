@@ -31,6 +31,15 @@ https://forge.polinaria.world/mixxx-deck/builds/<source-sha>/
 
 `latest.json` is changed only after a successful build and validation.
 
+For every candidate push, sign in to
+`https://forge.polinaria.world/andrew/mixxx/actions`, open the newest
+**Deck Flatpak Build** run, and treat its final state as authoritative. A push
+should create the run automatically within roughly a minute. If it does not,
+dispatch the workflow once on `deck/candidate`; never select another branch.
+Confirm runner `mixxx-flatpak-x86_64`, the exact checkout SHA, successful
+hard-budget preflight, one Flatpak Builder job, no PSI exit 75 or cgroup OOM,
+and final **Success** before checking publication.
+
 Dependency sources are integrity-pinned. A source checksum failure must stop
 before compilation and be verified against the authoritative upstream tag; do
 not copy the received checksum into a manifest. Forge-generated archives whose
@@ -94,6 +103,8 @@ source revisions.
 
 ## Acceptance Checklist
 
+- Confirm the authoritative Forgejo Actions run finished **Success** for the
+  exact candidate SHA.
 - Confirm the manifest and bundle identify the requested source commit.
 - Confirm Mixxx launches from the user Flatpak.
 - Confirm audio input and output devices appear.

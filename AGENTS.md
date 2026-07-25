@@ -135,9 +135,12 @@ Before changing the deck pipeline, read:
 
 6. Run actual compilation and bundle validation only on the VPS runner.
 7. Promote an exact commit to `deck/candidate`.
-8. Verify the public manifest before staging.
-9. Stage before ending the DJ session.
-10. Activate only with explicit operator approval and retain rollback.
+8. Treat the newest **Deck Flatpak Build** run in Forgejo Actions as the build
+   authority. Confirm its checkout SHA, runner label, preflight, one-job build,
+   absence of PSI/OOM termination, and final **Success** state.
+9. Verify the public manifest and immutable files before staging.
+10. Stage before ending the DJ session.
+11. Activate only with explicit operator approval and retain rollback.
 
 ## Incident Defaults
 
