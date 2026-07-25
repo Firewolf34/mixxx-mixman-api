@@ -57,6 +57,11 @@ Before changing the deck pipeline, read:
 - Update `latest.json` atomically only after all validation passes.
 - Do not let a superseded job replace `latest.json`.
 - Treat an existing immutable-build checksum mismatch as an incident.
+- Treat a dependency source checksum mismatch as a supply-chain check, not a
+  value to copy from an error message. Compare the received tree with the
+  authoritative upstream tag or commit before changing a source pin. Prefer an
+  exact Git `commit` plus its human-readable `tag` over forge-generated source
+  archives whose bytes have proved unstable.
 
 ## Runner And Infrastructure Invariants
 
@@ -139,7 +144,10 @@ Before changing the deck pipeline, read:
 - If the public manifest is missing or invalid, keep the installed deck build.
 - If a workflow fails, diagnose the VPS runner; never fall back to compiling on
   the deck.
-- If a checksum fails, do not install the artifact.
+- If a dependency checksum fails, do not bypass it or blindly adopt the
+  received checksum. Verify the source tree against upstream and fix forward
+  with an immutable pin.
+- If a published artifact checksum fails, do not install the artifact.
 - If Mixxx is running, do not work around the activation interlock.
 - If candidate acceptance fails, close Mixxx, roll back, preserve logs, and fix
   forward with a new commit.

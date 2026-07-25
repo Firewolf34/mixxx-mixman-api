@@ -490,6 +490,7 @@ After bootstrap, routine builds require no server login.
 | Job is queued | repository runner is offline or label does not match |
 | Publisher rejects ref | manual dispatch selected a branch other than `deck/candidate` |
 | SDK/build dependency failure | diagnose VPS network/cache; never shift build to deck |
+| Dependency archive checksum fails | stop before compilation; compare its complete tree with the authoritative upstream tag/commit; never copy the received checksum blindly |
 | Hard-budget preflight fails | correct cgroup/headroom/disk/PSI configuration; do not bypass |
 | PSI guard exits 75 | host pressure remained severe for one minute; let production recover before retrying |
 | Build OOMs inside 1536 MiB | keep the ceiling and reduce build/link requirements further |
@@ -536,6 +537,31 @@ docker compose exec caddy caddy validate --config /etc/caddy/Caddyfile
 
 Do not destroy existing volumes or replace the required provider-backed mounts
 with root-backed Docker storage as a troubleshooting shortcut.
+
+### Dependency source integrity
+
+Flatpak verifies the bytes of every archive before extracting it. A forge may
+regenerate an automatic tag archive after a server or compression change even
+when the tagged Git tree has not changed. That produces a different archive
+SHA-256 and a safe build failure.
+
+Do not treat the checksum printed by the failure as the replacement value.
+Download from the authoritative upstream, resolve the advertised tag to its
+commit, and compare all extracted tracked files, file modes, and symlinks
+against that commit. If the trees differ, stop as a source-integrity incident.
+If they are identical, prefer changing the Flatpak source to `type: git` with
+both the exact commit and tag pinned. Flatpak Builder shallow-clones Git sources
+by default, so this is also suitable for small dependencies on the constrained
+runner.
+
+SoundTouch 2.4.0 is pinned this way because Codeberg regenerated
+`2.4.0.tar.gz`: the former archive SHA-256 was
+`3dda3c9ab1e287f15028c010a66ab7145fa855dfa62763538f341e70b4d10abd`,
+while the later archive was
+`b54ca9724afcf0b8c5326a0afb1b1676f2b892ee01c57d5312232ce4bc27a077`.
+Both extracted to the exact 124-file tree at official tag `2.4.0`, commit
+`d994965fbbcf0f6ceeed0e72516968130c2912f0`. The pipeline pins that commit
+instead of trusting either generated-archive byte representation.
 
 ## Security Notes
 

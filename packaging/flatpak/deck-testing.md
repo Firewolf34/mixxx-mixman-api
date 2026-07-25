@@ -31,6 +31,13 @@ https://forge.polinaria.world/mixxx-deck/builds/<source-sha>/
 
 `latest.json` is changed only after a successful build and validation.
 
+Dependency sources are integrity-pinned. A source checksum failure must stop
+before compilation and be verified against the authoritative upstream tag; do
+not copy the received checksum into a manifest. Forge-generated archives whose
+container bytes have proved unstable should be replaced with exact Git
+commit-plus-tag pins. This keeps the source immutable without compiling or
+investigating on the deck laptop.
+
 The current VPS has only 2 GiB RAM and fixed 25 GiB attached storage. The
 workflow requires at least 512 MiB host swap, 1536 MiB currently free
 memory-plus-swap, 15 GiB free runner data disk, and 1 GiB free on a separate
