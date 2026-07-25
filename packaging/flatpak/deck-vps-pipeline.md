@@ -140,6 +140,39 @@ runner user, and calls the publisher through the PSI pressure guard.
 The runner is repository-scoped so unrelated repositories cannot schedule
 work. It accepts one job at a time.
 
+### Authenticated Actions API client
+
+Forgejo Actions runs are available from the repository API. The deck client
+helper uses the live `/api/v1/repos/andrew/mixxx/actions/runs` and
+`/actions/tasks` endpoints to select the exact candidate SHA, and the workflow
+dispatch endpoint for the explicit fallback. `wait` accepts success only for
+that SHA and then verifies the public manifest plus all three immutable files.
+
+```bash
+tools/deck_forgejo_actions.sh configure
+tools/deck_forgejo_actions.sh runs
+tools/deck_forgejo_actions.sh status <candidate-sha>
+tools/deck_forgejo_actions.sh tasks <candidate-sha>
+tools/deck_forgejo_actions.sh wait <candidate-sha>
+tools/deck_forgejo_actions.sh dispatch
+tools/deck_forgejo_actions.sh publication <candidate-sha>
+```
+
+Forgejo is configured to reject anonymous API calls. Create a scoped user token
+at **Settings → Applications** with repository access limited to
+`andrew/mixxx`. Use `read:repository` for monitoring. Grant
+`write:repository` only when autonomous manual dispatch is required. The
+interactive `configure` command stores the token at
+`~/.config/mixxx-deck/forgejo-api-token`, requires mode 0600, and validates it
+without placing the value in Git, shell history, or curl's command-line
+arguments.
+
+The Forgejo 15 REST schema reports authoritative run and task state but does
+not publish a raw job-log endpoint. A successful exact-SHA run plus complete
+immutable publication is machine-verifiable. If a run fails, use its returned
+`html_url` for the signed-in log view or obtain the isolated runner log from
+the VPS operator.
+
 ## Runner Isolation And Persistence
 
 The VPS implementation is versioned in `andrew/total-infra`.

@@ -40,6 +40,22 @@ Confirm runner `mixxx-flatpak-x86_64`, the exact checkout SHA, successful
 hard-budget preflight, one Flatpak Builder job, no PSI exit 75 or cgroup OOM,
 and final **Success** before checking publication.
 
+For unattended status and publication verification, configure the repository
+client once and then query or wait on the exact candidate:
+
+```bash
+tools/deck_forgejo_actions.sh configure
+tools/deck_forgejo_actions.sh status <candidate-sha>
+tools/deck_forgejo_actions.sh tasks <candidate-sha>
+tools/deck_forgejo_actions.sh wait <candidate-sha>
+```
+
+Create the token in Forgejo user settings with access restricted specifically
+to `andrew/mixxx`. `read:repository` supports inspection; use
+`write:repository` only if this client must also perform the manual
+`dispatch` fallback. The token is stored outside Git in
+`~/.config/mixxx-deck/forgejo-api-token` with mode 0600.
+
 Dependency sources are integrity-pinned. A source checksum failure must stop
 before compilation and be verified against the authoritative upstream tag; do
 not copy the received checksum into a manifest. Forge-generated archives whose

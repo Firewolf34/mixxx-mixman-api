@@ -11,6 +11,8 @@ Before changing the deck pipeline, read:
 - `.forgejo/workflows/deck-flatpak.yml` — Forgejo build trigger.
 - `tools/deck_flatpak_publish.sh` — VPS build/validation/publication behavior.
 - `tools/deck_flatpak_deploy.sh` — laptop staging/activation/rollback behavior.
+- `tools/deck_forgejo_actions.sh` — authenticated Actions status, waiting,
+  dispatch, and publication validation.
 
 ## Source And Deployment Authority
 
@@ -62,6 +64,8 @@ Before changing the deck pipeline, read:
   authoritative upstream tag or commit before changing a source pin. Prefer an
   exact Git `commit` plus its human-readable `tag` over forge-generated source
   archives whose bytes have proved unstable.
+- Store any Forgejo API token outside the repository with mode 0600. Use a
+  token restricted to `andrew/mixxx`; never print, log, or commit it.
 
 ## Runner And Infrastructure Invariants
 
@@ -126,7 +130,8 @@ Before changing the deck pipeline, read:
    ```bash
    bash -n tools/check_deck_flatpak_manifest.sh \
      tools/deck_build_preflight.sh tools/deck_pressure_guard.sh \
-     tools/deck_flatpak_publish.sh tools/deck_flatpak_deploy.sh
+     tools/deck_flatpak_publish.sh tools/deck_flatpak_deploy.sh \
+     tools/deck_forgejo_actions.sh
    tools/check_deck_flatpak_manifest.sh
    forgejo-runner validate --workflow \
      --path .forgejo/workflows/deck-flatpak.yml
