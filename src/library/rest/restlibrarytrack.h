@@ -39,6 +39,8 @@ struct RestLibraryTrack {
     QString audioFileExtension;
     QString cachedFilePath;
     QString cacheError;
+    int cacheStatusCode = 0;
+    int cacheNetworkError = 0;
     double quality = 0.0;
     double score = 0.0;
     double transitionFit = 0.0;

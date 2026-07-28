@@ -40,6 +40,7 @@ class MockNetworkReply : public QNetworkReply {
 
     // Use these to set expectations.
     void SetData(const QByteArray& data);
+    void SetRequest(const QNetworkRequest& request);
     virtual void setAttribute(QNetworkRequest::Attribute code, const QVariant& value);
 
     // Call this when you are ready for the finished() signal.

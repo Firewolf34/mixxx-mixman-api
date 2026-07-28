@@ -71,11 +71,25 @@
        <widget class="QLineEdit" name="lineEditBearerToken"/>
       </item>
       <item row="2" column="0">
-       <widget class="QPushButton" name="pushButtonTestConnection">
-        <property name="text">
-         <string>Test Connection</string>
-        </property>
-       </widget>
+       <layout class="QHBoxLayout" name="horizontalLayoutConnectionTestButtons">
+        <item>
+         <widget class="QPushButton" name="pushButtonTestConnection">
+          <property name="text">
+           <string>Test Connection</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="pushButtonCancelConnectionTest">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="text">
+           <string>Cancel</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </item>
       <item row="2" column="1">
        <widget class="QCheckBox" name="checkBoxTestConnectionCreateSession">
@@ -84,16 +98,48 @@
         </property>
        </widget>
       </item>
-      <item row="3" column="1">
-       <widget class="QLabel" name="labelConnectionTestDetails">
-        <property name="text">
-         <string/>
+      <item row="3" column="0" colspan="2">
+       <widget class="QTreeWidget" name="treeWidgetConnectionTestResults">
+        <property name="rootIsDecorated">
+         <bool>false</bool>
         </property>
-        <property name="wordWrap">
+        <property name="alternatingRowColors">
          <bool>true</bool>
         </property>
-        <property name="textInteractionFlags">
-         <set>Qt::TextSelectableByMouse</set>
+        <column>
+         <property name="text">
+          <string>Stage</string>
+         </property>
+        </column>
+        <column>
+         <property name="text">
+          <string>Result</string>
+         </property>
+        </column>
+        <column>
+         <property name="text">
+          <string>HTTP</string>
+         </property>
+        </column>
+        <column>
+         <property name="text">
+          <string>Time</string>
+         </property>
+        </column>
+        <column>
+         <property name="text">
+          <string>Summary</string>
+         </property>
+        </column>
+       </widget>
+      </item>
+      <item row="4" column="0" colspan="2">
+       <widget class="QPlainTextEdit" name="plainTextEditConnectionTestDetails">
+        <property name="readOnly">
+         <bool>true</bool>
+        </property>
+        <property name="placeholderText">
+         <string>Select a connection test result for details.</string>
         </property>
        </widget>
       </item>

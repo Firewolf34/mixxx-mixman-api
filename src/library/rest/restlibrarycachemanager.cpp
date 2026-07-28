@@ -301,7 +301,13 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
         return;
     }
 
-    slotReadyRead();
+    const int statusCode = pReply ? statusCodeFromReply(*pReply) : 0;
+    const bool replyMayContainAudio = pReply &&
+            pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(statusCode);
+    if (replyMayContainAudio) {
+        slotReadyRead();
+    }
     if (pDownload->pFile) {
         pDownload->pFile->close();
     }
@@ -310,14 +316,12 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
     }
 
     const QString remoteId = pDownload->track.remoteId;
-    const int statusCode = pReply ? statusCodeFromReply(*pReply) : 0;
     const QByteArray remainingBody = pReply ? pReply->readAll() : QByteArray();
-    const bool success = pReply &&
-            pReply->error() == QNetworkReply::NoError &&
-            isSuccessStatus(statusCode) &&
-            pDownload->bytesWritten > 0;
+    const bool success = replyMayContainAudio && pDownload->bytesWritten > 0;
 
     if (!success) {
+        QString failureSummary = tr("Audio download failed.");
+        int networkError = 0;
         if (pReply) {
             kLogger.warning()
                     << "REST library audio download failed"
@@ -334,6 +338,7 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
             diagnostic.success = false;
             diagnostic.statusCode = statusCode;
             diagnostic.networkError = static_cast<int>(pReply->error());
+            networkError = diagnostic.networkError;
             diagnostic.errorText = pReply->error() == QNetworkReply::NoError
                     ? errorTextFromResponse(remainingBody)
                     : pReply->errorString();
@@ -341,12 +346,15 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
             if (diagnostic.networkError != static_cast<int>(QNetworkReply::NoError) &&
                     !diagnostic.errorText.isEmpty()) {
                 diagnostic.summary = tr("Audio download failed: %1.").arg(diagnostic.errorText);
+            } else if (!diagnostic.errorText.isEmpty()) {
+                diagnostic.summary = tr("Audio download failed: %1.").arg(diagnostic.errorText);
             } else if (diagnostic.statusCode > 0) {
                 diagnostic.summary = tr("Audio download failed with HTTP %1.")
                                              .arg(diagnostic.statusCode);
             } else {
                 diagnostic.summary = tr("Audio download failed.");
             }
+            failureSummary = diagnostic.summary;
             emit requestDiagnosticUpdated(diagnostic);
         } else {
             kLogger.warning() << "REST library audio download failed without a reply";
@@ -356,7 +364,9 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
                 remoteId,
                 RestLibraryCacheState::Failed,
                 {},
-                tr("Audio download failed."));
+                failureSummary,
+                statusCode,
+                networkError);
         cleanupActiveDownload(pDownload);
         removeActiveDownload(remoteId);
         m_knownPendingRemoteIds.remove(remoteId);
@@ -537,12 +547,16 @@ void RestLibraryCacheManager::emitState(
         const QString& remoteId,
         RestLibraryCacheState cacheState,
         const QString& cachedFilePath,
-        const QString& errorText) {
+        const QString& errorText,
+        int statusCode,
+        int networkError) {
     emit trackCacheStateChanged(RestLibraryCacheResult{
             remoteId,
             cacheState,
             QDir::fromNativeSeparators(cachedFilePath),
-            errorText});
+            errorText,
+            statusCode,
+            networkError});
 }
 
 void RestLibraryCacheManager::cleanupActiveDownload(ActiveDownload* pDownload) {

@@ -387,8 +387,11 @@ TEST(RestLibraryClientTest, EmitsDiagnosticForAuthFailure) {
     EXPECT_TRUE(diagnostic.url.contains(QStringLiteral("/configured-list")));
     EXPECT_FALSE(diagnostic.url.contains(QStringLiteral("secret")));
     EXPECT_TRUE(diagnostic.responseSnippet.contains(QStringLiteral("bad token")));
+    EXPECT_TRUE(diagnostic.summary.contains(QStringLiteral("Authentication failed")));
     ASSERT_EQ(failedSpy.count(), 1);
-    EXPECT_TRUE(failedSpy.takeFirst().at(0).toString().contains(QStringLiteral("401")));
+    const QString failureMessage = failedSpy.takeFirst().at(0).toString();
+    EXPECT_TRUE(failureMessage.contains(QStringLiteral("Authentication failed")));
+    EXPECT_TRUE(failureMessage.contains(QStringLiteral("401")));
 }
 
 TEST(RestLibraryClientTest, ReportsMalformedOrEmptyPayload) {
@@ -527,6 +530,24 @@ TEST(RestLibraryClientTest, TestMixManConnectionReportsNetworkError) {
     EXPECT_NE(diagnostic.networkError, static_cast<int>(QNetworkReply::NoError));
     ASSERT_EQ(finishedSpy.count(), 1);
     EXPECT_FALSE(finishedSpy.takeFirst().at(0).toBool());
+}
+
+TEST(RestLibraryClientTest, CancelMixManConnectionTestIgnoresActiveReply) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client, &RestLibraryClient::requestDiagnosticUpdated);
+    QSignalSpy finishedSpy(&client, &RestLibraryClient::connectionTestFinished);
+    network.ExpectGet(
+            QStringLiteral("/health"),
+            {},
+            200,
+            R"json({"ok":true})json");
+
+    client.testMixManConnection(newMixManSettings());
+    client.cancelMixManConnectionTest();
+
+    EXPECT_EQ(diagnosticsSpy.count(), 0);
+    EXPECT_EQ(finishedSpy.count(), 0);
 }
 
 TEST(RestLibraryClientTest, IgnoresStaleMixManConnectionTestReply) {

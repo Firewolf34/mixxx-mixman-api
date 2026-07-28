@@ -810,6 +810,7 @@ void RestLibraryClient::testMixManConnection(
         const RestLibrarySettings& settings,
         const QString& clientId,
         bool createSession) {
+    cancelMixManConnectionTest();
     ++m_connectionTestRequestGeneration;
     m_connectionTestSettings = settings;
     m_connectionTestClientId = clientId.trimmed().isEmpty()
@@ -844,6 +845,22 @@ void RestLibraryClient::testMixManConnection(
             &QNetworkReply::finished,
             this,
             &RestLibraryClient::slotConnectionTestHealthFinished);
+}
+
+void RestLibraryClient::cancelMixManConnectionTest() {
+    ++m_connectionTestRequestGeneration;
+    const QVector<QPointer<QNetworkReply>> replies = m_connectionTestReplies;
+    m_connectionTestReplies.clear();
+    for (const auto& reply : replies) {
+        if (!reply) {
+            continue;
+        }
+        if (!reply->isFinished()) {
+            reply->abort();
+        }
+        reply->deleteLater();
+    }
+    m_connectionTestFailed = false;
 }
 
 void RestLibraryClient::invalidateMixManRequests() {
@@ -906,6 +923,7 @@ QNetworkReply* RestLibraryClient::startConnectionTestGet(
     pReply->setProperty(kRequestGenerationProperty, m_connectionTestRequestGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     pReply->setProperty(kRequestStageProperty, stage);
+    m_connectionTestReplies.append(QPointer<QNetworkReply>(pReply));
     return pReply;
 }
 
@@ -920,6 +938,7 @@ QNetworkReply* RestLibraryClient::startConnectionTestPost(
     pReply->setProperty(kRequestGenerationProperty, m_connectionTestRequestGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     pReply->setProperty(kRequestStageProperty, stage);
+    m_connectionTestReplies.append(QPointer<QNetworkReply>(pReply));
     return pReply;
 }
 
@@ -990,11 +1009,51 @@ QString RestLibraryClient::diagnosticSummary(
                 ? tr("%1 succeeded (%2).").arg(diagnostic.stage).arg(diagnostic.statusCode)
                 : tr("%1 succeeded.").arg(diagnostic.stage);
     }
-    if (diagnostic.networkError != static_cast<int>(QNetworkReply::NoError) &&
-            !diagnostic.errorText.isEmpty()) {
-        return tr("%1 failed: %2.").arg(diagnostic.stage, diagnostic.errorText);
+    if (diagnostic.networkError == static_cast<int>(QNetworkReply::OperationCanceledError)) {
+        return tr("%1 was canceled.").arg(diagnostic.stage);
+    }
+    if (diagnostic.networkError == static_cast<int>(QNetworkReply::TimeoutError)) {
+        return tr("%1 timed out.").arg(diagnostic.stage);
+    }
+    if (diagnostic.networkError != static_cast<int>(QNetworkReply::NoError)) {
+        return diagnostic.errorText.isEmpty()
+                ? tr("%1 failed because of a network error.").arg(diagnostic.stage)
+                : tr("%1 failed because of a network error: %2.")
+                          .arg(diagnostic.stage, diagnostic.errorText);
     }
     if (diagnostic.statusCode > 0 && !isSuccessStatus(diagnostic.statusCode)) {
+        QString category;
+        switch (diagnostic.statusCode) {
+        case 401:
+            category = tr("Authentication failed");
+            break;
+        case 403:
+            category = tr("Permission denied");
+            break;
+        case 404:
+            category = tr("Endpoint not found");
+            break;
+        case 409:
+            category = tr("MixMan conflict");
+            break;
+        default:
+            if (diagnostic.statusCode >= 500) {
+                category = tr("Server error");
+            }
+            break;
+        }
+        if (!category.isEmpty()) {
+            return diagnostic.errorText.isEmpty()
+                    ? tr("%1: %2 (HTTP %3).")
+                              .arg(diagnostic.stage)
+                              .arg(category)
+                              .arg(diagnostic.statusCode)
+                    : tr("%1: %2 (HTTP %3): %4.")
+                              .arg(diagnostic.stage)
+                              .arg(category)
+                              .arg(diagnostic.statusCode)
+                              .arg(diagnostic.errorText);
+        }
         if (!diagnostic.errorText.isEmpty()) {
             return tr("%1 failed with HTTP %2: %3.")
                     .arg(diagnostic.stage)
@@ -1033,6 +1092,16 @@ void RestLibraryClient::emitConfigurationDiagnostic(const QString& summary) {
     emit requestDiagnosticUpdated(diagnostic);
 }
 
+void RestLibraryClient::forgetConnectionTestReply(QNetworkReply* pReply) {
+    for (auto it = m_connectionTestReplies.begin(); it != m_connectionTestReplies.end();) {
+        if (!*it || *it == pReply) {
+            it = m_connectionTestReplies.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void RestLibraryClient::slotConnectionTestHealthFinished() {
     auto* pReply = qobject_cast<QNetworkReply*>(sender());
     if (!pReply) {
@@ -1042,6 +1111,7 @@ void RestLibraryClient::slotConnectionTestHealthFinished() {
     const bool staleReply =
             pReply->property(kRequestGenerationProperty).toInt() !=
             m_connectionTestRequestGeneration;
+    forgetConnectionTestReply(pReply);
     pReply->deleteLater();
     if (staleReply) {
         return;
@@ -1073,6 +1143,7 @@ void RestLibraryClient::slotConnectionTestIndexFinished() {
     const bool staleReply =
             pReply->property(kRequestGenerationProperty).toInt() !=
             m_connectionTestRequestGeneration;
+    forgetConnectionTestReply(pReply);
     pReply->deleteLater();
     if (staleReply) {
         return;
@@ -1134,6 +1205,7 @@ void RestLibraryClient::slotConnectionTestTracksFinished() {
     const bool staleReply =
             pReply->property(kRequestGenerationProperty).toInt() !=
             m_connectionTestRequestGeneration;
+    forgetConnectionTestReply(pReply);
     pReply->deleteLater();
     if (staleReply) {
         return;
@@ -1192,6 +1264,7 @@ void RestLibraryClient::slotConnectionTestSessionFinished() {
     const bool staleReply =
             pReply->property(kRequestGenerationProperty).toInt() !=
             m_connectionTestRequestGeneration;
+    forgetConnectionTestReply(pReply);
     pReply->deleteLater();
     if (staleReply) {
         return;
