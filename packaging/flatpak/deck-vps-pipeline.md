@@ -189,6 +189,8 @@ The runner:
 - handles one job at a time;
 - has no Docker socket;
 - is not privileged;
+- has no `/dev/fuse`; the build wrapper detects the container and passes
+  `--disable-rofiles-fuse` to Flatpak Builder;
 - has no arbitrary container volume allowlist;
 - writes only its provider-backed data/cache and artifact bind mounts;
 - uses a dedicated bridge shared with Caddy;

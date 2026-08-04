@@ -213,8 +213,11 @@ if command -v ccache > /dev/null 2>&1; then
     BUILD_OPTIONS+=("--ccache")
 fi
 
-# Disable rofiles-fuse if we're in a container or using org.flatpak.Builder
-if [[ -n $container || $BUILDER == "org.flatpak.Builder" ]]; then
+# The unprivileged runner intentionally has no /dev/fuse. Detect the standard
+# OCI marker files as well as the conventional environment variable so native
+# flatpak-builder avoids its rofiles FUSE layer inside the runner container.
+if [[ -n ${container:-} || -e /.dockerenv || -e /run/.containerenv ||
+        $BUILDER == "org.flatpak.Builder" ]]; then
     BUILD_OPTIONS+=("--disable-rofiles-fuse")
 fi
 
