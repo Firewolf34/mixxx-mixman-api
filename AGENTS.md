@@ -17,7 +17,7 @@ Before changing the deck pipeline, read:
 ## Source And Deployment Authority
 
 - Forgejo repository:
-  `ssh://git@forge.polinaria.world:900/andrew/mixxx.git`
+  `ssh://git@forge.polinaria.world:900/total-infra/mixxx.git`
 - Forgejo is authoritative. GitHub is not part of the operational pipeline.
 - `deck/candidate` is the only publication branch.
 - Port 900 is Forgejo Git SSH, not proof of an OS-level VPS shell.
@@ -65,7 +65,7 @@ Before changing the deck pipeline, read:
   exact Git `commit` plus its human-readable `tag` over forge-generated source
   archives whose bytes have proved unstable.
 - Store any Forgejo API token outside the repository with mode 0600. Use a
-  token restricted to `andrew/mixxx`; never print, log, or commit it.
+  token restricted to `total-infra/mixxx`; never print, log, or commit it.
 
 ## Runner And Infrastructure Invariants
 
@@ -102,7 +102,7 @@ Before changing the deck pipeline, read:
 ## Client Invariants
 
 - Default manifest:
-  `https://forge.polinaria.world/mixxx-deck/latest.json`
+  `https://forge.polinaria.world/artifacts/latest.json`
 - Accept only HTTPS `latest.json` publication roots.
 - Validate schema, channel, app, architecture, source ref, SHA formats, size,
   and exact immutable URLs.

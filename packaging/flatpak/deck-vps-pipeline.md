@@ -45,7 +45,7 @@ capable development machine
         |
         | push exact Git commit
         v
-Forgejo: andrew/mixxx
+Forgejo: total-infra/mixxx
         |
         | refs/heads/deck/candidate
         v
@@ -62,7 +62,7 @@ provider-backed artifact bind mount
         |
         | read-only Caddy mount
         v
-https://forge.polinaria.world/mixxx-deck/
+https://forge.polinaria.world/artifacts/
         |
         | HTTPS manifest + immutable bundle
         v
@@ -73,14 +73,14 @@ tools/deck_flatpak_deploy.sh on the DJ laptop
 
 | Concern | Authority |
 | --- | --- |
-| Mixxx source | `ssh://git@forge.polinaria.world:900/andrew/mixxx.git` |
+| Mixxx source | `ssh://git@forge.polinaria.world:900/total-infra/mixxx.git` |
 | Candidate selection | `refs/heads/deck/candidate` |
 | Workflow | `.forgejo/workflows/deck-flatpak.yml` |
 | Build/publish behavior | `tools/deck_flatpak_publish.sh` |
 | Deck behavior | `tools/deck_flatpak_deploy.sh` |
-| VPS orchestration | `andrew/total-infra`, branch `dev` |
-| Latest candidate | `https://forge.polinaria.world/mixxx-deck/latest.json` |
-| Immutable artifacts | `/mixxx-deck/builds/<source-sha>/` |
+| VPS orchestration | `total-infra/total-infra`, branch `dev` |
+| Latest candidate | `https://forge.polinaria.world/artifacts/latest.json` |
+| Immutable artifacts | `/artifacts/builds/<source-sha>/` |
 | Flatpak app/ref | `app/org.mixxx.Mixxx/x86_64/master` |
 
 Port 900 is Forgejo Git SSH. Git access over that port does not imply an
@@ -103,7 +103,7 @@ manual dispatch, but the dispatch must select `deck/candidate`.
 
 Forgejo Actions is the source of truth for build success or failure. Within
 roughly a minute of promotion, sign in at
-`https://forge.polinaria.world/andrew/mixxx/actions`, open the newest
+`https://forge.polinaria.world/total-infra/mixxx/actions`, open the newest
 **Deck Flatpak Build**, and verify:
 
 - runner `mixxx-flatpak-x86_64`;
@@ -143,7 +143,7 @@ work. It accepts one job at a time.
 ### Authenticated Actions API client
 
 Forgejo Actions runs are available from the repository API. The deck client
-helper uses the live `/api/v1/repos/andrew/mixxx/actions/runs` and
+helper uses the live `/api/v1/repos/total-infra/mixxx/actions/runs` and
 `/actions/tasks` endpoints to select the exact candidate SHA, and the workflow
 dispatch endpoint for the explicit fallback. `wait` accepts success only for
 that SHA and then verifies the public manifest plus all three immutable files.
@@ -160,7 +160,7 @@ tools/deck_forgejo_actions.sh publication <candidate-sha>
 
 Forgejo is configured to reject anonymous API calls. Create a scoped user token
 at **Settings → Applications** with repository access limited to
-`andrew/mixxx`. Use `read:repository` for monitoring. Grant
+`total-infra/mixxx`. Use `read:repository` for monitoring. Grant
 `write:repository` only when autonomous manual dispatch is required. The
 interactive `configure` command stores the token at
 `~/.config/mixxx-deck/forgejo-api-token`, requires mode 0600, and validates it
@@ -206,12 +206,12 @@ publisher. It fails closed unless:
 - host swap totals at least 512 MiB;
 - current `MemAvailable + SwapFree` totals at least 1536 MiB;
 - the runner `/data` filesystem has at least 15 GiB free;
-- the separate `/srv/mixxx-deck` artifact filesystem has at least 1 GiB free;
+- the separate `/srv/artifacts` artifact filesystem has at least 1 GiB free;
 - runner data and artifacts resolve to different filesystems;
 - the runner cgroup allows at least 768 MiB resident memory;
 - the runner cgroup allows at least 768 MiB swap;
 - numeric cgroup v2 RAM plus swap limits total no more than 1536 MiB.
-- host PSI `some avg60` is no more than 5% and `full avg60` no more than 1.5%.
+- host PSI `some avg60` is no more than 10% and `full avg60` no more than 2.5%.
 
 These gates make an attempt less dangerous; they do not guarantee that Mixxx
 will link successfully within 1536 MiB. A failure should be contained inside
@@ -292,7 +292,7 @@ A failure before step 19 leaves the previous `latest.json` unchanged.
 ## Artifact Layout
 
 ```text
-/srv/mixxx-deck/
+/srv/artifacts/
 ├── latest.json
 └── builds/
     └── <source-sha>/
@@ -304,10 +304,10 @@ A failure before step 19 leaves the previous `latest.json` unchanged.
 Public layout:
 
 ```text
-https://forge.polinaria.world/mixxx-deck/latest.json
-https://forge.polinaria.world/mixxx-deck/builds/<sha>/manifest.json
-https://forge.polinaria.world/mixxx-deck/builds/<sha>/Mixxx.flatpak
-https://forge.polinaria.world/mixxx-deck/builds/<sha>/source.tar.zst
+https://forge.polinaria.world/artifacts/latest.json
+https://forge.polinaria.world/artifacts/builds/<sha>/manifest.json
+https://forge.polinaria.world/artifacts/builds/<sha>/Mixxx.flatpak
+https://forge.polinaria.world/artifacts/builds/<sha>/source.tar.zst
 ```
 
 Caddy serves `latest.json` with `Cache-Control: no-store`. Build paths receive
@@ -329,8 +329,8 @@ Example:
   "source_sha": "<40-character-source-sha>",
   "source_ref": "refs/heads/deck/candidate",
   "built_at": "2026-07-24T00:00:00Z",
-  "bundle_url": "https://forge.polinaria.world/mixxx-deck/builds/<source-sha>/Mixxx.flatpak",
-  "source_url": "https://forge.polinaria.world/mixxx-deck/builds/<source-sha>/source.tar.zst",
+  "bundle_url": "https://forge.polinaria.world/artifacts/builds/<source-sha>/Mixxx.flatpak",
+  "source_url": "https://forge.polinaria.world/artifacts/builds/<source-sha>/source.tar.zst",
   "sha256": "<64 lowercase hex>",
   "source_sha256": "<64 lowercase hex>",
   "size_bytes": 123456789
@@ -469,14 +469,14 @@ minute, dispatch it once on `deck/candidate`.
 ```bash
 candidate_sha="<the successful deck/candidate SHA>"
 
-curl --fail https://forge.polinaria.world/mixxx-deck/latest.json | jq .
-curl --fail --head https://forge.polinaria.world/mixxx-deck/latest.json
+curl --fail https://forge.polinaria.world/artifacts/latest.json | jq .
+curl --fail --head https://forge.polinaria.world/artifacts/latest.json
 curl --fail --head \
-  "https://forge.polinaria.world/mixxx-deck/builds/${candidate_sha}/Mixxx.flatpak"
+  "https://forge.polinaria.world/artifacts/builds/${candidate_sha}/Mixxx.flatpak"
 curl --fail --head \
-  "https://forge.polinaria.world/mixxx-deck/builds/${candidate_sha}/manifest.json"
+  "https://forge.polinaria.world/artifacts/builds/${candidate_sha}/manifest.json"
 curl --fail --head \
-  "https://forge.polinaria.world/mixxx-deck/builds/${candidate_sha}/source.tar.zst"
+  "https://forge.polinaria.world/artifacts/builds/${candidate_sha}/source.tar.zst"
 ```
 
 Confirm the exact candidate SHA and contract fields.
@@ -528,7 +528,7 @@ The infrastructure agent must:
 4. require at least 512 MiB host swap and 1536 MiB free memory-plus-swap;
 5. validate `docker compose config` with and without the `mixxx-build` profile;
 6. recreate Forgejo and Caddy;
-7. enable the Actions unit for `andrew/mixxx`;
+7. enable the Actions unit for `total-infra/mixxx`;
 8. create a repository-scoped runner;
 9. store runner UUID/token in the ignored server `.env`;
 10. build and start `mixxx-runner`;
@@ -572,9 +572,9 @@ Public:
 
 ```bash
 curl --fail --dump-header - \
-  https://forge.polinaria.world/mixxx-deck/latest.json
+  https://forge.polinaria.world/artifacts/latest.json
 curl --fail --head \
-  https://forge.polinaria.world/mixxx-deck/builds/<sha>/Mixxx.flatpak
+  https://forge.polinaria.world/artifacts/builds/<sha>/Mixxx.flatpak
 ```
 
 Deck:

@@ -15,15 +15,17 @@ jobs:
   flatpak-x86_64:
     name: Build and publish x86_64 deck Flatpak
     runs-on: mixxx-flatpak-x86_64
-    timeout-minutes: 1440
+    timeout-minutes: 180
     env:
       CCACHE_DIR: /data/ccache
       CCACHE_MAXSIZE: 512M
       CCACHE_COMPRESS: "true"
       XDG_CACHE_HOME: /data/cache
       TMPDIR: /data/tmp
-      MIXXX_DECK_PUBLISH_ROOT: /srv/mixxx-deck
-      MIXXX_DECK_PUBLIC_BASE_URL: https://forge.polinaria.world/mixxx-deck
+      MIXXX_DECK_PUBLISH_ROOT: /srv/artifacts
+      MIXXX_DECK_PUBLIC_BASE_URL: https://forge.polinaria.world/artifacts
+      MIXXX_BUILD_MAX_PSI_SOME_AVG60: "10.00"
+      MIXXX_BUILD_MAX_PSI_FULL_AVG60: "2.50"
       MIXXX_DECK_KEEP_BUILDS: "2"
       MIXXX_DECK_SOURCE_REF: ${{ forgejo.ref }}
       MIXXX_DECK_EVENT_SHA: ${{ forgejo.sha }}

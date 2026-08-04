@@ -5,7 +5,7 @@ set -euo pipefail
 
 APP_ID="org.mixxx.Mixxx"
 EXPECTED_ARCH="x86_64"
-DEFAULT_MANIFEST_URL="https://forge.polinaria.world/mixxx-deck/latest.json"
+DEFAULT_MANIFEST_URL="https://forge.polinaria.world/artifacts/latest.json"
 MANIFEST_URL="${MIXXX_DECK_MANIFEST_URL:-${DEFAULT_MANIFEST_URL}}"
 CACHE_ROOT="${XDG_CACHE_HOME:-${HOME}/.cache}/mixxx-deck"
 STATE_ROOT="${XDG_STATE_HOME:-${HOME}/.local/state}/mixxx-deck"

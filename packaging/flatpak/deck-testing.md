@@ -12,7 +12,7 @@ notes, read [deck-vps-pipeline.md](deck-vps-pipeline.md).
 Forgejo is the source of truth:
 
 ```text
-ssh://git@forge.polinaria.world:900/andrew/mixxx.git
+ssh://git@forge.polinaria.world:900/total-infra/mixxx.git
 ```
 
 Promote an exact development commit to the deck channel:
@@ -26,13 +26,13 @@ the OSTree bundle and Mixxx binary, then publishes immutable build files and
 corresponding source at:
 
 ```text
-https://forge.polinaria.world/mixxx-deck/builds/<source-sha>/
+https://forge.polinaria.world/artifacts/builds/<source-sha>/
 ```
 
 `latest.json` is changed only after a successful build and validation.
 
 For every candidate push, sign in to
-`https://forge.polinaria.world/andrew/mixxx/actions`, open the newest
+`https://forge.polinaria.world/total-infra/mixxx/actions`, open the newest
 **Deck Flatpak Build** run, and treat its final state as authoritative. A push
 should create the run automatically within roughly a minute. If it does not,
 dispatch the workflow once on `deck/candidate`; never select another branch.
@@ -51,7 +51,7 @@ tools/deck_forgejo_actions.sh wait <candidate-sha>
 ```
 
 Create the token in Forgejo user settings with access restricted specifically
-to `andrew/mixxx`. `read:repository` supports inspection; use
+to `total-infra/mixxx`. `read:repository` supports inspection; use
 `write:repository` only if this client must also perform the manual
 `dispatch` fallback. The token is stored outside Git in
 `~/.config/mixxx-deck/forgejo-api-token` with mode 0600.

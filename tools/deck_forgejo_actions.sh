@@ -4,7 +4,7 @@
 set -euo pipefail
 
 FORGEJO_BASE_URL="${MIXXX_FORGEJO_BASE_URL:-https://forge.polinaria.world}"
-FORGEJO_OWNER="${MIXXX_FORGEJO_OWNER:-andrew}"
+FORGEJO_OWNER="${MIXXX_FORGEJO_OWNER:-total-infra}"
 FORGEJO_REPO="${MIXXX_FORGEJO_REPO:-mixxx}"
 TOKEN_FILE="${MIXXX_FORGEJO_TOKEN_FILE:-${HOME}/.config/mixxx-deck/forgejo-api-token}"
 WORKFLOW_FILE="${MIXXX_FORGEJO_WORKFLOW:-deck-flatpak.yml}"
@@ -27,7 +27,7 @@ Authentication:
     ~/.config/mixxx-deck/forgejo-api-token
 
   The file must not be group/world accessible. Use a token restricted to
-  andrew/mixxx. read:repository is enough for inspection; write:repository is
+  total-infra/mixxx. read:repository is enough for inspection; write:repository is
   required for dispatch.
 EOF
 }
@@ -256,7 +256,7 @@ command_publication() {
     manifest="$(mktemp)"
     curl --silent --show-error --fail --connect-timeout 15 \
         --output "${manifest}" \
-        "${FORGEJO_BASE_URL}/mixxx-deck/latest.json"
+        "${FORGEJO_BASE_URL}/artifacts/latest.json"
 
     jq -e \
         --arg sha "${sha}" \
@@ -277,7 +277,7 @@ command_publication() {
     local name
     for name in Mixxx.flatpak manifest.json source.tar.zst; do
         curl --silent --show-error --fail --head --connect-timeout 15 \
-            "${FORGEJO_BASE_URL}/mixxx-deck/builds/${sha}/${name}" >/dev/null
+            "${FORGEJO_BASE_URL}/artifacts/builds/${sha}/${name}" >/dev/null
     done
     rm -f -- "${manifest}"
     echo "Publication validation succeeded for ${sha}."
