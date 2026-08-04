@@ -24,6 +24,8 @@ struct RestLibraryCacheResult {
     RestLibraryCacheState cacheState = RestLibraryCacheState::Missing;
     QString cachedFilePath;
     QString errorText;
+    int statusCode = 0;
+    int networkError = 0;
 };
 
 class RestLibraryCacheManager final : public QObject {
@@ -86,7 +88,9 @@ class RestLibraryCacheManager final : public QObject {
             const QString& remoteId,
             RestLibraryCacheState cacheState,
             const QString& cachedFilePath = {},
-            const QString& errorText = {});
+            const QString& errorText = {},
+            int statusCode = 0,
+            int networkError = 0);
     void cleanupActiveDownload(ActiveDownload* pDownload);
     void removeActiveDownload(const QString& remoteId);
 

@@ -100,6 +100,8 @@ void RestLibraryTableModel::updateTrackCacheState(const RestLibraryCacheResult& 
         track.cacheState = result.cacheState;
         track.cachedFilePath = result.cachedFilePath;
         track.cacheError = result.errorText;
+        track.cacheStatusCode = result.statusCode;
+        track.cacheNetworkError = result.networkError;
 
         const int visibleRow = m_visibleRows.indexOf(i);
         if (visibleRow >= 0) {
@@ -135,7 +137,15 @@ QVariant RestLibraryTableModel::data(const QModelIndex& index, int role) const {
     }
     if (role == Qt::ToolTipRole && index.column() == ColumnCacheState) {
         if (!pTrack->cacheError.isEmpty()) {
-            return pTrack->cacheError;
+            QStringList parts;
+            parts.append(pTrack->cacheError);
+            if (pTrack->cacheStatusCode > 0) {
+                parts.append(tr("HTTP %1").arg(pTrack->cacheStatusCode));
+            }
+            if (pTrack->cacheNetworkError != 0) {
+                parts.append(tr("Network error %1").arg(pTrack->cacheNetworkError));
+            }
+            return parts.join(QLatin1Char('\n'));
         }
         return pTrack->cachedFilePath.isEmpty()
                 ? tr("Track must be cached locally before it can be loaded.")

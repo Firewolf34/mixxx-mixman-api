@@ -87,6 +87,7 @@ class RestLibraryClient final : public QObject {
             const RestLibrarySettings& settings,
             const QString& clientId = {},
             bool createSession = false);
+    void cancelMixManConnectionTest();
     void invalidateMixManRequests();
 
     static QList<RestLibraryTrack> parseTrackListDocumentForTesting(
@@ -211,6 +212,7 @@ class RestLibraryClient final : public QObject {
             const RestLibraryRequestDiagnostic& diagnostic,
             const QString& fallbackSummary) const;
     void emitConfigurationDiagnostic(const QString& summary);
+    void forgetConnectionTestReply(QNetworkReply* pReply);
     void startDetailRequests(int requestGeneration, const QStringList& remoteIds);
     void finishDetailBatchIfComplete(int requestGeneration);
     void clearPendingDetails();
@@ -253,6 +255,7 @@ class RestLibraryClient final : public QObject {
     RestLibrarySettings m_connectionTestSettings;
     QString m_connectionTestClientId;
     bool m_connectionTestCreateSession = false;
+    QVector<QPointer<QNetworkReply>> m_connectionTestReplies;
 };
 
 } // namespace mixxx::library::rest

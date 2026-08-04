@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QNetworkAccessManager>
-#include <QStringList>
 
 #include "library/rest/restlibraryclient.h"
 #include "preferences/dialog/dlgpreferencepage.h"
@@ -33,23 +32,36 @@ class DlgPrefRestLibrary : public DlgPreferencePage {
     void slotUpdateMixManDefaultsControls(bool enabled);
     void slotUpdateValidationState();
     void slotTestConnection();
+    void slotCancelConnectionTest();
     void slotConnectionDiagnosticUpdated(
             const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic);
     void slotConnectionTestFinished(bool success);
+    void slotConnectionResultSelected();
+    void slotMarkConnectionTestStale();
 
   private:
     bool isInputValid() const;
+    QString validationMessage() const;
     bool hasValidBaseUrl() const;
     bool hasValidRemoteIdTemplate(const QString& pathTemplate) const;
     mixxx::library::rest::RestLibrarySettings settingsFromUi() const;
-    QString formatDiagnostic(
+    void addConnectionDiagnostic(
+            const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic);
+    void addConnectionStatusRow(
+            const QString& stage,
+            const QString& result,
+            const QString& summary);
+    QString diagnosticDetails(
             const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic) const;
-    void appendConnectionTestLine(const QString& line);
+    void clearValidationToolTips();
+    void setConnectionTestRunning(bool running);
     void writeSettings();
 
     Ui::DlgPrefRestLibraryDlg* m_pUi;
     UserSettingsPointer m_pConfig;
     QNetworkAccessManager m_networkAccessManager;
     mixxx::library::rest::RestLibraryClient m_connectionTestClient;
-    QStringList m_connectionTestLines;
+    bool m_connectionTestRunning = false;
+    bool m_connectionTestHasResults = false;
+    bool m_connectionTestStale = false;
 };

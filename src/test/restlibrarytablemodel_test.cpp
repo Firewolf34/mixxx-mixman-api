@@ -101,6 +101,26 @@ TEST_F(RestLibraryTableModelTest, UncachedRowsDoNotExposeTrackIdsForAutoDJ) {
     EXPECT_FALSE(model.getTrackId(model.index(0, 0)).isValid());
 }
 
+TEST_F(RestLibraryTableModelTest, CacheFailureTooltipIncludesStatusContext) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setTracks({newTrack(
+            QStringLiteral("1"),
+            QStringLiteral("Beta"),
+            QStringLiteral("Second"))});
+
+    model.updateTrackCacheState({
+            QStringLiteral("1"),
+            RestLibraryCacheState::Failed,
+            {},
+            QStringLiteral("Authentication failed"),
+            401,
+            0});
+
+    const QString tooltip = model.data(model.index(0, 0), Qt::ToolTipRole).toString();
+    EXPECT_TRUE(tooltip.contains(QStringLiteral("Authentication failed")));
+    EXPECT_TRUE(tooltip.contains(QStringLiteral("HTTP 401")));
+}
+
 TEST_F(RestLibraryTableModelTest, SearchFiltersVisibleRows) {
     RestLibraryTableModel model(nullptr, trackCollectionManager());
     model.setTracks({

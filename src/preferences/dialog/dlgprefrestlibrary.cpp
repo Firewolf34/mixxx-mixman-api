@@ -3,9 +3,14 @@
 #include <QCheckBox>
 #include <QDir>
 #include <QFileDialog>
+#include <QHeaderView>
 #include <QLineEdit>
 #include <QNetworkReply>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSpinBox>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QUrl>
 #include <utility>
 
@@ -19,8 +24,24 @@ using mixxx::library::rest::RestLibrarySettings;
 using mixxx::library::rest::RestLibraryClient;
 namespace restConfig = mixxx::library::rest::config;
 
+constexpr int kConnectionDetailRole = Qt::UserRole;
+
 bool isEmptyOrRemoteIdTemplate(const QString& pathTemplate) {
     return pathTemplate.trimmed().isEmpty() || pathTemplate.contains(QStringLiteral("%1"));
+}
+
+bool isValidPathOrAbsoluteUrl(const QString& value) {
+    QString trimmed = value.trimmed();
+    if (trimmed.isEmpty()) {
+        return true;
+    }
+    trimmed.replace(QStringLiteral("%1"), QStringLiteral("1"));
+    trimmed.replace(QStringLiteral("%artist"), QStringLiteral("artist"));
+    trimmed.replace(QStringLiteral("%title"), QStringLiteral("title"));
+    trimmed.replace(QStringLiteral("%duration"), QStringLiteral("duration"));
+    trimmed.replace(QStringLiteral("%location"), QStringLiteral("location"));
+    const QUrl url(trimmed);
+    return url.isValid();
 }
 
 } // namespace
@@ -59,6 +80,10 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pCo
             &QPushButton::clicked,
             this,
             &DlgPrefRestLibrary::slotTestConnection);
+    connect(m_pUi->pushButtonCancelConnectionTest,
+            &QPushButton::clicked,
+            this,
+            &DlgPrefRestLibrary::slotCancelConnectionTest);
     connect(m_pUi->checkBoxCacheEnabled,
             &QCheckBox::toggled,
             this,
@@ -70,12 +95,18 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pCo
 
     const auto updateValidation = [this] {
         slotUpdateValidationState();
+        slotMarkConnectionTestStale();
     };
     connect(m_pUi->checkBoxEnabled, &QCheckBox::toggled, this, updateValidation);
     connect(m_pUi->checkBoxUseMixManDefaults, &QCheckBox::toggled, this, updateValidation);
     connect(m_pUi->lineEditBaseUrl, &QLineEdit::textChanged, this, updateValidation);
+    connect(m_pUi->lineEditBearerToken, &QLineEdit::textChanged, this, updateValidation);
     connect(m_pUi->lineEditTrackListPath, &QLineEdit::textChanged, this, updateValidation);
     connect(m_pUi->lineEditTrackDetailPathTemplate,
+            &QLineEdit::textChanged,
+            this,
+            updateValidation);
+    connect(m_pUi->lineEditTrackLookupPathTemplate,
             &QLineEdit::textChanged,
             this,
             updateValidation);
@@ -87,6 +118,26 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pCo
             &QLineEdit::textChanged,
             this,
             updateValidation);
+    connect(m_pUi->spinBoxPageSize,
+            QOverload<int>::of(&QSpinBox::valueChanged),
+            this,
+            updateValidation);
+    connect(m_pUi->spinBoxRecommendationLimit,
+            QOverload<int>::of(&QSpinBox::valueChanged),
+            this,
+            updateValidation);
+    connect(m_pUi->spinBoxMixManPathDepth,
+            QOverload<int>::of(&QSpinBox::valueChanged),
+            this,
+            updateValidation);
+    connect(m_pUi->checkBoxMixManAdminApprovedOnly,
+            &QCheckBox::toggled,
+            this,
+            updateValidation);
+    connect(m_pUi->checkBoxTestConnectionCreateSession,
+            &QCheckBox::toggled,
+            this,
+            updateValidation);
     connect(&m_connectionTestClient,
             &RestLibraryClient::requestDiagnosticUpdated,
             this,
@@ -95,6 +146,15 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pCo
             &RestLibraryClient::connectionTestFinished,
             this,
             &DlgPrefRestLibrary::slotConnectionTestFinished);
+    connect(m_pUi->treeWidgetConnectionTestResults,
+            &QTreeWidget::itemSelectionChanged,
+            this,
+            &DlgPrefRestLibrary::slotConnectionResultSelected);
+
+    m_pUi->treeWidgetConnectionTestResults->header()->setSectionResizeMode(
+            QHeaderView::ResizeToContents);
+    m_pUi->treeWidgetConnectionTestResults->header()->setStretchLastSection(true);
+    setConnectionTestRunning(false);
 
     setScrollSafeGuardForAllInputWidgets(this);
     slotUpdate();
@@ -215,53 +275,158 @@ void DlgPrefRestLibrary::slotUpdateMixManDefaultsControls(bool enabled) {
 }
 
 void DlgPrefRestLibrary::slotUpdateValidationState() {
-    m_pUi->labelValidationWarning->setVisible(!isInputValid());
+    clearValidationToolTips();
+    const QString message = validationMessage();
+    m_pUi->labelValidationWarning->setText(message);
+    m_pUi->labelValidationWarning->setVisible(!message.isEmpty());
+
+    if (message.isEmpty() || !m_pUi->checkBoxEnabled->isChecked()) {
+        return;
+    }
+    if (!hasValidBaseUrl()) {
+        m_pUi->lineEditBaseUrl->setToolTip(message);
+        return;
+    }
+    if (m_pUi->checkBoxUseMixManDefaults->isChecked()) {
+        return;
+    }
+    if (m_pUi->lineEditTrackListPath->text().trimmed().isEmpty() ||
+            !isValidPathOrAbsoluteUrl(m_pUi->lineEditTrackListPath->text())) {
+        m_pUi->lineEditTrackListPath->setToolTip(message);
+    } else if (!hasValidRemoteIdTemplate(m_pUi->lineEditTrackDetailPathTemplate->text()) ||
+            !isValidPathOrAbsoluteUrl(m_pUi->lineEditTrackDetailPathTemplate->text())) {
+        m_pUi->lineEditTrackDetailPathTemplate->setToolTip(message);
+    } else if (!hasValidRemoteIdTemplate(m_pUi->lineEditRecommendationPathTemplate->text()) ||
+            !isValidPathOrAbsoluteUrl(m_pUi->lineEditRecommendationPathTemplate->text())) {
+        m_pUi->lineEditRecommendationPathTemplate->setToolTip(message);
+    } else if (!hasValidRemoteIdTemplate(m_pUi->lineEditAudioDownloadPathTemplate->text()) ||
+            !isValidPathOrAbsoluteUrl(m_pUi->lineEditAudioDownloadPathTemplate->text())) {
+        m_pUi->lineEditAudioDownloadPathTemplate->setToolTip(message);
+    }
 }
 
 void DlgPrefRestLibrary::slotTestConnection() {
     slotUpdateValidationState();
-    m_connectionTestClient.invalidateMixManRequests();
-    m_connectionTestLines.clear();
+    m_pUi->treeWidgetConnectionTestResults->clear();
+    m_pUi->plainTextEditConnectionTestDetails->clear();
+    m_connectionTestHasResults = false;
+    m_connectionTestStale = false;
     if (!isInputValid()) {
-        appendConnectionTestLine(
-                tr("Configuration: FAIL - Fix the highlighted REST Library settings before testing."));
+        mixxx::library::rest::RestLibraryRequestDiagnostic diagnostic;
+        diagnostic.stage = tr("Configuration");
+        diagnostic.method = QStringLiteral("-");
+        diagnostic.url = m_pUi->lineEditBaseUrl->text().trimmed();
+        diagnostic.success = false;
+        diagnostic.summary = validationMessage();
+        diagnostic.errorText = diagnostic.summary;
+        addConnectionDiagnostic(diagnostic);
+        setConnectionTestRunning(false);
         return;
     }
 
-    m_pUi->pushButtonTestConnection->setEnabled(false);
-    appendConnectionTestLine(tr("Testing REST Library connection..."));
+    setConnectionTestRunning(true);
+    addConnectionStatusRow(
+            tr("Connection test"),
+            tr("RUNNING"),
+            tr("Testing REST Library connection..."));
     m_connectionTestClient.testMixManConnection(
             settingsFromUi(),
             {},
             m_pUi->checkBoxTestConnectionCreateSession->isChecked());
 }
 
+void DlgPrefRestLibrary::slotCancelConnectionTest() {
+    if (!m_connectionTestRunning) {
+        return;
+    }
+    m_connectionTestClient.cancelMixManConnectionTest();
+    setConnectionTestRunning(false);
+    addConnectionStatusRow(
+            tr("Connection test"),
+            tr("CANCELED"),
+            tr("Connection test canceled."));
+}
+
 void DlgPrefRestLibrary::slotConnectionDiagnosticUpdated(
         const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic) {
-    appendConnectionTestLine(formatDiagnostic(diagnostic));
+    addConnectionDiagnostic(diagnostic);
 }
 
 void DlgPrefRestLibrary::slotConnectionTestFinished(bool success) {
-    m_pUi->pushButtonTestConnection->setEnabled(true);
-    appendConnectionTestLine(success
-                    ? tr("Connection test passed.")
-                    : tr("Connection test failed."));
+    if (!m_connectionTestRunning) {
+        return;
+    }
+    setConnectionTestRunning(false);
+    addConnectionStatusRow(
+            tr("Connection test"),
+            success ? tr("OK") : tr("FAIL"),
+            success ? tr("Connection test passed.") : tr("Connection test failed."));
+}
+
+void DlgPrefRestLibrary::slotConnectionResultSelected() {
+    const QList<QTreeWidgetItem*> selectedItems =
+            m_pUi->treeWidgetConnectionTestResults->selectedItems();
+    if (selectedItems.isEmpty()) {
+        m_pUi->plainTextEditConnectionTestDetails->clear();
+        return;
+    }
+    m_pUi->plainTextEditConnectionTestDetails->setPlainText(
+            selectedItems.constFirst()->data(0, kConnectionDetailRole).toString());
+}
+
+void DlgPrefRestLibrary::slotMarkConnectionTestStale() {
+    if (!m_connectionTestHasResults ||
+            m_connectionTestRunning ||
+            m_connectionTestStale) {
+        return;
+    }
+    m_connectionTestStale = true;
+    addConnectionStatusRow(
+            tr("Settings"),
+            tr("STALE"),
+            tr("Settings changed since this test ran."));
 }
 
 bool DlgPrefRestLibrary::isInputValid() const {
+    return validationMessage().isEmpty();
+}
+
+QString DlgPrefRestLibrary::validationMessage() const {
     if (!m_pUi->checkBoxEnabled->isChecked()) {
-        return true;
+        return {};
     }
     const bool useMixManDefaults = m_pUi->checkBoxUseMixManDefaults->isChecked();
-    return hasValidBaseUrl() &&
-            (useMixManDefaults ||
-                    (!m_pUi->lineEditTrackListPath->text().trimmed().isEmpty() &&
-                            hasValidRemoteIdTemplate(
-                                    m_pUi->lineEditTrackDetailPathTemplate->text()) &&
-                            hasValidRemoteIdTemplate(
-                                    m_pUi->lineEditRecommendationPathTemplate->text()) &&
-                            hasValidRemoteIdTemplate(
-                                    m_pUi->lineEditAudioDownloadPathTemplate->text())));
+    if (!hasValidBaseUrl()) {
+        return tr("Enter an absolute REST Library base URL, such as https://example.com.");
+    }
+    if (useMixManDefaults) {
+        return {};
+    }
+    if (m_pUi->lineEditTrackListPath->text().trimmed().isEmpty()) {
+        return tr("Enter a custom track list path.");
+    }
+    if (!isValidPathOrAbsoluteUrl(m_pUi->lineEditTrackListPath->text())) {
+        return tr("Track list path is not a valid path or URL.");
+    }
+    if (!hasValidRemoteIdTemplate(m_pUi->lineEditTrackDetailPathTemplate->text())) {
+        return tr("Track detail path must include %1 when configured.");
+    }
+    if (!isValidPathOrAbsoluteUrl(m_pUi->lineEditTrackDetailPathTemplate->text())) {
+        return tr("Track detail path is not a valid path or URL.");
+    }
+    if (!hasValidRemoteIdTemplate(m_pUi->lineEditRecommendationPathTemplate->text())) {
+        return tr("Recommendation path must include %1 when configured.");
+    }
+    if (!isValidPathOrAbsoluteUrl(m_pUi->lineEditRecommendationPathTemplate->text())) {
+        return tr("Recommendation path is not a valid path or URL.");
+    }
+    if (!hasValidRemoteIdTemplate(m_pUi->lineEditAudioDownloadPathTemplate->text())) {
+        return tr("Audio download path must include %1 when configured.");
+    }
+    if (!isValidPathOrAbsoluteUrl(m_pUi->lineEditAudioDownloadPathTemplate->text())) {
+        return tr("Audio download path is not a valid path or URL.");
+    }
+    return {};
 }
 
 bool DlgPrefRestLibrary::hasValidBaseUrl() const {
@@ -303,14 +468,42 @@ RestLibrarySettings DlgPrefRestLibrary::settingsFromUi() const {
     return settings;
 }
 
-QString DlgPrefRestLibrary::formatDiagnostic(
+void DlgPrefRestLibrary::addConnectionDiagnostic(
+        const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic) {
+    auto* pItem = new QTreeWidgetItem(m_pUi->treeWidgetConnectionTestResults);
+    pItem->setText(0, diagnostic.stage);
+    pItem->setText(1, diagnostic.success ? tr("OK") : tr("FAIL"));
+    pItem->setText(2, diagnostic.statusCode > 0
+                    ? QString::number(diagnostic.statusCode)
+                    : QStringLiteral("-"));
+    pItem->setText(3, diagnostic.elapsedMillis > 0
+                    ? tr("%1 ms").arg(diagnostic.elapsedMillis)
+                    : QStringLiteral("-"));
+    pItem->setText(4, diagnostic.summary);
+    pItem->setData(0, kConnectionDetailRole, diagnosticDetails(diagnostic));
+    m_connectionTestHasResults = true;
+    m_pUi->treeWidgetConnectionTestResults->setCurrentItem(pItem);
+}
+
+void DlgPrefRestLibrary::addConnectionStatusRow(
+        const QString& stage,
+        const QString& result,
+        const QString& summary) {
+    auto* pItem = new QTreeWidgetItem(m_pUi->treeWidgetConnectionTestResults);
+    pItem->setText(0, stage);
+    pItem->setText(1, result);
+    pItem->setText(2, QStringLiteral("-"));
+    pItem->setText(3, QStringLiteral("-"));
+    pItem->setText(4, summary);
+    pItem->setData(0, kConnectionDetailRole, summary);
+    m_connectionTestHasResults = true;
+    m_pUi->treeWidgetConnectionTestResults->setCurrentItem(pItem);
+}
+
+QString DlgPrefRestLibrary::diagnosticDetails(
         const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic) const {
     QStringList parts;
-    parts.append(QStringLiteral("%1: %2 - %3")
-                    .arg(
-                            diagnostic.stage,
-                            diagnostic.success ? tr("OK") : tr("FAIL"),
-                            diagnostic.summary));
+    parts.append(diagnostic.summary);
     if (!diagnostic.method.isEmpty() && !diagnostic.url.isEmpty()) {
         parts.append(QStringLiteral("%1 %2").arg(diagnostic.method, diagnostic.url));
     }
@@ -327,16 +520,21 @@ QString DlgPrefRestLibrary::formatDiagnostic(
     if (!diagnostic.responseSnippet.isEmpty()) {
         parts.append(tr("Response: %1").arg(diagnostic.responseSnippet));
     }
-    return parts.join(QStringLiteral(" | "));
+    return parts.join(QLatin1Char('\n'));
 }
 
-void DlgPrefRestLibrary::appendConnectionTestLine(const QString& line) {
-    if (line.isEmpty()) {
-        return;
-    }
-    m_connectionTestLines.append(line);
-    m_pUi->labelConnectionTestDetails->setText(
-            m_connectionTestLines.join(QStringLiteral("\n")));
+void DlgPrefRestLibrary::clearValidationToolTips() {
+    m_pUi->lineEditBaseUrl->setToolTip({});
+    m_pUi->lineEditTrackListPath->setToolTip({});
+    m_pUi->lineEditTrackDetailPathTemplate->setToolTip({});
+    m_pUi->lineEditRecommendationPathTemplate->setToolTip({});
+    m_pUi->lineEditAudioDownloadPathTemplate->setToolTip({});
+}
+
+void DlgPrefRestLibrary::setConnectionTestRunning(bool running) {
+    m_connectionTestRunning = running;
+    m_pUi->pushButtonTestConnection->setEnabled(!running);
+    m_pUi->pushButtonCancelConnectionTest->setEnabled(running);
 }
 
 void DlgPrefRestLibrary::writeSettings() {

@@ -29,7 +29,6 @@ using ::testing::MakeMatcher;
 using ::testing::Matcher;
 using ::testing::MatcherInterface;
 using ::testing::MatchResultListener;
-using ::testing::Return;
 
 class RequestForUrlMatcher : public MatcherInterface<const QNetworkRequest&> {
   public:
@@ -146,7 +145,13 @@ MockNetworkReply* MockNetworkAccessManager::ExpectGet(
             createRequest(GetOperation,
                     RequestForUrl(contains, expected_params),
                     nullptr))
-            .WillOnce(Return(reply))
+            .WillOnce([reply](
+                              Operation,
+                              const QNetworkRequest& request,
+                              QIODevice*) {
+                reply->SetRequest(request);
+                return reply;
+            })
             .RetiresOnSaturation();
 
     return reply;
@@ -165,7 +170,13 @@ MockNetworkReply* MockNetworkAccessManager::ExpectPost(
             createRequest(PostOperation,
                     RequestForUrl(contains, expected_params),
                     BodyContains(expected_body)))
-            .WillOnce(Return(reply))
+            .WillOnce([reply](
+                              Operation,
+                              const QNetworkRequest& request,
+                              QIODevice*) {
+                reply->SetRequest(request);
+                return reply;
+            })
             .RetiresOnSaturation();
 
     return reply;
@@ -184,7 +195,13 @@ MockNetworkReply* MockNetworkAccessManager::ExpectPut(
             createRequest(PutOperation,
                     RequestForUrl(contains, expected_params),
                     BodyContains(expected_body)))
-            .WillOnce(Return(reply))
+            .WillOnce([reply](
+                              Operation,
+                              const QNetworkRequest& request,
+                              QIODevice*) {
+                reply->SetRequest(request);
+                return reply;
+            })
             .RetiresOnSaturation();
 
     return reply;
@@ -198,6 +215,10 @@ MockNetworkReply::MockNetworkReply(const QByteArray& data /* = nullptr */)
 void MockNetworkReply::SetData(const QByteArray& data) {
     m_data = data;
     m_pos = 0;
+}
+
+void MockNetworkReply::SetRequest(const QNetworkRequest& request) {
+    setRequest(request);
 }
 
 void MockNetworkReply::abort() {

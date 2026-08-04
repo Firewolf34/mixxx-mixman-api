@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <QCheckBox>
+#include <QDir>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QTreeWidget>
 
 #include "library/rest/restlibrarysettings.h"
 #include "preferences/dialog/dlgprefrestlibrary.h"
@@ -121,7 +124,9 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     EXPECT_EQ(
             config()->getValueString(restConfig::kAudioDownloadPathTemplateKey),
             QStringLiteral("/tracks/%1/audio"));
-    EXPECT_EQ(config()->getValueString(restConfig::kCacheDirectoryKey), QStringLiteral("D:/rest-cache"));
+    EXPECT_EQ(
+            config()->getValueString(restConfig::kCacheDirectoryKey),
+            QDir::fromNativeSeparators(QStringLiteral("D:\\rest-cache")));
     EXPECT_EQ(config()->getValue(restConfig::kPageSizeKey, 0), 40);
     EXPECT_EQ(config()->getValue(restConfig::kRecommendationLimitKey, 0), 8);
     EXPECT_EQ(config()->getValue(restConfig::kCacheMaxMegabytesKey, 0), 1024);
@@ -263,11 +268,16 @@ TEST_F(DlgPrefRestLibraryTest, TestConnectionRequiresValidInputAndShowsDetails) 
     auto* pEnabled = requireChild<QCheckBox>(&page, "checkBoxEnabled");
     auto* pBaseUrl = requireChild<QLineEdit>(&page, "lineEditBaseUrl");
     auto* pButton = requireChild<QPushButton>(&page, "pushButtonTestConnection");
+    auto* pCancelButton =
+            requireChild<QPushButton>(&page, "pushButtonCancelConnectionTest");
     auto* pCreateSession =
             requireChild<QCheckBox>(&page, "checkBoxTestConnectionCreateSession");
-    auto* pDetails = requireChild<QLabel>(&page, "labelConnectionTestDetails");
+    auto* pResults = requireChild<QTreeWidget>(&page, "treeWidgetConnectionTestResults");
+    auto* pDetails =
+            requireChild<QPlainTextEdit>(&page, "plainTextEditConnectionTestDetails");
 
     EXPECT_FALSE(pCreateSession->isChecked());
+    EXPECT_FALSE(pCancelButton->isEnabled());
 
     pEnabled->setChecked(true);
     pBaseUrl->setText(QStringLiteral("relative-url"));
@@ -275,6 +285,15 @@ TEST_F(DlgPrefRestLibraryTest, TestConnectionRequiresValidInputAndShowsDetails) 
     pButton->click();
 
     EXPECT_TRUE(pButton->isEnabled());
-    EXPECT_TRUE(pDetails->text().contains(QStringLiteral("Configuration")));
-    EXPECT_TRUE(pDetails->text().contains(QStringLiteral("FAIL")));
+    EXPECT_FALSE(pCancelButton->isEnabled());
+    ASSERT_EQ(pResults->topLevelItemCount(), 1);
+    EXPECT_EQ(pResults->topLevelItem(0)->text(0), QStringLiteral("Configuration"));
+    EXPECT_EQ(pResults->topLevelItem(0)->text(1), QStringLiteral("FAIL"));
+    EXPECT_TRUE(pDetails->toPlainText().contains(QStringLiteral("absolute REST Library base URL")));
+
+    pBaseUrl->setText(QStringLiteral("https://example.com"));
+
+    ASSERT_EQ(pResults->topLevelItemCount(), 2);
+    EXPECT_EQ(pResults->topLevelItem(1)->text(0), QStringLiteral("Settings"));
+    EXPECT_EQ(pResults->topLevelItem(1)->text(1), QStringLiteral("STALE"));
 }

@@ -319,6 +319,8 @@ TEST(RestLibraryCacheManagerTest, ReportsFailedForHttpError) {
     const RestLibraryCacheResult result = lastResult(spy);
     EXPECT_EQ(result.cacheState, RestLibraryCacheState::Failed);
     EXPECT_FALSE(result.errorText.isEmpty());
+    EXPECT_EQ(result.statusCode, 401);
+    EXPECT_EQ(result.networkError, static_cast<int>(QNetworkReply::NoError));
     ASSERT_EQ(diagnosticSpy.count(), 1);
     const auto diagnostic =
             qvariant_cast<RestLibraryRequestDiagnostic>(diagnosticSpy.takeFirst().at(0));

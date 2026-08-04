@@ -33,6 +33,34 @@ const QString kSessionCreateOperation = QStringLiteral("session_create");
 constexpr int kSessionHeartbeatIntervalMillis = 30000;
 constexpr qsizetype kMaxRecentRemoteIds = 20;
 
+QString conciseDiagnosticText(const RestLibraryRequestDiagnostic& diagnostic) {
+    if (diagnostic.networkError == static_cast<int>(QNetworkReply::OperationCanceledError)) {
+        return QObject::tr("%1 canceled").arg(diagnostic.stage);
+    }
+    if (diagnostic.networkError == static_cast<int>(QNetworkReply::TimeoutError)) {
+        return QObject::tr("%1 timed out").arg(diagnostic.stage);
+    }
+    if (diagnostic.networkError != static_cast<int>(QNetworkReply::NoError)) {
+        return QObject::tr("%1 network error").arg(diagnostic.stage);
+    }
+    switch (diagnostic.statusCode) {
+    case 401:
+        return QObject::tr("Authentication failed");
+    case 403:
+        return QObject::tr("Permission denied");
+    case 404:
+        return QObject::tr("Endpoint not found");
+    case 409:
+        return QObject::tr("MixMan conflict");
+    default:
+        if (diagnostic.statusCode >= 500) {
+            return QObject::tr("Server error");
+        }
+        break;
+    }
+    return diagnostic.summary;
+}
+
 } // namespace
 
 RestLibraryFeature::RestLibraryFeature(
@@ -477,15 +505,12 @@ void RestLibraryFeature::slotRequestDiagnosticUpdated(
     }
 
     QStringList parts;
-    if (!diagnostic.summary.isEmpty()) {
-        parts.append(diagnostic.summary);
+    const QString summary = conciseDiagnosticText(diagnostic);
+    if (!summary.isEmpty()) {
+        parts.append(summary);
     }
     if (diagnostic.statusCode > 0) {
         parts.append(tr("HTTP %1").arg(diagnostic.statusCode));
-    }
-    if (diagnostic.networkError != static_cast<int>(QNetworkReply::NoError) &&
-            !diagnostic.errorText.isEmpty()) {
-        parts.append(diagnostic.errorText);
     }
     m_requestDiagnosticText = parts.join(QStringLiteral(" | "));
     updateDiagnosticsText();
