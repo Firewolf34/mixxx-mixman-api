@@ -3860,6 +3860,10 @@ if(QML)
   add_subdirectory(res/shaders)
 
   set(QT_QML_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml)
+  # Qt 6.10's qmltyperegistrar does not create the URI-derived output
+  # directory before generating the typeinfo file. Ensure the output tree
+  # exists for both the Mixxx and Mixxx.Controls QML modules.
+  file(MAKE_DIRECTORY "${QT_QML_OUTPUT_DIRECTORY}/Mixxx/Controls")
   qt_add_library(mixxx-qml-lib STATIC)
   mixxx_target_warnings_fatal(mixxx-qml-lib PUBLIC)
 
