@@ -104,15 +104,15 @@ Before changing the deck pipeline, read:
 
 - Use a repository-scoped Forgejo runner, not a global runner.
 - Host workflow steps run as the non-login `mixxx-runner` systemd service on
-  the VPS. Systemd presents only the private `/data` runner-state bind and
-  `/srv/artifacts` publication bind to the service.
+  the VPS. Its only configured writable host paths are the private `/data`
+  runner-state bind and `/srv/artifacts` publication bind.
 - No Docker socket, privileged mode, setuid Bubblewrap, added Linux
   capabilities, arbitrary host paths, sudo access, or login shell. Host
   Bubblewrap must use Ubuntu's enforced unprivileged-user-namespace profile.
-- The native service deliberately does not use `ProtectKernelTunables=yes`:
-  that setting locks `/proc` and breaks Bubblewrap's inner Flatpak sandbox.
-  The non-login runner still has no capabilities or sudo, so it cannot alter
-  host tunables.
+- The native service deliberately does not use `ProtectKernelTunables=yes` or
+  `ProtectKernelLogs=yes`: either locks part of `/proc` and breaks Bubblewrap's
+  inner Flatpak sandbox. The non-login runner has an empty capability bounding
+  set and no sudo, so it cannot alter host tunables or read kernel logs.
 - The current VPS has only 2 GiB physical RAM and also hosts production.
 - One concurrent job, one CPU, 768-MiB resident-memory, 768-MiB swap,
   1536-MiB combined RAM+swap, 512-PID, and three-hour limits.
@@ -136,8 +136,10 @@ Before changing the deck pipeline, read:
   runner-backed temporary data, a 512 MiB ccache, two retained builds, and
   transient-work cleanup. Preserve those limits.
 - Caddy mounts artifacts read-only.
-- Runner reaches Forgejo only through its public HTTPS route and never receives
-  a Docker network, socket, or application/database-network attachment.
+- Runner is configured to reach Forgejo through its public HTTPS route and
+  receives no Docker network, socket, or application/database-network
+  attachment. It retains outbound public-network access; workflow code is not
+  confidential from its own runner state.
 - Preserve all existing Docker volumes. Never use `docker compose down -v`.
 - Server orchestration lives in `total-infra/total-infra`, not in this repository.
 

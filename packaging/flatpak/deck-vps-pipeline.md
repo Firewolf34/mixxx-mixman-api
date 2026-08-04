@@ -54,7 +54,7 @@ Forgejo: total-infra/mixxx
         | runs-on: mixxx-flatpak-x86_64
         v
 repository-scoped Forgejo Runner
-host job inside dedicated VPS container
+native repository-scoped systemd runner on the VPS
         |
         | Flatpak build + OSTree validation + smoke test
         v
@@ -213,12 +213,12 @@ The runner:
   `--disable-rofiles-fuse` to Flatpak Builder;
 - uses host Bubblewrap with Ubuntu's enforced `bwrap` AppArmor profile to make
   unprivileged build namespaces; the unit deliberately permits namespace
-  creation but retains its cgroup, filesystem, device, process, syscall, and
+  creation but retains its cgroup, filesystem, device, process, and
   network-family restrictions;
-- omits systemd `ProtectKernelTunables=yes`, because that recursively locks
-  `/proc` and prevents Bubblewrap from mounting Flatpak Builder's required
-  inner `/proc`; the non-login, no-capability runner still cannot alter host
-  tunables;
+- omits systemd `ProtectKernelTunables=yes` and `ProtectKernelLogs=yes`,
+  because either locks part of `/proc` and prevents Bubblewrap from mounting
+  Flatpak Builder's required inner `/proc`; the non-login runner has an empty
+  capability bounding set and cannot alter host tunables or read kernel logs;
 - writes only its private `/data` runner-state bind and private `/srv/artifacts`
   publication bind;
 - restarts on failure.
@@ -662,7 +662,9 @@ instead of trusting either generated-archive byte representation.
 
 - Write access to `deck/candidate` is deployment authority.
 - Workflow code runs as the dedicated non-login runner user and can write only
-  the private artifact publication bind.
+  the configured private artifact publication bind. It can read the runner
+  state of that same OS user and has outbound public-network access; this is
+  native host execution, not a Docker confidentiality boundary.
 - The native systemd service and its resource limits are the outer host-job
   boundary; Bubblewrap is the inner unprivileged Flatpak build sandbox.
 - The runner token is repository-scoped and must not be committed.
