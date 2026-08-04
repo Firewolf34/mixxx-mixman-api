@@ -3,6 +3,14 @@
 This fork is the authoritative source for a custom Mixxx deployment used on a
 resource-constrained DJ laptop.
 
+## Local Private Planning
+
+- Local-only planning may live under `private-docs/`, ignored through
+  `.git/info/exclude`. If present, consult the relevant planning note before
+  changing REST-backed library or recommendation work.
+- Never place API secrets, endpoint names, hostnames, or other private service
+  details in tracked files.
+
 Before changing the deck pipeline, read:
 
 - `packaging/flatpak/deck-vps-pipeline.md` — complete architecture and
