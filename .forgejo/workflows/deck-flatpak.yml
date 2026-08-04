@@ -22,6 +22,9 @@ jobs:
       CCACHE_COMPRESS: "true"
       XDG_CACHE_HOME: /data/cache
       TMPDIR: /data/tmp
+      MIXXX_FLATPAK_BUILDER_STATE_DIR: /data/flatpak-builder-state
+      MIXXX_DECK_SOURCE_DOWNLOAD_ATTEMPTS: "3"
+      MIXXX_DECK_SOURCE_RETRY_DELAY_SECONDS: "20"
       MIXXX_DECK_PUBLISH_ROOT: /srv/artifacts
       MIXXX_DECK_PUBLIC_BASE_URL: https://forge.polinaria.world/artifacts
       MIXXX_BUILD_MAX_PSI_SOME_AVG60: "10.00"

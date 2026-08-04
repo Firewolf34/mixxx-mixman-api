@@ -63,21 +63,24 @@ to `total-infra/mixxx`. `read:repository` supports inspection; use
 `dispatch` fallback. The token is stored outside Git in
 `~/.config/mixxx-deck/forgejo-api-token` with mode 0600.
 
-Dependency sources are integrity-pinned. A source checksum failure must stop
-before compilation and be verified against the authoritative upstream tag; do
-not copy the received checksum into a manifest. Forge-generated archives whose
-container bytes have proved unstable should be replaced with exact Git
-commit-plus-tag pins. This keeps the source immutable without compiling or
-investigating on the deck laptop.
+Dependency sources are integrity-pinned. Before compilation, the VPS retries a
+transient source-download failure up to three times using its bounded private
+source cache; the actual build then disables fresh downloads. A source checksum
+failure must still stop before compilation and be verified against the
+authoritative upstream tag; do not copy the received checksum into a manifest.
+Forge-generated archives whose container bytes have proved unstable should be
+replaced with exact Git commit-plus-tag pins. This keeps the source immutable
+without compiling or investigating on the deck laptop.
 
 The current VPS has only 2 GiB RAM. The workflow requires at least 512 MiB host
 swap, 1536 MiB currently free memory-plus-swap, 12 GiB free for a cold SDK
 setup or 6.5 GiB for a warm build, and 1 GiB free on a separate artifact
-filesystem. Retained SDK plus ccache is capped at 5 GiB. The runner has a hard
-768 MiB RAM plus 768 MiB swap budget. Startup PSI must remain below the encoded
-thresholds, and severe PSI for one minute aborts a running build. Flatpak
-Builder uses one job and a Release/no-debug, low-memory-linker manifest. If it
-OOMs, keep the ceiling and investigate; never fall back to the deck.
+filesystem. Retained SDK, Flatpak Builder source state, and ccache are capped
+at 5 GiB. The runner has a hard 768 MiB RAM plus 768 MiB swap budget. Startup
+PSI must remain below the encoded thresholds, and severe PSI for one minute
+aborts a running build. Flatpak Builder uses one job and a Release/no-debug,
+low-memory-linker manifest. If it OOMs, keep the ceiling and investigate; never
+fall back to the deck.
 
 ## Laptop Setup
 

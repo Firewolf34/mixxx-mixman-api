@@ -223,16 +223,25 @@ The runner:
   publication bind;
 - restarts on failure.
 
-Persistent runner data retains Flatpak SDK/dependency state and bounded ccache.
-The workflow clears transient job output, temporary files, and action cache
-before and after each job. A cold first build may be much slower than later
-builds. The workflow sets `FLATPAK_BUILDER_JOBS=1`, and
+Persistent runner data retains Flatpak SDK/dependency state, a bounded ccache,
+and Flatpak Builder's source/cache state. The workflow clears transient job
+output, temporary files, and action cache before and after each job, but retains
+the source state on the private `/data` filesystem. A cold first build may be
+much slower than later builds. The workflow sets `FLATPAK_BUILDER_JOBS=1`, and
 `packaging/flatpak/flatpak_build.sh` passes that as `--jobs=1`.
+
+Before compilation, the publisher runs Flatpak Builder's `--download-only`
+mode. A recognized transient network failure (connection/DNS timeout, reset,
+unreachable network, HTTP 429, or HTTP 5xx) is retried at most three times,
+with 20- and 40-second backoff. The successful source state is then reused for
+the real build with `--disable-download`; this avoids an unavailable mirror
+failing after compilation has started. A checksum or any other unrecognized
+source failure is not retried and remains an integrity incident.
 
 `tools/deck_build_preflight.sh` distinguishes cold and warm runner state. It
 requires 12 GiB free before a cold SDK setup and 6.5 GiB before a warm compile;
-the publisher repeats the warm gate. Retained Flatpak SDK data plus ccache is
-capped at 5 GiB. It otherwise fails closed unless:
+the publisher repeats the warm gate. Retained Flatpak SDK data, Flatpak Builder
+source state, and ccache are capped at 5 GiB. It otherwise fails closed unless:
 
 - host swap totals at least 512 MiB;
 - current `MemAvailable + SwapFree` totals at least 1536 MiB;
@@ -278,11 +287,12 @@ The fixed storage budget is made workable by:
 
 - checkout depth 1 with no unused submodules;
 - `/data/tmp` for temporary validation and archives instead of Docker `/tmp`;
-- a compressed 512 MiB ccache;
+- a compressed 512 MiB ccache and retained Flatpak Builder source state,
+  together capped at 5 GiB with the Flatpak SDK;
 - disabled Forgejo action caching for this runner;
 - two retained immutable server builds;
-- explicit cleanup of build trees, the temporary Flatpak repository, and
-  Flatpak Builder state after every job.
+- explicit cleanup of job build trees and the temporary Flatpak repository
+  after every job while retaining only the capped runner state.
 
 ## Build And Publication Algorithm
 
@@ -296,30 +306,34 @@ The fixed storage budget is made workable by:
 4. Resolve checked-out `HEAD` and compare it with the Forgejo event SHA.
 5. Reject tracked checkout modifications.
 6. Acquire a publication lock so concurrent jobs cannot race publication.
-7. Build `Mixxx.flatpak` with one Flatpak Builder job:
+7. Download all integrity-pinned Flatpak sources into the persistent runner
+   state. Retry only recognized transient network failures at most three times;
+   checksum and other source failures stop immediately.
+8. Build `Mixxx.flatpak` with one Flatpak Builder job and disable new source
+   downloads so it uses the verified prefetch state:
 
    ```bash
    packaging/flatpak/flatpak_build.sh bundle
    ```
 
-8. Import the bundle into a temporary OSTree repository.
-9. Run `ostree fsck`.
-10. Require `app/org.mixxx.Mixxx/x86_64/master`.
-11. Require the bundle commit subject to identify the Git source SHA.
-12. Run a 30-second headless `/app/bin/mixxx --version` smoke test.
-13. Create a `git archive` source tarball compressed with Zstandard.
-14. Calculate bundle/source SHA-256 values and bundle byte length.
-15. Write manifest schema version 1.
-16. Atomically move files from a staging directory into the immutable build
+9. Import the bundle into a temporary OSTree repository.
+10. Run `ostree fsck`.
+11. Require `app/org.mixxx.Mixxx/x86_64/master`.
+12. Require the bundle commit subject to identify the Git source SHA.
+13. Run a 30-second headless `/app/bin/mixxx --version` smoke test.
+14. Create a `git archive` source tarball compressed with Zstandard.
+15. Calculate bundle/source SHA-256 values and bundle byte length.
+16. Write manifest schema version 1.
+17. Atomically move files from a staging directory into the immutable build
     directory.
-17. If the immutable directory already exists, require the bundle checksum to
+18. If the immutable directory already exists, require the bundle checksum to
     match.
-18. Query the remote candidate ref. If a newer candidate exists, retain this
+19. Query the remote candidate ref. If a newer candidate exists, retain this
     immutable build but do not promote it.
-19. Atomically replace `latest.json`.
-20. Retain the two most recent server build directories by default.
+20. Atomically replace `latest.json`.
+21. Retain the two most recent server build directories by default.
 
-A failure before step 19 leaves the previous `latest.json` unchanged.
+A failure before step 20 leaves the previous `latest.json` unchanged.
 
 ## Artifact Layout
 
@@ -584,6 +598,7 @@ After bootstrap, routine builds require no server login.
 | Public manifest is 404 | Caddy route is not deployed or no build succeeded; keep current deck build |
 | Job is queued | repository runner is offline or label does not match |
 | Publisher rejects ref | manual dispatch selected a branch other than `deck/candidate` |
+| Transient dependency download fails | runner retries the download-only prefetch up to three times; if exhausted, retry only after the mirror/network recovers |
 | SDK/build dependency failure | diagnose VPS network/cache; never shift build to deck |
 | Dependency archive checksum fails | stop before compilation; compare its complete tree with the authoritative upstream tag/commit; never copy the received checksum blindly |
 | Hard-budget preflight fails | correct cgroup/headroom/disk/PSI configuration; do not bypass |

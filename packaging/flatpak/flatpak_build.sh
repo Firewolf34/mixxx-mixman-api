@@ -30,11 +30,17 @@ BUILD_OPTIONS=("--force-clean")
 # Optional global concurrency limit for constrained builders
 BUILDER_JOBS="${FLATPAK_BUILDER_JOBS:-}"
 
+# An optional persistent Flatpak Builder state directory. The deck runner keeps
+# this on its private /data filesystem so downloaded, integrity-checked sources
+# survive transient network failures and future builds.
+BUILDER_STATE_DIR="${MIXXX_FLATPAK_BUILDER_STATE_DIR:-}"
+
 # Prints usage information
 print_usage() {
     echo ""
     echo "Usage:"
     echo "  $SCRIPT  bundle [--builder] [--manifest <file>]"
+    echo "  $SCRIPT  download [--builder] [--manifest <file>]"
     echo "  $SCRIPT  debug [--builder] [--manifest <file>]"
     echo "  $SCRIPT  install [--builder] [--manifest <file>]"
     echo "  $SCRIPT  repo [--builder] [--manifest <file>]"
@@ -42,6 +48,7 @@ print_usage() {
     echo ""
     echo "Commands:"
     echo "  bundle             Flatpak user bundle build."
+    echo "  download           Download manifest sources without compiling."
     echo "  debug              Flatpak user bundle build with debug extension."
     echo "  install            Build and install as Flatpak for the current user."
     echo "  repo               Local Flatpak repository build."
@@ -126,13 +133,15 @@ fi
 # Parse user input
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        bundle | debug | install | repo)
+        bundle | debug | install | repo | download)
             if [[ -n $COMMAND ]]; then
                 echo "Error: Please select only one command." >&2
                 print_usage >&2
                 exit 1
             elif [[ $1 == "install" ]]; then
                 BUILD_OPTIONS+=("--install" "--user")
+            elif [[ $1 == "download" ]]; then
+                BUILD_OPTIONS+=("--download-only")
             else
                 BUILD_OPTIONS+=("--repo=$REPO_DIR")
             fi
@@ -202,6 +211,15 @@ if [[ -n $BUILDER_JOBS ]]; then
     BUILD_OPTIONS+=("--jobs=$BUILDER_JOBS")
 fi
 
+if [[ -n $BUILDER_STATE_DIR ]]; then
+    if [[ $BUILDER_STATE_DIR != /* ]]; then
+        echo "Error: MIXXX_FLATPAK_BUILDER_STATE_DIR must be an absolute path." >&2
+        exit 1
+    fi
+    mkdir -p "$BUILDER_STATE_DIR"
+    BUILD_OPTIONS+=("--state-dir=$BUILDER_STATE_DIR")
+fi
+
 if [[ $BUILDER == "org.flatpak.Builder" ]]; then
     check_packages "org.flatpak.Builder"
 else
@@ -220,6 +238,10 @@ if [[ ${MIXXX_FLATPAK_DISABLE_ROFILES_FUSE:-0} == 1 || -n ${container:-} ||
         -e /.dockerenv || -e /run/.containerenv ||
         $BUILDER == "org.flatpak.Builder" ]]; then
     BUILD_OPTIONS+=("--disable-rofiles-fuse")
+fi
+
+if [[ ${MIXXX_FLATPAK_DISABLE_DOWNLOAD:-0} == 1 ]]; then
+    BUILD_OPTIONS+=("--disable-download")
 fi
 
 # Run the build and exit if it fails

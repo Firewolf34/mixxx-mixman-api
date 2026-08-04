@@ -97,6 +97,10 @@ Before changing the deck pipeline, read:
   authoritative upstream tag or commit before changing a source pin. Prefer an
   exact Git `commit` plus its human-readable `tag` over forge-generated source
   archives whose bytes have proved unstable.
+- The publisher may retry only recognized transient source-download failures:
+  at most three pre-compilation attempts with bounded backoff and a private
+  runner-state cache. Build with fresh downloads disabled after prefetch;
+  never retry or weaken an integrity failure.
 - Store any Forgejo API token outside the repository with mode 0600. Use a
   token restricted to `total-infra/mixxx`; never print, log, or commit it.
 
@@ -133,8 +137,8 @@ Before changing the deck pipeline, read:
   only writable binds in the systemd service; never use Docker runner volumes
   or expose another host path.
 - The fixed 25 GiB attached storage is sufficient only with shallow checkout,
-  runner-backed temporary data, a 512 MiB ccache, two retained builds, and
-  transient-work cleanup. Preserve those limits.
+  runner-backed temporary and Flatpak Builder source state, a 512 MiB ccache,
+  two retained builds, and transient-work cleanup. Preserve those limits.
 - Caddy mounts artifacts read-only.
 - Runner is configured to reach Forgejo through its public HTTPS route and
   receives no Docker network, socket, or application/database-network

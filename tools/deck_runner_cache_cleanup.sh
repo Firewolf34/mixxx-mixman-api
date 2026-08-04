@@ -32,7 +32,10 @@ empty_children() {
 retained_cache_kib() {
     local total=0
     local path
-    for path in "${DATA_PATH}/.local/share/flatpak" "${DATA_PATH}/ccache"; do
+    for path in \
+            "${DATA_PATH}/.local/share/flatpak" \
+            "${DATA_PATH}/flatpak-builder-state" \
+            "${DATA_PATH}/ccache"; do
         if [[ -e "${path}" ]]; then
             total=$((total + $(du -sk "${path}" | awk '{print $1}')))
         fi
@@ -40,7 +43,11 @@ retained_cache_kib() {
     printf '%s\n' "${total}"
 }
 
-install -d -m 0750 "${DATA_PATH}/tmp" "${DATA_PATH}/cache" "${DATA_PATH}/ccache"
+install -d -m 0750 \
+    "${DATA_PATH}/tmp" \
+    "${DATA_PATH}/cache" \
+    "${DATA_PATH}/ccache" \
+    "${DATA_PATH}/flatpak-builder-state"
 empty_children "${DATA_PATH}/tmp"
 empty_children "${DATA_PATH}/cache"
 
@@ -56,8 +63,11 @@ if ((current_kib > RETAINED_CACHE_MAX_KIB)); then
     current_kib="$(retained_cache_kib)"
 fi
 if ((current_kib > RETAINED_CACHE_MAX_KIB)); then
-    echo "Flatpak SDK cache alone exceeds the retained-cache cap; clearing it for a cold next build."
-    empty_children "${DATA_PATH}/.local/share/flatpak"
+    echo "Flatpak SDK and source-state cache exceed the retained-cache cap; clearing them for a cold next build."
+    if [[ -d "${DATA_PATH}/.local/share/flatpak" ]]; then
+        empty_children "${DATA_PATH}/.local/share/flatpak"
+    fi
+    empty_children "${DATA_PATH}/flatpak-builder-state"
     current_kib="$(retained_cache_kib)"
 fi
 

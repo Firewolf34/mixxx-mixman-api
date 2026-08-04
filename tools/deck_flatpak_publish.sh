@@ -14,6 +14,9 @@ SOURCE_REF="${MIXXX_DECK_SOURCE_REF:-refs/heads/deck/candidate}"
 EVENT_SHA="${MIXXX_DECK_EVENT_SHA:-}"
 LOCK_FILE="${MIXXX_DECK_LOCK_FILE:-/data/locks/mixxx-deck-build.lock}"
 BUILDER_JOBS="${FLATPAK_BUILDER_JOBS:-}"
+BUILDER_STATE_DIR="${MIXXX_FLATPAK_BUILDER_STATE_DIR:-/data/flatpak-builder-state}"
+SOURCE_DOWNLOAD_ATTEMPTS="${MIXXX_DECK_SOURCE_DOWNLOAD_ATTEMPTS:-3}"
+SOURCE_RETRY_DELAY_SECONDS="${MIXXX_DECK_SOURCE_RETRY_DELAY_SECONDS:-20}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -42,6 +45,16 @@ fi
 if [[ "${BUILDER_JOBS}" != "1" ]]; then
     die "FLATPAK_BUILDER_JOBS must be exactly 1 on the 2 GiB VPS."
 fi
+if [[ "${BUILDER_STATE_DIR}" != /data/* ]]; then
+    die "MIXXX_FLATPAK_BUILDER_STATE_DIR must be under the runner's private /data bind."
+fi
+if [[ ! "${SOURCE_DOWNLOAD_ATTEMPTS}" =~ ^[1-3]$ ]]; then
+    die "MIXXX_DECK_SOURCE_DOWNLOAD_ATTEMPTS must be an integer from 1 through 3."
+fi
+if [[ ! "${SOURCE_RETRY_DELAY_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||
+        ((SOURCE_RETRY_DELAY_SECONDS > 60)); then
+    die "MIXXX_DECK_SOURCE_RETRY_DELAY_SECONDS must be an integer from 1 through 60."
+fi
 
 for command_name in \
         ccache \
@@ -49,6 +62,7 @@ for command_name in \
         flatpak-builder \
         flock \
         git \
+        grep \
         jq \
         ostree \
         sha256sum \
@@ -76,8 +90,52 @@ mkdir -p "$(dirname -- "${LOCK_FILE}")" "${PUBLISH_ROOT}/builds"
 exec 9>"${LOCK_FILE}"
 flock 9
 
+is_transient_source_download_failure() {
+    local log_path="$1"
+    grep -Eiq \
+        'Failed to connect|Timeout was reached|Could not resolve host|Connection reset|Connection timed out|Network is unreachable|[Ss]tatus[[:space:]]+(429|5[0-9]{2})|HTTP/[0-9.]+[[:space:]]+(429|5[0-9]{2})' \
+        "${log_path}"
+}
+
+download_flatpak_sources() {
+    local attempt=1
+    local delay_seconds
+    local download_log
+    download_log="$(mktemp)"
+
+    while :; do
+        echo "Downloading pinned Flatpak sources (attempt ${attempt}/${SOURCE_DOWNLOAD_ATTEMPTS})..."
+        if packaging/flatpak/flatpak_build.sh download \
+                --manifest packaging/flatpak/org.mixxx.Mixxx.deck.yaml \
+                >"${download_log}" 2>&1; then
+            cat "${download_log}"
+            rm -f -- "${download_log}"
+            return 0
+        fi
+
+        cat "${download_log}" >&2
+        if ! is_transient_source_download_failure "${download_log}"; then
+            rm -f -- "${download_log}"
+            die "Flatpak source download failed without a recognized transient network error; not retrying."
+        fi
+        if ((attempt >= SOURCE_DOWNLOAD_ATTEMPTS)); then
+            rm -f -- "${download_log}"
+            die "Flatpak source download failed after ${SOURCE_DOWNLOAD_ATTEMPTS} transient-network attempts."
+        fi
+
+        delay_seconds=$((SOURCE_RETRY_DELAY_SECONDS * attempt))
+        echo "Transient source-download failure; retrying in ${delay_seconds} seconds." >&2
+        sleep "${delay_seconds}"
+        attempt=$((attempt + 1))
+    done
+}
+
+download_flatpak_sources
+
 echo "Building ${APP_ID} from ${SOURCE_SHA}..."
-packaging/flatpak/flatpak_build.sh bundle \
+MIXXX_FLATPAK_DISABLE_DOWNLOAD=1 \
+    MIXXX_FLATPAK_BUILDER_STATE_DIR="${BUILDER_STATE_DIR}" \
+    packaging/flatpak/flatpak_build.sh bundle \
     --manifest packaging/flatpak/org.mixxx.Mixxx.deck.yaml
 
 BUNDLE_PATH="${REPO_ROOT}/Mixxx.flatpak"
