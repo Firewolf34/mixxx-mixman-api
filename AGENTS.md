@@ -30,6 +30,28 @@ Before changing the deck pipeline, read:
 - Do not force-push shared development branches for deployment.
 - A manual workflow dispatch must select `deck/candidate`.
 
+## Branch Model
+
+- `dev` is the only long-lived development and integration branch. Start normal
+  work from a clean, current `dev` checkout and push reviewed work there.
+- `deck/candidate` is the only release/build pointer. Do not develop directly
+  on it; promote an exact reviewed commit reachable from `dev` when a VPS build
+  is desired.
+- Short-lived `feature/*` and `fix/*` branches are optional implementation
+  aids. Merge them into `dev`, push `dev`, then delete them only after their
+  commits are reachable from `dev`.
+- `origin/main`, `github/*`, and historical branch refs are upstream/reference
+  inputs, not development or deployment targets. Never push custom work to
+  them or select them for a deck workflow.
+- Before editing, stop if the current worktree is dirty for an unrelated
+  reason. The normal starting point is:
+
+  ```bash
+  git switch dev
+  git pull --ff-only origin dev
+  git status --short
+  ```
+
 ## Deck Laptop Constraints
 
 - The deck laptop is old and slow. Never compile Mixxx there.
@@ -117,7 +139,8 @@ Before changing the deck pipeline, read:
 
 ## Change Procedure
 
-1. Inspect applicable instructions and current branch state.
+1. Inspect applicable instructions and current branch state; use a clean
+   `dev` worktree for normal development.
 2. Preserve unrelated user changes.
 3. Make the smallest coherent source/pipeline change.
 4. Update:
@@ -139,7 +162,8 @@ Before changing the deck pipeline, read:
    ```
 
 6. Run actual compilation and bundle validation only on the VPS runner.
-7. Promote an exact commit to `deck/candidate`.
+7. Push the reviewed commit to `dev`, then promote that exact commit to
+   `deck/candidate`.
 8. Treat the newest **Deck Flatpak Build** run in Forgejo Actions as the build
    authority. Confirm its checkout SHA, runner label, preflight, one-job build,
    absence of PSI/OOM termination, and final **Success** state.

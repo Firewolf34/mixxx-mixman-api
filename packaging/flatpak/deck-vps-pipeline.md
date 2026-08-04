@@ -88,15 +88,28 @@ operating-system VPS shell.
 
 ## Branch And Promotion Model
 
-Feature development may occur on any intentional branch. A deck build is
-authorized only by updating `deck/candidate`:
+`dev` is the only long-lived development and integration branch. Begin normal
+work from a clean `dev` checkout. Short-lived `feature/*` or `fix/*` branches
+may support a focused change, but merge them into `dev` and delete them only
+after their commits are reachable from `dev`.
+
+`deck/candidate` is not a development branch; it is the only release/build
+pointer. A deck build is authorized only by promoting an exact reviewed commit
+that is already reachable from `dev`:
 
 ```bash
 git fetch origin
-git show --stat <candidate-sha>
+git switch dev
+git pull --ff-only origin dev
 git status --short
+git show --stat <candidate-sha>
 git push origin <candidate-sha>:refs/heads/deck/candidate
 ```
+
+`origin/main`, `github/*`, and historical branch refs are upstream/reference
+inputs. They are not build targets and must never be selected for a deck
+workflow. After integrating an upstream update into `dev`, use the same
+promotion procedure for a deck release.
 
 The workflow triggers automatically for pushes to that branch. It also supports
 manual dispatch, but the dispatch must select `deck/candidate`.
@@ -133,7 +146,7 @@ The workflow selects the custom runner label:
 mixxx-flatpak-x86_64
 ```
 
-It has a 24-hour job timeout, checks out a shallow copy of the exact Forgejo
+It has a three-hour job timeout, checks out a shallow copy of the exact Forgejo
 event SHA without unused submodules, installs the required Flatpak SDK for the
 runner user, and calls the publisher through the PSI pressure guard.
 
@@ -197,17 +210,19 @@ The runner:
 - does not join the internal application/database network;
 - restarts with `unless-stopped`.
 
-Persistent runner data includes Flatpak SDK/dependency state, ccache, action
-cache, and job work directories. A cold first build may be much slower than
-later builds. The workflow sets `FLATPAK_BUILDER_JOBS=1`, and
+Persistent runner data retains Flatpak SDK/dependency state and bounded ccache.
+The workflow clears transient job output, temporary files, and action cache
+before and after each job. A cold first build may be much slower than later
+builds. The workflow sets `FLATPAK_BUILDER_JOBS=1`, and
 `packaging/flatpak/flatpak_build.sh` passes that as `--jobs=1`.
 
-`tools/deck_build_preflight.sh` runs before SDK setup and again from the
-publisher. It fails closed unless:
+`tools/deck_build_preflight.sh` distinguishes cold and warm runner state. It
+requires 12 GiB free before a cold SDK setup and 6.5 GiB before a warm compile;
+the publisher repeats the warm gate. Retained Flatpak SDK data plus ccache is
+capped at 5 GiB. It otherwise fails closed unless:
 
 - host swap totals at least 512 MiB;
 - current `MemAvailable + SwapFree` totals at least 1536 MiB;
-- the runner `/data` filesystem has at least 15 GiB free;
 - the separate `/srv/artifacts` artifact filesystem has at least 1 GiB free;
 - runner data and artifacts resolve to different filesystems;
 - the runner cgroup allows at least 768 MiB resident memory;
@@ -289,7 +304,7 @@ The fixed storage budget is made workable by:
 18. Query the remote candidate ref. If a newer candidate exists, retain this
     immutable build but do not promote it.
 19. Atomically replace `latest.json`.
-20. Retain the ten most recent server build directories by default.
+20. Retain the two most recent server build directories by default.
 
 A failure before step 19 leaves the previous `latest.json` unchanged.
 
@@ -527,8 +542,9 @@ The infrastructure agent must:
 1. deploy the latest `total-infra` implementation containing the 2 GiB safety
    corrections, Actions, and the Caddy artifact route;
 2. inspect RAM, swap, disk, Docker usage, and memory pressure;
-3. use the attached 25 GiB provider storage with separate runner-data and
-   artifact filesystems, with at least 15 GiB and 1 GiB free respectively;
+3. use the attached provider storage with separate runner-data and artifact
+   filesystems, with 12 GiB free for a cold SDK setup or 6.5 GiB for a warm
+   build, plus 1 GiB free for artifacts;
 4. require at least 512 MiB host swap and 1536 MiB free memory-plus-swap;
 5. validate `docker compose config` with and without the `mixxx-build` profile;
 6. recreate Forgejo and Caddy;

@@ -60,7 +60,7 @@ done
 
 cd "${REPO_ROOT}"
 tools/check_deck_flatpak_manifest.sh
-tools/deck_build_preflight.sh
+tools/deck_build_preflight.sh --phase=build
 ccache --set-config="max_size=${CCACHE_MAXSIZE:-512M}"
 ccache --set-config="compression=${CCACHE_COMPRESS:-true}"
 ccache --cleanup

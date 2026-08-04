@@ -38,10 +38,13 @@ jobs:
           fetch-depth: 1
           submodules: false
 
+      - name: Prepare bounded runner cache
+        run: tools/deck_runner_cache_cleanup.sh --prepare
+
       - name: Check low-memory VPS build headroom
         run: |
           tools/check_deck_flatpak_manifest.sh
-          tools/deck_build_preflight.sh
+          tools/deck_build_preflight.sh --phase=prepare
 
       - name: Ensure the Flatpak SDK is available
         run: tools/deck_pressure_guard.sh tools/flatpak_buildenv.sh setup --user
@@ -49,8 +52,6 @@ jobs:
       - name: Build, validate, and publish
         run: tools/deck_pressure_guard.sh tools/deck_flatpak_publish.sh
 
-      - name: Remove transient build data
+      - name: Clean transient runner data
         if: always()
-        run: |
-          ccache --cleanup || true
-          rm -rf -- build_flatpak flatpak_repo Mixxx.flatpak .flatpak-builder
+        run: tools/deck_runner_cache_cleanup.sh --finalize

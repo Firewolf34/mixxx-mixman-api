@@ -34,6 +34,9 @@ compile_commands.json
 # Build and distribution directories for various build configurations
 /build*
 /install
+/.flatpak-builder/
+/flatpak_repo/
+/Mixxx.flatpak
 
 # Exclude unneeded files from GoogleTest library when updating our bundled
 # GoogleTest library in the lib/ directory

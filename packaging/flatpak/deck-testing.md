@@ -15,7 +15,9 @@ Forgejo is the source of truth:
 ssh://git@forge.polinaria.world:900/total-infra/mixxx.git
 ```
 
-Promote an exact development commit to the deck channel:
+Work from `dev`; it is the only long-lived development branch. `deck/candidate`
+is the build/release pointer, so promote an exact reviewed commit already
+reachable from `dev` only when you want a VPS build:
 
 ```bash
 git push origin HEAD:refs/heads/deck/candidate
@@ -67,14 +69,14 @@ container bytes have proved unstable should be replaced with exact Git
 commit-plus-tag pins. This keeps the source immutable without compiling or
 investigating on the deck laptop.
 
-The current VPS has only 2 GiB RAM and fixed 25 GiB attached storage. The
-workflow requires at least 512 MiB host swap, 1536 MiB currently free
-memory-plus-swap, 15 GiB free runner data disk, and 1 GiB free on a separate
-artifact filesystem. The runner has a hard 768 MiB RAM plus 768 MiB swap
-budget. Startup PSI must remain below the encoded thresholds, and severe PSI
-for one minute aborts a running build. Flatpak Builder uses one job and a
-Release/no-debug, low-memory-linker manifest. If it OOMs, keep the ceiling and
-investigate; never fall back to the deck.
+The current VPS has only 2 GiB RAM. The workflow requires at least 512 MiB host
+swap, 1536 MiB currently free memory-plus-swap, 12 GiB free for a cold SDK
+setup or 6.5 GiB for a warm build, and 1 GiB free on a separate artifact
+filesystem. Retained SDK plus ccache is capped at 5 GiB. The runner has a hard
+768 MiB RAM plus 768 MiB swap budget. Startup PSI must remain below the encoded
+thresholds, and severe PSI for one minute aborts a running build. Flatpak
+Builder uses one job and a Release/no-debug, low-memory-linker manifest. If it
+OOMs, keep the ceiling and investigate; never fall back to the deck.
 
 ## Laptop Setup
 

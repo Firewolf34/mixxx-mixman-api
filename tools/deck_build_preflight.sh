@@ -5,7 +5,8 @@ set -euo pipefail
 
 MIN_SWAP_KIB="${MIXXX_BUILD_MIN_SWAP_KIB:-524288}"
 MIN_HEADROOM_KIB="${MIXXX_BUILD_MIN_HEADROOM_KIB:-1572864}"
-MIN_DATA_DISK_KIB="${MIXXX_BUILD_MIN_DATA_DISK_KIB:-15728640}"
+COLD_MIN_DATA_DISK_KIB="${MIXXX_BUILD_COLD_MIN_DATA_DISK_KIB:-12582912}"
+WARM_MIN_DATA_DISK_KIB="${MIXXX_BUILD_WARM_MIN_DATA_DISK_KIB:-6815744}"
 MIN_ARTIFACT_DISK_KIB="${MIXXX_BUILD_MIN_ARTIFACT_DISK_KIB:-1048576}"
 MIN_CGROUP_MEMORY_BYTES="${MIXXX_BUILD_MIN_CGROUP_MEMORY_BYTES:-805306368}"
 MIN_CGROUP_SWAP_BYTES="${MIXXX_BUILD_MIN_CGROUP_SWAP_BYTES:-805306368}"
@@ -16,16 +17,35 @@ DATA_PATH="${MIXXX_BUILD_DATA_PATH:-/data}"
 ARTIFACT_PATH="${MIXXX_BUILD_ARTIFACT_PATH:-/srv/artifacts}"
 CGROUP_ROOT="${MIXXX_BUILD_CGROUP_ROOT:-/sys/fs/cgroup}"
 PRESSURE_FILE="${MIXXX_BUILD_PRESSURE_FILE:-/proc/pressure/memory}"
+REQUIRED_PLATFORM="${MIXXX_BUILD_REQUIRED_PLATFORM:-org.kde.Platform//6.10}"
+REQUIRED_SDK="${MIXXX_BUILD_REQUIRED_SDK:-org.kde.Sdk//6.10}"
+PHASE="prepare"
 
 die() {
     echo "Error: $*" >&2
     exit 1
 }
 
+if [[ $# -eq 1 ]]; then
+    case "$1" in
+        --phase=prepare)
+            ;;
+        --phase=build)
+            PHASE="build"
+            ;;
+        *)
+            die "Usage: $0 [--phase=prepare|--phase=build]"
+            ;;
+    esac
+elif [[ $# -ne 0 ]]; then
+    die "Usage: $0 [--phase=prepare|--phase=build]"
+fi
+
 for value_name in \
         MIN_SWAP_KIB \
         MIN_HEADROOM_KIB \
-        MIN_DATA_DISK_KIB \
+        COLD_MIN_DATA_DISK_KIB \
+        WARM_MIN_DATA_DISK_KIB \
         MIN_ARTIFACT_DISK_KIB \
         MIN_CGROUP_MEMORY_BYTES \
         MIN_CGROUP_SWAP_BYTES \
@@ -47,6 +67,21 @@ for value_name in MAX_PSI_SOME_AVG60 MAX_PSI_FULL_AVG60; do
     [[ "${value}" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
         die "${value_name} must be a non-negative number."
 done
+
+sdk_state="cold"
+if command -v flatpak >/dev/null 2>&1 && \
+        flatpak info --user "${REQUIRED_PLATFORM}" >/dev/null 2>&1 && \
+        flatpak info --user "${REQUIRED_SDK}" >/dev/null 2>&1; then
+    sdk_state="warm"
+fi
+if [[ "${PHASE}" == "build" && "${sdk_state}" != "warm" ]]; then
+    die "The required Flatpak Platform and SDK must be installed before compilation."
+fi
+if [[ "${sdk_state}" == "warm" ]]; then
+    MIN_DATA_DISK_KIB="${WARM_MIN_DATA_DISK_KIB}"
+else
+    MIN_DATA_DISK_KIB="${COLD_MIN_DATA_DISK_KIB}"
+fi
 
 mem_total_kib="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
 mem_available_kib="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)"
@@ -88,6 +123,7 @@ echo "Build host memory: total=${mem_total_kib} KiB available=${mem_available_ki
 echo "Build host swap: total=${swap_total_kib} KiB free=${swap_free_kib} KiB"
 echo "Build host immediate memory+swap headroom: ${available_headroom_kib} KiB"
 echo "Build data disk available at ${DATA_PATH}: ${data_disk_available_kib} KiB"
+echo "Flatpak SDK cache state: ${sdk_state}; ${PHASE} gate requires ${MIN_DATA_DISK_KIB} KiB"
 echo "Artifact disk available at ${ARTIFACT_PATH}: ${artifact_disk_available_kib} KiB"
 echo "Build filesystems: data=${data_filesystem} artifacts=${artifact_filesystem}"
 echo "Memory PSI avg60: some=${psi_some_avg60}% full=${psi_full_avg60}%"
