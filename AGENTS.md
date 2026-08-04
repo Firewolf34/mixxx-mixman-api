@@ -105,9 +105,9 @@ Before changing the deck pipeline, read:
 - Use a repository-scoped Forgejo runner, not a global runner.
 - Host workflow steps run inside a dedicated outer container.
 - No Docker socket, privileged mode, or arbitrary volume mounts. The runner has
-  the documented `SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE` exceptions for
-  Bubblewrap's nested Flatpak mount sandbox; do not add other capabilities or
-  broaden this exception without a dedicated security review.
+  the one documented exception of `SYS_ADMIN` for Bubblewrap's nested Flatpak
+  mount sandbox; do not add other capabilities or broaden this exception
+  without a dedicated security review.
 - The current VPS has only 2 GiB physical RAM and also hosts production.
 - One concurrent job, one CPU, 768-MiB resident-memory, 768-MiB swap,
   1536-MiB combined RAM+swap, 512-PID, and three-hour limits.
