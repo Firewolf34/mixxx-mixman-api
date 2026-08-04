@@ -93,6 +93,10 @@ work from a clean `dev` checkout. Short-lived `feature/*` or `fix/*` branches
 may support a focused change, but merge them into `dev` and delete them only
 after their commits are reachable from `dev`.
 
+Forgejo's repository default branch must also be `dev`, so a fresh clone starts
+on the supported development line. Change the default before deleting a
+superseded branch; Git cannot alter that Forgejo repository setting.
+
 `deck/candidate` is not a development branch; it is the only release/build
 pointer. A deck build is authorized only by promoting an exact reviewed commit
 that is already reachable from `dev`:

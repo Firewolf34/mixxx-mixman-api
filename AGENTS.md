@@ -42,6 +42,9 @@ Before changing the deck pipeline, read:
 
 - `dev` is the only long-lived development and integration branch. Start normal
   work from a clean, current `dev` checkout and push reviewed work there.
+- Forgejo's repository default branch must be `dev`. Repair that setting before
+  deleting superseded branch refs, because a bare clone otherwise starts on an
+  obsolete development line.
 - `deck/candidate` is the only release/build pointer. Do not develop directly
   on it; promote an exact reviewed commit reachable from `dev` when a VPS build
   is desired.
