@@ -40,6 +40,10 @@ Confirm runner `mixxx-flatpak-x86_64`, the exact checkout SHA, successful
 hard-budget preflight, one Flatpak Builder job, no PSI exit 75 or cgroup OOM,
 and final **Success** before checking publication.
 
+The unprivileged runner intentionally has no `/dev/fuse`; the build wrapper
+must use Flatpak Builder's `--disable-rofiles-fuse` mode rather than adding a
+device mount or privileged access.
+
 For unattended status and publication verification, configure the repository
 client once and then query or wait on the exact candidate:
 
