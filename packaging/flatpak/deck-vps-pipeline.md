@@ -210,8 +210,11 @@ The runner:
   `--disable-rofiles-fuse` to Flatpak Builder;
 - has service-scoped unconfined AppArmor and seccomp profiles solely so
   Bubblewrap can create its unprivileged build user namespace; this does not
-  grant privileged mode, a Docker socket, capabilities, extra mounts, or any
-  additional network;
+  grant privileged mode, a Docker socket, extra mounts, or any additional
+  network;
+- has the one explicit `SYS_ADMIN` capability needed by Bubblewrap to construct
+  that nested mount sandbox; no other added capability is permitted pending a
+  dedicated security review;
 - has no arbitrary container volume allowlist;
 - writes only its provider-backed data/cache and artifact bind mounts;
 - uses a dedicated bridge shared with Caddy;
