@@ -103,11 +103,12 @@ Before changing the deck pipeline, read:
 ## Runner And Infrastructure Invariants
 
 - Use a repository-scoped Forgejo runner, not a global runner.
-- Host workflow steps run inside a dedicated outer container.
-- No Docker socket, privileged mode, or arbitrary volume mounts. The runner has
-  the documented `SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE` exceptions for
-  Bubblewrap's nested Flatpak mount sandbox; do not add other capabilities or
-  broaden this exception without a dedicated security review.
+- Host workflow steps run as the non-login `mixxx-runner` systemd service on
+  the VPS. Systemd presents only the private `/data` runner-state bind and
+  `/srv/artifacts` publication bind to the service.
+- No Docker socket, privileged mode, setuid Bubblewrap, added Linux
+  capabilities, arbitrary host paths, sudo access, or login shell. Host
+  Bubblewrap must use Ubuntu's enforced unprivileged-user-namespace profile.
 - The current VPS has only 2 GiB physical RAM and also hosts production.
 - One concurrent job, one CPU, 768-MiB resident-memory, 768-MiB swap,
   1536-MiB combined RAM+swap, 512-PID, and three-hour limits.
@@ -124,14 +125,15 @@ Before changing the deck pipeline, read:
   minute must terminate the build.
 - Build off-hours. If the job OOMs, keep the hard ceiling and optimize the build
   rather than bypassing preflight, raising concurrency, or using the deck.
-- Runner data and artifacts must be required bind mounts backed by separate
-  provider-mounted filesystems, never Docker named volumes stored on `/`.
+- Runner state and artifacts must resolve to separate filesystems and be the
+  only writable binds in the systemd service; never use Docker runner volumes
+  or expose another host path.
 - The fixed 25 GiB attached storage is sufficient only with shallow checkout,
   runner-backed temporary data, a 512 MiB ccache, two retained builds, and
   transient-work cleanup. Preserve those limits.
 - Caddy mounts artifacts read-only.
-- Runner uses a dedicated network through Caddy and does not join the internal
-  application/database network.
+- Runner reaches Forgejo only through its public HTTPS route and never receives
+  a Docker network, socket, or application/database-network attachment.
 - Preserve all existing Docker volumes. Never use `docker compose down -v`.
 - Server orchestration lives in `total-infra/total-infra`, not in this repository.
 

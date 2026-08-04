@@ -145,10 +145,19 @@ awk -v actual="${psi_full_avg60}" -v maximum="${MAX_PSI_FULL_AVG60}" \
     'BEGIN { exit !(actual <= maximum) }' ||
     die "Memory PSI full avg60 ${psi_full_avg60}% exceeds ${MAX_PSI_FULL_AVG60}%."
 
-[[ -r "${CGROUP_ROOT}/memory.max" && -r "${CGROUP_ROOT}/memory.swap.max" ]] ||
+if [[ -r "${CGROUP_ROOT}/memory.max" && -r "${CGROUP_ROOT}/memory.swap.max" ]]; then
+    cgroup_path="${CGROUP_ROOT}"
+else
+    cgroup_relative_path="$(awk -F: '$1 == "0" && $2 == "" { print $3; exit }' /proc/self/cgroup)"
+    [[ "${cgroup_relative_path}" == /* ]] ||
+        die "Could not resolve the current cgroup v2 path."
+    cgroup_path="${CGROUP_ROOT}${cgroup_relative_path}"
+fi
+
+[[ -r "${cgroup_path}/memory.max" && -r "${cgroup_path}/memory.swap.max" ]] ||
     die "A cgroup v2 memory and swap limit is required."
-cgroup_memory_max="$(<"${CGROUP_ROOT}/memory.max")"
-cgroup_swap_max="$(<"${CGROUP_ROOT}/memory.swap.max")"
+cgroup_memory_max="$(<"${cgroup_path}/memory.max")"
+cgroup_swap_max="$(<"${cgroup_path}/memory.swap.max")"
 [[ "${cgroup_memory_max}" =~ ^[0-9]+$ ]] ||
     die "Runner cgroup memory.max must be a numeric limit, not ${cgroup_memory_max}."
 [[ "${cgroup_swap_max}" =~ ^[0-9]+$ ]] ||
@@ -160,6 +169,7 @@ cgroup_swap_max="$(<"${CGROUP_ROOT}/memory.swap.max")"
 cgroup_total_max=$((cgroup_memory_max + cgroup_swap_max))
 ((cgroup_total_max <= MAX_CGROUP_TOTAL_BYTES)) ||
     die "Runner cgroup RAM+swap budget ${cgroup_total_max} exceeds ${MAX_CGROUP_TOTAL_BYTES} bytes."
+echo "Runner cgroup path: ${cgroup_path}"
 echo "Runner cgroup budget: RAM=${cgroup_memory_max} swap=${cgroup_swap_max} total=${cgroup_total_max} bytes"
 
 echo "Hard-budget build preflight passed. Flatpak compilation must remain at one job."

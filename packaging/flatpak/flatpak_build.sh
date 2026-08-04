@@ -213,10 +213,11 @@ if command -v ccache > /dev/null 2>&1; then
     BUILD_OPTIONS+=("--ccache")
 fi
 
-# The unprivileged runner intentionally has no /dev/fuse. Detect the standard
-# OCI marker files as well as the conventional environment variable so native
-# flatpak-builder avoids its rofiles FUSE layer inside the runner container.
-if [[ -n ${container:-} || -e /.dockerenv || -e /run/.containerenv ||
+# The unprivileged runner intentionally has no /dev/fuse. The native systemd
+# service sets the explicit flag; retain standard OCI markers for developer
+# containers and the Flatpak Builder wrapper.
+if [[ ${MIXXX_FLATPAK_DISABLE_ROFILES_FUSE:-0} == 1 || -n ${container:-} ||
+        -e /.dockerenv || -e /run/.containerenv ||
         $BUILDER == "org.flatpak.Builder" ]]; then
     BUILD_OPTIONS+=("--disable-rofiles-fuse")
 fi

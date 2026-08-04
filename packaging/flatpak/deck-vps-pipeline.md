@@ -198,28 +198,26 @@ The runner:
 
 - uses Forgejo Runner `12.7.3`, downloaded with a pinned SHA-256;
 - provides Node 24 for host JavaScript actions;
-- runs workflow steps in host mode inside a dedicated outer container;
+- runs as a repository-scoped native `mixxx-runner.service` under a dedicated
+  non-login `mixxx-runner` UID/GID;
 - runs on a VPS with only 2 GiB physical RAM alongside production services;
 - is limited to one CPU, 768 MiB resident memory, 768 MiB swap, a hard
   1536 MiB combined RAM+swap ceiling, and 512 processes;
 - runs at CPU niceness 15 and best-effort I/O priority 7;
 - handles one job at a time;
 - has no Docker socket;
-- is not privileged;
-- has no `/dev/fuse`; the build wrapper detects the container and passes
+- has no privilege escalation, Docker socket, Linux capabilities, sudo, login
+  shell, arbitrary host mount, or internal application/database network access;
+- has no `/dev/fuse`; the service sets
+  `MIXXX_FLATPAK_DISABLE_ROFILES_FUSE=1` so the build wrapper passes
   `--disable-rofiles-fuse` to Flatpak Builder;
-- has service-scoped unconfined AppArmor and seccomp profiles solely so
-  Bubblewrap can create its unprivileged build user namespace; this does not
-  grant privileged mode, a Docker socket, extra mounts, or any additional
-  network;
-- has the explicit `SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE` capabilities
-  Bubblewrap needs to construct that nested mount sandbox; no other added
-  capability is permitted pending a dedicated security review;
-- has no arbitrary container volume allowlist;
-- writes only its provider-backed data/cache and artifact bind mounts;
-- uses a dedicated bridge shared with Caddy;
-- does not join the internal application/database network;
-- restarts with `unless-stopped`.
+- uses host Bubblewrap with Ubuntu's enforced `bwrap` AppArmor profile to make
+  unprivileged build namespaces; the unit deliberately permits namespace
+  creation but retains its cgroup, filesystem, device, process, syscall, and
+  network-family restrictions;
+- writes only its private `/data` runner-state bind and private `/srv/artifacts`
+  publication bind;
+- restarts on failure.
 
 Persistent runner data retains Flatpak SDK/dependency state and bounded ccache.
 The workflow clears transient job output, temporary files, and action cache
@@ -266,11 +264,11 @@ The normal manifest retains its existing developer/debug behavior.
 differences and compares the result with the normal manifest. Both the workflow
 and publisher refuse to build if any other manifest content drifts.
 
-The infrastructure uses two explicit, provider-backed bind mounts rather than
-Docker named volumes under `/`. Runner data is writable only by the runner.
-Artifacts are writable by the runner and mounted read-only in Caddy. Compose
-refuses to create missing host paths; the VPS operator must provide both
-dedicated mount paths in the ignored `.env`.
+The infrastructure uses two explicit, provider-backed host paths. Systemd
+binds them privately into the runner as `/data` and `/srv/artifacts`. Runner
+data is writable only by the runner; artifacts are writable by the runner and
+mounted read-only in Caddy. The VPS operator must provide both dedicated mount
+paths and retain the existing runner registration state.
 
 The fixed storage budget is made workable by:
 
@@ -552,18 +550,20 @@ The infrastructure agent must:
 
 1. deploy the latest `total-infra` implementation containing the 2 GiB safety
    corrections, Actions, and the Caddy artifact route;
-2. inspect RAM, swap, disk, Docker usage, and memory pressure;
+2. inspect RAM, swap, disk, existing runner state, and memory pressure;
 3. use the attached provider storage with separate runner-data and artifact
    filesystems, with 12 GiB free for a cold SDK setup or 6.5 GiB for a warm
    build, plus 1 GiB free for artifacts;
 4. require at least 512 MiB host swap and 1536 MiB free memory-plus-swap;
-5. validate `docker compose config` with and without the `mixxx-build` profile;
+5. validate `docker compose config` and the native systemd unit;
 6. recreate Forgejo and Caddy;
 7. enable the Actions unit for `total-infra/mixxx`;
 8. create a repository-scoped runner;
-9. store runner UUID/token in the ignored server `.env`;
-10. build and start `mixxx-runner`;
-11. verify label, isolation, mounts, networks, resource limits, and logs;
+9. preserve the repository-scoped runner registration under
+   `/var/lib/mixxx-runner-data` without printing or rotating it;
+10. install and start `mixxx-runner.service` as UID/GID `10001`;
+11. verify its label, Bubblewrap self-test, private binds, resource limits, and
+    logs;
 12. manually dispatch the first build off-hours on `deck/candidate` if its push predates
    Actions enablement;
 13. watch host pressure and verify `latest.json` plus all immutable files.
@@ -620,8 +620,8 @@ flatpak info --user --show-permissions org.mixxx.Mixxx
 VPS:
 
 ```bash
-docker compose --profile mixxx-build ps
-docker compose --profile mixxx-build logs --tail=200 mixxx-runner
+systemctl --no-pager --full status mixxx-runner.service
+journalctl --no-pager -u mixxx-runner.service -n 200
 docker compose logs --tail=200 forgejo caddy
 docker compose exec caddy caddy validate --config /etc/caddy/Caddyfile
 ```
@@ -657,9 +657,10 @@ instead of trusting either generated-archive byte representation.
 ## Security Notes
 
 - Write access to `deck/candidate` is deployment authority.
-- Workflow code runs as the runner user inside the dedicated container and can
-  write the artifact bind mount.
-- The outer container is the host-job isolation boundary.
+- Workflow code runs as the dedicated non-login runner user and can write only
+  the private artifact publication bind.
+- The native systemd service and its resource limits are the outer host-job
+  boundary; Bubblewrap is the inner unprivileged Flatpak build sandbox.
 - The runner token is repository-scoped and must not be committed.
 - Caddy gets only read access to artifacts.
 - SHA-named directories are immutable.
