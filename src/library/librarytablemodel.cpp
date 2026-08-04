@@ -59,9 +59,11 @@ void LibraryTableModel::setTableModel() {
 int LibraryTableModel::addTracks(const QModelIndex& index,
         const QList<QString>& locations) {
     Q_UNUSED(index);
-    QList<TrackId> trackIds = m_pTrackCollectionManager->resolveTrackIdsFromLocations(
+    const QList<TrackId> trackIds = m_pTrackCollectionManager->resolveTrackIdsFromLocations(
             locations);
-    select();
+    if (trackIds.size() > 0) {
+        select();
+    }
     return trackIds.size();
 }
 
@@ -69,14 +71,15 @@ bool LibraryTableModel::isColumnInternal(int column) {
     return column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_ID) ||
             column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_URL) ||
             column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_CUEPOINT) ||
-            column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_WAVESUMMARYHEX) ||
             column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_SAMPLERATE) ||
             column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_MIXXXDELETED) ||
             column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_HEADERPARSED) ||
             column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_PLAYED) ||
             column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_KEY_ID) ||
             column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BPM_LOCK) ||
+            column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BEATS_VERSION) ||
             column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_CHANNELS) ||
+            column == fieldIndex(ColumnCache::COLUMN_TRACKLOCATIONSTABLE_DIRECTORY) ||
             column == fieldIndex(ColumnCache::COLUMN_TRACKLOCATIONSTABLE_FSDELETED) ||
             (PlayerInfo::instance().numPreviewDecks() == 0 &&
                     column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_PREVIEW)) ||
@@ -102,4 +105,9 @@ TrackModel::Capabilities LibraryTableModel::getCapabilities() const {
             Capability::Analyze |
             Capability::Properties |
             Capability::Sorting;
+}
+
+void LibraryTableModel::select() {
+    BaseSqlTableModel::select();
+    emit updateTrackCount();
 }

@@ -220,7 +220,9 @@ TrackPointer BrowseTableModel::getTrack(const QModelIndex& index) const {
 }
 
 TrackPointer BrowseTableModel::getTrackByRef(const TrackRef& trackRef) const {
-    if (m_pRecordingManager->getRecordingLocation() == trackRef.getLocation()) {
+    if (m_pRecordingManager &&
+            m_pRecordingManager->getRecordingLocation() ==
+                    trackRef.getLocation()) {
         QMessageBox::critical(nullptr,
                 tr("Mixxx Library"),
                 tr("Could not load the following file because it is in use by "
@@ -404,6 +406,12 @@ Qt::ItemFlags BrowseTableModel::flags(const QModelIndex& index) const {
 
     int column = index.column();
 
+#ifdef Q_OS_IOS
+    // Make items non-editable on iOS by default, since tapping any track will
+    // otherwise trigger the on-screen keyboard (even if they cannot actually
+    // be edited).
+    return defaultFlags;
+#else
     switch (column) {
     case COLUMN_FILENAME:
     case COLUMN_BITRATE:
@@ -418,6 +426,7 @@ Qt::ItemFlags BrowseTableModel::flags(const QModelIndex& index) const {
         // editable
         return defaultFlags | Qt::ItemIsEditable;
     }
+#endif
 }
 
 bool BrowseTableModel::setData(

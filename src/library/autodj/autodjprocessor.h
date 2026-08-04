@@ -167,7 +167,8 @@ class AutoDJProcessor : public QObject {
         FullIntroOutro,
         FadeAtOutroStart,
         FixedFullTrack,
-        FixedSkipSilence
+        FixedSkipSilence,
+        FixedStartCenterSkipSilence
     };
 
     AutoDJProcessor(QObject* pParent,
@@ -205,7 +206,14 @@ class AutoDJProcessor : public QObject {
     AutoDJError toggleAutoDJ(bool enable);
 
   signals:
+#ifdef __STEM__
+    void loadTrackToPlayer(TrackPointer pTrack,
+            const QString& group,
+            mixxx::StemChannelSelection stemMask,
+            bool play);
+#else
     void loadTrackToPlayer(TrackPointer pTrack, const QString& group, bool play);
+#endif
     void autoDJStateChanged(AutoDJProcessor::AutoDJState state);
     void autoDJError(AutoDJProcessor::AutoDJError error);
     void transitionTimeChanged(int time);
@@ -235,7 +243,11 @@ class AutoDJProcessor : public QObject {
   protected:
     // The following virtual signal wrappers are used for testing
     virtual void emitLoadTrackToPlayer(TrackPointer pTrack, const QString& group, bool play) {
-        emit loadTrackToPlayer(pTrack, group, play);
+        emit loadTrackToPlayer(pTrack, group,
+#ifdef __STEM__
+                mixxx::StemChannelSelection(),
+#endif
+                play);
     }
     virtual void emitAutoDJStateChanged(AutoDJProcessor::AutoDJState state) {
         emit autoDJStateChanged(state);
@@ -291,6 +303,7 @@ class AutoDJProcessor : public QObject {
     double m_transitionProgress;
     double m_transitionTime; // the desired value set by the user
     TransitionMode m_transitionMode;
+    bool m_crossfaderStartCenter;
 
     PlayerManagerInterface* m_pPlayerManager;
     std::vector<std::unique_ptr<DeckAttributes>> m_decks;

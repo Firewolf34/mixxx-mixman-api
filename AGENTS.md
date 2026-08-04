@@ -74,7 +74,7 @@ Before changing the deck pipeline, read:
 - No Docker socket, privileged mode, or arbitrary volume mounts.
 - The current VPS has only 2 GiB physical RAM and also hosts production.
 - One concurrent job, one CPU, 768-MiB resident-memory, 768-MiB swap,
-  1536-MiB combined RAM+swap, 512-PID, and 24-hour limits.
+  1536-MiB combined RAM+swap, 512-PID, and three-hour limits.
 - Flatpak Builder must run with one job.
 - Deck candidates use the dedicated Release/no-debug manifest, GNU BFD
   low-memory flags, disabled LTO, and inherited low CPU/I/O priority.
@@ -97,7 +97,7 @@ Before changing the deck pipeline, read:
 - Runner uses a dedicated network through Caddy and does not join the internal
   application/database network.
 - Preserve all existing Docker volumes. Never use `docker compose down -v`.
-- Server orchestration lives in `andrew/total-infra`, not in this repository.
+- Server orchestration lives in `total-infra/total-infra`, not in this repository.
 
 ## Client Invariants
 

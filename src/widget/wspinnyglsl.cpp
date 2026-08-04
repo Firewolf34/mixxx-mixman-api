@@ -54,8 +54,12 @@ void WSpinnyGLSL::resizeGL(int w, int h) {
 }
 
 void WSpinnyGLSL::updateTextures() {
-    m_bgTexture.setData(m_pBgImage);
-    m_maskTexture.setData(m_pMaskImage);
+    if (m_pBgImage) {
+        m_bgTexture.setData(*m_pBgImage);
+    }
+    if (m_pMaskImage) {
+        m_maskTexture.setData(*m_pMaskImage);
+    }
     m_fgTextureScaled.setData(m_fgImageScaled);
     m_ghostTextureScaled.setData(m_ghostImageScaled);
     m_loadedCoverTextureScaled.setData(m_loadedCoverScaled);
@@ -80,7 +84,11 @@ void WSpinnyGLSL::updateVinylSignalQualityImage(
                 0,
                 m_iVinylScopeSize,
                 m_iVinylScopeSize,
+#if defined(GL_RED)
                 GL_RED,
+#else
+                GL_RED_EXT,
+#endif
                 GL_UNSIGNED_BYTE,
                 data);
         m_qTexture.release();

@@ -9,6 +9,7 @@
 #include <QtDebug>
 #include <QtGlobal>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 
 #include "config.h"
@@ -17,12 +18,18 @@
 #include "errordialoghandler.h"
 #include "mixxxapplication.h"
 #ifdef MIXXX_USE_QML
+#include "mixer/playermanager.h"
 #include "qml/qmlapplication.h"
+#include "waveform/guitick.h"
+#include "waveform/visualsmanager.h"
+#include "waveform/waveformwidgetfactory.h"
 #endif
 #include "mixxxmainwindow.h"
 #if defined(__WINDOWS__)
 #include "nativeeventhandlerwin.h"
 #endif
+#include "skin/skin.h"
+#include "skin/skinloader.h"
 #include "sources/soundsourceproxy.h"
 #include "util/cmdlineargs.h"
 #include "util/console.h"
@@ -54,13 +61,31 @@ constexpr int kPixmapCacheLimitAt100PercentZoom = 32 * 1024; // 32 MByte
 int runMixxx(MixxxApplication* pApp, const CmdlineArgs& args) {
     CmdlineArgs::Instance().parseForUserFeedback();
 
-    const auto pCoreServices = std::make_shared<mixxx::CoreServices>(args, pApp);
-
     int exitCode;
+    auto pCoreServices = std::make_shared<mixxx::CoreServices>(args, pApp);
 #ifdef MIXXX_USE_QML
-    if (args.isQml()) {
-        mixxx::qml::QmlApplication qmlApplication(pApp, pCoreServices);
-        exitCode = pApp->exec();
+    QString mainQmlFilePath;
+    bool loadQml = args.isQml();
+    if (!loadQml && args.getDeveloper()) {
+        mixxx::skin::SkinLoader skinLoader(pCoreServices->getSettings());
+        const mixxx::skin::SkinPointer pSkin = skinLoader.getConfiguredSkin();
+        if (pSkin && pSkin->type() == mixxx::skin::SkinType::QML) {
+            loadQml = true;
+            mainQmlFilePath = pSkin->mainQmlFilePath();
+        }
+    }
+    if (loadQml) {
+        // This is a workaround to support Qt 6.4.2, currently shipped on
+        // Ubuntu 24.04 See
+        // https://github.com/mixxxdj/mixxx/pull/14514#issuecomment-2770811094
+        // for further details
+        qputenv("QT_QUICK_TABLEVIEW_COMPAT_VERSION", "6.4");
+        mixxx::qml::QmlApplication qmlApplication(pApp, pCoreServices, mainQmlFilePath);
+        if (!qmlApplication.isReady()) {
+            exitCode = kFatalErrorOnStartupExitCode;
+        } else {
+            exitCode = pApp->exec();
+        }
     } else
 #endif
     {
@@ -87,6 +112,11 @@ int runMixxx(MixxxApplication* pApp, const CmdlineArgs& args) {
                 pow(pApp->devicePixelRatio(), 2.0f)));
 
         pCoreServices->initialize(pApp);
+
+        if (pCoreServices->getSettings()->getValue(
+                    ConfigKey("[Config]", "did_run_with_unstable"), false)) {
+            qInfo() << "User previously ran the unstable version on this profile";
+        }
 
 #ifdef MIXXX_USE_QOPENGL
         // Will call initialize when the initial wglwidget's
@@ -165,6 +195,18 @@ void applyStyleOverride(CmdlineArgs* pArgs) {
 }
 
 } // anonymous namespace
+
+#ifdef Q_OS_ANDROID
+  // Currently, accessibility properties are not set, leading to a warning spam in
+  // the android logcat. Furthermore, there seems to be a few issues with the default setup,
+  // which leads to huge performance loss and occasional random crash.
+extern "C" {
+JNIEXPORT bool JNICALL
+Java_org_qtproject_qt_android_QtNativeAccessibility_accessibilitySupported(JNIEnv*, jobject) {
+    return false;
+}
+}
+#endif
 
 int main(int argc, char * argv[]) {
     Console console;

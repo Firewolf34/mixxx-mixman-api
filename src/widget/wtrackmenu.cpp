@@ -41,6 +41,7 @@
 #include "util/parented_ptr.h"
 #include "util/qt.h"
 #include "util/widgethelper.h"
+#include "widget/findonweblast.h"
 #include "widget/findonwebmenufactory.h"
 #include "widget/wcolorpickeraction.h"
 #include "widget/wcoverartlabel.h"
@@ -51,6 +52,9 @@
 // WStarRating is required for DlgTrackInfo
 #include "widget/wstarrating.h"
 #include "widget/wstarratingaction.h"
+#ifdef __STEM__
+#include "widget/wtrackstemmenu.h"
+#endif
 
 constexpr WTrackMenu::Features WTrackMenu::kDeckTrackMenuFeatures;
 
@@ -94,6 +98,9 @@ void storeActionTextAndScaleInProperties(QAction* pAction, const double scale) {
 }
 
 } // namespace
+
+bool WTrackMenu::s_showPurgeSuccessPopup = true;
+bool WTrackMenu::s_confirmForAutoDjReplace = true;
 
 WTrackMenu::WTrackMenu(
         QWidget* parent,
@@ -213,6 +220,9 @@ void WTrackMenu::createMenus() {
         m_pColorMenu->setTitle(tr("Select Color"));
     }
 
+    m_pHotcueMenu = make_parented<QMenu>(this);
+    m_pHotcueMenu->setTitle(tr("Hotcues"));
+
     if (featureIsEnabled(Feature::Reset)) {
         m_pClearMetadataMenu = make_parented<QMenu>(this);
         //: Reset metadata in right click track context menu in library
@@ -259,21 +269,8 @@ void WTrackMenu::createMenus() {
 
     if (featureIsEnabled(Feature::FindOnWeb)) {
         DEBUG_ASSERT(!m_pFindOnWebMenu);
-        m_pFindOnWebMenu = make_parented<WFindOnWebMenu>(this);
-        connect(m_pFindOnWebMenu,
-                &QMenu::aboutToShow,
-                this,
-                [this] {
-                    m_pFindOnWebMenu->clear();
-                    const auto pTrack = getFirstTrackPointer();
-                    if (pTrack) {
-                        mixxx::library::createFindOnWebSubmenus(
-                                m_pFindOnWebMenu,
-                                *pTrack);
-                    }
-                    m_pFindOnWebMenu->setEnabled(
-                            !m_pFindOnWebMenu->isEmpty());
-                });
+        m_pFindOnWebMenu = make_parented<QMenu>(tr("Find on Web"), this);
+        m_pFindOnWebLastAct = make_parented<FindOnWebLast>(this, m_pConfig);
     }
 
     if (featureIsEnabled(Feature::RemoveFromDisk)) {
@@ -302,18 +299,6 @@ void WTrackMenu::createActions() {
 
         m_pAutoDJReplaceAct = make_parented<QAction>(tr("Add to Auto DJ Queue (replace)"), this);
         connect(m_pAutoDJReplaceAct, &QAction::triggered, this, &WTrackMenu::slotAddToAutoDJReplace);
-    }
-
-    if (featureIsEnabled(Feature::LoadTo)) {
-        m_pAddToPreviewDeck = make_parented<QAction>(tr("Preview Deck"), m_pLoadToMenu);
-        // currently there is only one preview deck so just map it here.
-        QString previewDeckGroup = PlayerManager::groupForPreviewDeck(0);
-        connect(m_pAddToPreviewDeck,
-                &QAction::triggered,
-                this,
-                [this, previewDeckGroup] {
-                    loadSelectionToGroup(previewDeckGroup);
-                });
     }
 
     if (featureIsEnabled(Feature::Remove)) {
@@ -478,6 +463,23 @@ void WTrackMenu::createActions() {
 
         m_pClearAllMetadataAction = make_parented<QAction>(tr("All"), m_pClearMetadataMenu);
         connect(m_pClearAllMetadataAction, &QAction::triggered, this, &WTrackMenu::slotClearAllMetadata);
+
+        m_pSortHotcuesByPositionCompressAction = make_parented<QAction>(
+                tr("Sort hotcues by position (remove offsets)"), m_pHotcueMenu);
+        connect(m_pSortHotcuesByPositionCompressAction,
+                &QAction::triggered,
+                this,
+                [this]() {
+                    slotSortHotcuesByPosition(HotcueSortMode::RemoveOffsets);
+                });
+        m_pSortHotcuesByPositionAction = make_parented<QAction>(
+                tr("Sort hotcues by position"), m_pHotcueMenu);
+        connect(m_pSortHotcuesByPositionAction,
+                &QAction::triggered,
+                this,
+                [this]() {
+                    slotSortHotcuesByPosition(HotcueSortMode::KeepOffsets);
+                });
     }
 
     if (featureIsEnabled(Feature::BPM)) {
@@ -487,22 +489,23 @@ void WTrackMenu::createActions() {
         connect(m_pBpmUnlockAction, &QAction::triggered, this, &WTrackMenu::slotUnlockBpm);
 
         //BPM edit actions
-        m_pBpmDoubleAction = make_parented<QAction>(tr("Double BPM"), m_pBPMMenu);
-        storeActionTextAndScaleInProperties(m_pBpmDoubleAction, 2.0);
         m_pBpmHalveAction = make_parented<QAction>(tr("Halve BPM"), m_pBPMMenu);
         storeActionTextAndScaleInProperties(m_pBpmHalveAction, 0.5);
         m_pBpmTwoThirdsAction = make_parented<QAction>(tr("2/3 BPM"), m_pBPMMenu);
         storeActionTextAndScaleInProperties(m_pBpmTwoThirdsAction, 2.0 / 3.0);
         m_pBpmThreeFourthsAction = make_parented<QAction>(tr("3/4 BPM"), m_pBPMMenu);
         storeActionTextAndScaleInProperties(m_pBpmThreeFourthsAction, 3.0 / 4.0);
+        m_pBpmFourFifthsAction = make_parented<QAction>(tr("4/5 BPM"), m_pBPMMenu);
+        storeActionTextAndScaleInProperties(m_pBpmFourFifthsAction, 4.0 / 5.0);
+        m_pBpmFiveFourthsAction = make_parented<QAction>(tr("5/4 BPM"), m_pBPMMenu);
+        storeActionTextAndScaleInProperties(m_pBpmFiveFourthsAction, 5.0 / 4.0);
         m_pBpmFourThirdsAction = make_parented<QAction>(tr("4/3 BPM"), m_pBPMMenu);
         storeActionTextAndScaleInProperties(m_pBpmFourThirdsAction, 4.0 / 3.0);
         m_pBpmThreeHalvesAction = make_parented<QAction>(tr("3/2 BPM"), m_pBPMMenu);
         storeActionTextAndScaleInProperties(m_pBpmThreeHalvesAction, 3.0 / 2.0);
+        m_pBpmDoubleAction = make_parented<QAction>(tr("Double BPM"), m_pBPMMenu);
+        storeActionTextAndScaleInProperties(m_pBpmDoubleAction, 2.0);
 
-        connect(m_pBpmDoubleAction, &QAction::triggered, this, [this] {
-            slotScaleBpm(mixxx::Beats::BpmScale::Double);
-        });
         connect(m_pBpmHalveAction, &QAction::triggered, this, [this] {
             slotScaleBpm(mixxx::Beats::BpmScale::Halve);
         });
@@ -512,11 +515,20 @@ void WTrackMenu::createActions() {
         connect(m_pBpmThreeFourthsAction, &QAction::triggered, this, [this] {
             slotScaleBpm(mixxx::Beats::BpmScale::ThreeFourths);
         });
+        connect(m_pBpmFourFifthsAction, &QAction::triggered, this, [this] {
+            slotScaleBpm(mixxx::Beats::BpmScale::FourFifths);
+        });
+        connect(m_pBpmFiveFourthsAction, &QAction::triggered, this, [this] {
+            slotScaleBpm(mixxx::Beats::BpmScale::FiveFourths);
+        });
         connect(m_pBpmFourThirdsAction, &QAction::triggered, this, [this] {
             slotScaleBpm(mixxx::Beats::BpmScale::FourThirds);
         });
         connect(m_pBpmThreeHalvesAction, &QAction::triggered, this, [this] {
             slotScaleBpm(mixxx::Beats::BpmScale::ThreeHalves);
+        });
+        connect(m_pBpmDoubleAction, &QAction::triggered, this, [this] {
+            slotScaleBpm(mixxx::Beats::BpmScale::Double);
         });
 
         m_pBpmResetAction = make_parented<QAction>(tr("Clear BPM and Beatgrid"), m_pBPMMenu);
@@ -530,6 +542,15 @@ void WTrackMenu::createActions() {
                 &QAction::triggered,
                 this,
                 &WTrackMenu::slotUndoBeatsChange);
+    }
+
+    if (!m_pTrackModel && featureIsEnabled(Feature::BPM)) {
+        m_pTranslateBeatsHalf = make_parented<QAction>(tr("Shift Beatgrid Half Beat"), m_pBPMMenu);
+        storeActionTextAndScaleInProperties(m_pTranslateBeatsHalf, 2.0);
+
+        connect(m_pTranslateBeatsHalf, &QAction::triggered, this, [this] {
+            slotTranslateBeatsHalf();
+        });
     }
 
     if (featureIsEnabled(Feature::Analyze)) {
@@ -578,6 +599,7 @@ void WTrackMenu::createActions() {
 }
 
 void WTrackMenu::setupActions() {
+    addSeparator();
     if (featureIsEnabled(Feature::SearchRelated)) {
         addMenu(m_pSearchRelatedMenu);
     }
@@ -599,14 +621,6 @@ void WTrackMenu::setupActions() {
     }
 
     if (featureIsEnabled(Feature::LoadTo)) {
-        m_pLoadToMenu->addMenu(m_pDeckMenu);
-
-        m_pLoadToMenu->addMenu(m_pSamplerMenu);
-
-        if (m_pNumPreviewDecks.get() > 0.0) {
-            m_pLoadToMenu->addAction(m_pAddToPreviewDeck);
-        }
-
         addMenu(m_pLoadToMenu);
         addSeparator();
     }
@@ -637,9 +651,15 @@ void WTrackMenu::setupActions() {
         m_pBPMMenu->addAction(m_pBpmHalveAction);
         m_pBPMMenu->addAction(m_pBpmTwoThirdsAction);
         m_pBPMMenu->addAction(m_pBpmThreeFourthsAction);
+        m_pBPMMenu->addAction(m_pBpmFourFifthsAction);
+        m_pBPMMenu->addAction(m_pBpmFiveFourthsAction);
         m_pBPMMenu->addAction(m_pBpmFourThirdsAction);
         m_pBPMMenu->addAction(m_pBpmThreeHalvesAction);
         m_pBPMMenu->addAction(m_pBpmDoubleAction);
+        if (m_pTranslateBeatsHalf) {
+            m_pBPMMenu->addSeparator();
+            m_pBPMMenu->addAction(m_pTranslateBeatsHalf);
+        }
         m_pBPMMenu->addSeparator();
         m_pBPMMenu->addAction(m_pBpmLockAction);
         m_pBPMMenu->addAction(m_pBpmUnlockAction);
@@ -661,8 +681,10 @@ void WTrackMenu::setupActions() {
 
     if (featureIsEnabled(Feature::Metadata)) {
         m_pMetadataMenu->addAction(m_pImportMetadataFromFileAct);
-        m_pMetadataMenu->addAction(m_pImportMetadataFromMusicBrainzAct);
         m_pMetadataMenu->addAction(m_pExportMetadataAct);
+        m_pMetadataMenu->addMenu(m_pCoverMenu);
+
+        m_pMetadataMenu->addAction(m_pImportMetadataFromMusicBrainzAct);
 
         for (const auto& updateInExternalTrackCollection :
                 std::as_const(m_updateInExternalTrackCollections)) {
@@ -687,12 +709,17 @@ void WTrackMenu::setupActions() {
                     });
         }
 
-        m_pMetadataMenu->addMenu(m_pCoverMenu);
         if (featureIsEnabled(Feature::FindOnWeb)) {
+            m_pMetadataMenu->addAction(m_pFindOnWebLastAct);
             m_pMetadataMenu->addMenu(m_pFindOnWebMenu);
         }
+
         addSeparator();
         addMenu(m_pMetadataMenu);
+
+        m_pHotcueMenu->addAction(m_pSortHotcuesByPositionCompressAction);
+        m_pHotcueMenu->addAction(m_pSortHotcuesByPositionAction);
+        addMenu(m_pHotcueMenu);
     }
 
     if (featureIsEnabled(Feature::Reset)) {
@@ -708,6 +735,7 @@ void WTrackMenu::setupActions() {
         m_pClearMetadataMenu->addAction(m_pClearKeyAction);
         m_pClearMetadataMenu->addAction(m_pClearReplayGainAction);
         m_pClearMetadataMenu->addAction(m_pClearWaveformAction);
+        m_pClearMetadataMenu->addSeparator();
         m_pClearMetadataMenu->addSeparator();
         m_pClearMetadataMenu->addAction(m_pClearAllMetadataAction);
         addMenu(m_pClearMetadataMenu);
@@ -908,9 +936,53 @@ CoverInfo WTrackMenu::getCoverInfoOfLastTrack() const {
     }
 }
 
+void WTrackMenu::generateTrackLoadMenu(const QString& group,
+        const QString& label,
+        TrackPointer pTrack,
+        QMenu* pParentMenu,
+        bool primaryDeck,
+        bool enabled) {
+#ifdef __STEM__
+    if (pTrack && !pTrack->hasStreamInfoFromSource()) {
+        // The stem metadata are loaded on stream info refresh, which occurs
+        // when the file gets loaded for the time in the session. If there is no
+        // stream info from source, when open the file, which lead to loading
+        // the stem manifest.
+        mixxx::AudioSource::OpenParams config;
+        config.setChannelCount(mixxx::kMaxEngineChannelInputCount);
+        SoundSourceProxy(pTrack).openAudioSource(config);
+    }
+    if (enabled && pTrack && pTrack->hasStem()) {
+        auto* pStemMenu = new WTrackStemMenu(
+                label, pParentMenu, primaryDeck, group, pTrack->getStemInfo());
+        connect(pStemMenu,
+                &WTrackStemMenu::selectedStem,
+                this,
+                [this](const QString& group, mixxx::StemChannelSelection stemMask) {
+                    loadSelectionToGroup(group, stemMask);
+                    close();
+                });
+        pParentMenu->addMenu(pStemMenu);
+    } else
+#else
+    Q_UNUSED(pTrack)
+    Q_UNUSED(primaryDeck)
+#endif
+    {
+        QAction* pAction = new QAction(label, this);
+        pAction->setEnabled(enabled);
+        pParentMenu->addAction(pAction);
+        connect(pAction, &QAction::triggered, this, [this, group] { loadSelectionToGroup(group); });
+    }
+}
+
 void WTrackMenu::updateMenus() {
     if (isEmpty()) {
         return;
+    }
+
+    if (m_pLoadToMenu) {
+        m_pLoadToMenu->clear();
     }
 
     // Gray out some stuff if multiple songs were selected.
@@ -960,14 +1032,16 @@ void WTrackMenu::updateMenus() {
                 bool deckEnabled =
                         (!deckPlaying || allowLoadTrackIntoPlayingDeck) &&
                         singleTrackSelected;
-                auto pAction = make_parented<QAction>(tr("Deck %1").arg(i), this);
-                pAction->setEnabled(deckEnabled);
-                m_pDeckMenu->addAction(pAction);
-                connect(pAction, &QAction::triggered, this, [this, deckGroup] {
-                    loadSelectionToGroup(deckGroup);
-                });
+                auto pTrack = getFirstTrackPointer();
+                generateTrackLoadMenu(deckGroup,
+                        tr("Deck %1").arg(i),
+                        getFirstTrackPointer(),
+                        m_pDeckMenu,
+                        true,
+                        deckEnabled);
             }
         }
+        m_pLoadToMenu->addMenu(m_pDeckMenu);
 
         int iNumSamplers = static_cast<int>(m_pNumSamplers.get());
         const int maxSamplersPerMenu = 16;
@@ -976,6 +1050,7 @@ void WTrackMenu::updateMenus() {
         if (singleTrackSelected && iNumSamplers > 0) {
             QMenu* pMenu = m_pSamplerMenu;
             int samplersInMenu = 0;
+            TrackPointer pTrack = getFirstTrackPointer();
             for (int i = 1; i <= iNumSamplers; ++i) {
                 if (samplersInMenu == maxSamplersPerMenu) {
                     samplersInMenu = 0;
@@ -990,16 +1065,24 @@ void WTrackMenu::updateMenus() {
                 bool samplerPlaying = ControlObject::get(
                                               ConfigKey(samplerGroup, "play")) > 0.0;
                 bool samplerEnabled = !samplerPlaying && singleTrackSelected;
-                auto pAction = make_parented<QAction>(samplerTrString(i), pMenu);
-                pAction->setEnabled(samplerEnabled);
-                pMenu->addAction(pAction);
-                connect(pAction,
-                        &QAction::triggered,
-                        this,
-                        [this, samplerGroup] {
-                            loadSelectionToGroup(samplerGroup);
-                        });
+
+                generateTrackLoadMenu(samplerGroup,
+                        samplerTrString(i),
+                        pTrack,
+                        pMenu,
+                        false,
+                        samplerEnabled);
             }
+        }
+        m_pLoadToMenu->addMenu(m_pSamplerMenu);
+
+        if (m_pNumPreviewDecks.get() > 0.0) {
+            // currently there is only one preview deck so just map it here.
+            generateTrackLoadMenu(PlayerManager::groupForPreviewDeck(0),
+                    tr("Preview Deck"),
+                    getFirstTrackPointer(),
+                    m_pLoadToMenu,
+                    false);
         }
     }
 
@@ -1034,7 +1117,6 @@ void WTrackMenu::updateMenus() {
         // We use the last selected track for the cover art context to be
         // consistent with selectionChanged above.
         m_pCoverMenu->setCoverArt(getCoverInfoOfLastTrack());
-        m_pMetadataMenu->addMenu(m_pCoverMenu);
     }
 
     if (featureIsEnabled(Feature::Analyze)) {
@@ -1058,12 +1140,14 @@ void WTrackMenu::updateMenus() {
         if (featureIsEnabled(Feature::BPM)) {
             m_pBpmUnlockAction->setEnabled(anyBpmLocked);
             m_pBpmLockAction->setEnabled(anyBpmNotLocked);
-            m_pBpmDoubleAction->setEnabled(!anyBpmLocked);
             m_pBpmHalveAction->setEnabled(!anyBpmLocked);
             m_pBpmTwoThirdsAction->setEnabled(!anyBpmLocked);
             m_pBpmThreeFourthsAction->setEnabled(!anyBpmLocked);
+            m_pBpmFourFifthsAction->setEnabled(!anyBpmLocked);
+            m_pBpmFiveFourthsAction->setEnabled(!anyBpmLocked);
             m_pBpmFourThirdsAction->setEnabled(!anyBpmLocked);
             m_pBpmThreeHalvesAction->setEnabled(!anyBpmLocked);
+            m_pBpmDoubleAction->setEnabled(!anyBpmLocked);
             m_pBpmResetAction->setEnabled(!anyBpmLocked);
             m_pBpmUndoAction->setEnabled(!anyBpmLocked && canUndoBeatsChange());
 
@@ -1077,12 +1161,14 @@ void WTrackMenu::updateMenus() {
                 }
                 if (pTrack) {
                     const double bpm = pTrack->getBpm();
-                    appendBpmPreviewtoBpmAction(m_pBpmDoubleAction, bpm);
                     appendBpmPreviewtoBpmAction(m_pBpmHalveAction, bpm);
                     appendBpmPreviewtoBpmAction(m_pBpmTwoThirdsAction, bpm);
                     appendBpmPreviewtoBpmAction(m_pBpmThreeFourthsAction, bpm);
+                    appendBpmPreviewtoBpmAction(m_pBpmFourFifthsAction, bpm);
+                    appendBpmPreviewtoBpmAction(m_pBpmFiveFourthsAction, bpm);
                     appendBpmPreviewtoBpmAction(m_pBpmFourThirdsAction, bpm);
                     appendBpmPreviewtoBpmAction(m_pBpmThreeHalvesAction, bpm);
+                    appendBpmPreviewtoBpmAction(m_pBpmDoubleAction, bpm);
                 }
             }
         }
@@ -1093,6 +1179,10 @@ void WTrackMenu::updateMenus() {
     // Disable it if no deck group was set.
     if (m_pUpdateReplayGainAct) {
         m_pUpdateReplayGainAct->setEnabled(!m_deckGroup.isEmpty());
+    }
+
+    if (m_pTranslateBeatsHalf) {
+        m_pTranslateBeatsHalf->setEnabled(!m_deckGroup.isEmpty());
     }
 
     if (featureIsEnabled(Feature::Color)) {
@@ -1153,9 +1243,18 @@ void WTrackMenu::updateMenus() {
     }
 
     if (featureIsEnabled(Feature::FindOnWeb)) {
+        // We have a new Track
+        m_pFindOnWebMenu->clear();
+        m_pFindOnWebLastAct->setVisible(false);
         const auto pTrack = getFirstTrackPointer();
         const bool enableMenu = pTrack ? WFindOnWebMenu::hasEntriesForTrack(*pTrack) : false;
-        m_pFindOnWebMenu->setEnabled(enableMenu);
+        if (enableMenu) {
+            mixxx::library::createFindOnWebSubmenus(
+                    m_pFindOnWebMenu.toWeakRef(),
+                    m_pFindOnWebLastAct.toWeakRef(),
+                    *pTrack);
+        }
+        m_pFindOnWebMenu->setEnabled(!m_pFindOnWebMenu->isEmpty());
     }
 }
 
@@ -1176,7 +1275,6 @@ void WTrackMenu::loadTrack(
     }
     m_pTrack = pTrack;
     m_deckGroup = deckGroup;
-    updateMenus();
 }
 
 void WTrackMenu::loadTrackModelIndices(
@@ -1192,14 +1290,13 @@ void WTrackMenu::loadTrackModelIndices(
     clearTrackSelection();
 
     m_trackIndexList = trackIndexList;
-    updateMenus();
 }
 
 TrackIdList WTrackMenu::getTrackIds() const {
     TrackIdList trackIds;
     if (m_pTrackModel) {
         trackIds.reserve(m_trackIndexList.size());
-        for (const auto& index : m_trackIndexList) {
+        for (const auto& index : std::as_const(m_trackIndexList)) {
             const auto trackId = m_pTrackModel->getTrackId(index);
             if (!trackId.isValid()) {
                 // Skip unavailable tracks
@@ -1221,7 +1318,7 @@ QList<TrackRef> WTrackMenu::getTrackRefs() const {
     QList<TrackRef> trackRefs;
     if (m_pTrackModel) {
         trackRefs.reserve(m_trackIndexList.size());
-        for (const auto& index : m_trackIndexList) {
+        for (const auto& index : std::as_const(m_trackIndexList)) {
             auto trackRef = TrackRef::fromFilePath(
                     m_pTrackModel->getTrackLocation(index),
                     m_pTrackModel->getTrackId(index));
@@ -1242,7 +1339,7 @@ QList<TrackRef> WTrackMenu::getTrackRefs() const {
 
 TrackPointer WTrackMenu::getFirstTrackPointer() const {
     if (m_pTrackModel) {
-        for (const auto& index : m_trackIndexList) {
+        for (const auto& index : std::as_const(m_trackIndexList)) {
             const auto pTrack = m_pTrackModel->getTrack(index);
             if (pTrack) {
                 return pTrack;
@@ -1257,7 +1354,7 @@ TrackPointer WTrackMenu::getFirstTrackPointer() const {
 TrackPointerList WTrackMenu::getTrackPointers() const {
     TrackPointerList tracks;
     if (m_pTrackModel) {
-        for (const auto& index : m_trackIndexList) {
+        for (const auto& index : std::as_const(m_trackIndexList)) {
             const auto pTrack = m_pTrackModel->getTrack(index);
             if (pTrack) {
                 tracks.append(pTrack);
@@ -1385,6 +1482,21 @@ void WTrackMenu::slotUpdateReplayGainFromPregain() {
         return;
     }
     m_pTrack->adjustReplayGainFromPregain(gain, m_deckGroup);
+}
+
+void WTrackMenu::slotTranslateBeatsHalf() {
+    VERIFY_OR_DEBUG_ASSERT(m_pTrack) {
+        return;
+    }
+    const mixxx::BeatsPointer pBeats = m_pTrack->getBeats();
+    if (!pBeats) {
+        return;
+    }
+    const auto translatedBeats = pBeats->tryTranslateBeats(0.5);
+    if (!translatedBeats) {
+        return;
+    }
+    m_pTrack->trySetBeats(*translatedBeats);
 }
 
 void WTrackMenu::slotImportMetadataFromFileTags() {
@@ -1889,7 +2001,14 @@ void WTrackMenu::slotColorPicked(const mixxx::RgbColor::optional_t& color) {
     hide();
 }
 
-void WTrackMenu::loadSelectionToGroup(const QString& group, bool play) {
+#ifdef __STEM__
+void WTrackMenu::loadSelectionToGroup(const QString& group,
+        mixxx::StemChannelSelection stemMask,
+        bool play) {
+#else
+void WTrackMenu::loadSelectionToGroup(const QString& group,
+        bool play) {
+#endif
     TrackPointer pTrack = getFirstTrackPointer();
     if (!pTrack) {
         return;
@@ -1909,7 +2028,11 @@ void WTrackMenu::loadSelectionToGroup(const QString& group, bool play) {
 
     // TODO: load track from this class without depending on
     // external slot to load track
+#ifdef __STEM__
+    emit loadTrackToPlayer(pTrack, group, stemMask, play);
+#else
     emit loadTrackToPlayer(pTrack, group, play);
+#endif
 }
 
 namespace {
@@ -2087,6 +2210,19 @@ class ResetOutroTrackPointerOperation : public mixxx::TrackPointerOperation {
     }
 };
 
+class SortHotcuesByPositionTrackPointerOperation : public mixxx::TrackPointerOperation {
+  public:
+    explicit SortHotcuesByPositionTrackPointerOperation(HotcueSortMode sortMode)
+            : m_sortMode(sortMode) {
+    }
+
+  private:
+    void doApply(const TrackPointer& pTrack) const override {
+        pTrack->setHotcueIndicesSortedByPosition(m_sortMode);
+    }
+    HotcueSortMode m_sortMode;
+};
+
 } // anonymous namespace
 
 void WTrackMenu::slotResetMainCue() {
@@ -2134,6 +2270,27 @@ void WTrackMenu::slotClearHotCues() {
             tr("Removing hot cues from %n track(s)", "", getTrackCount());
     const auto trackOperator =
             RemoveCuesOfTypeTrackPointerOperation(mixxx::CueType::HotCue);
+    applyTrackPointerOperation(
+            progressLabelText,
+            &trackOperator);
+}
+
+void WTrackMenu::slotSortHotcuesByPosition(HotcueSortMode sortMode) {
+    QString progressLabelText;
+    switch (sortMode) {
+    case HotcueSortMode::RemoveOffsets:
+        progressLabelText = tr(
+                "Sorting hotcues of %n track(s) by position (remove offsets)",
+                "",
+                getTrackCount());
+        break;
+    case HotcueSortMode::KeepOffsets:
+        progressLabelText =
+                tr("Sorting hotcues of %n track(s) by position", "", getTrackCount());
+        break;
+    }
+    const auto trackOperator =
+            SortHotcuesByPositionTrackPointerOperation(sortMode);
     applyTrackPointerOperation(
             progressLabelText,
             &trackOperator);
@@ -2301,10 +2458,10 @@ class RemoveTrackFilesFromDiskTrackPointerOperation : public mixxx::TrackPointer
         }
         QString location = pTrack->getLocation();
         QFile file(location);
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-        if (file.exists() && !file.moveToTrash()) {
-#else
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
         if (file.exists() && !file.remove()) {
+#else
+        if (file.exists() && !file.moveToTrash()) {
 #endif
             // Deletion failed, log warning and queue location for the
             // Failed Deletions warning.
@@ -2359,22 +2516,21 @@ void WTrackMenu::slotRemoveFromDisk() {
 
         QString delWarningText;
         if (m_pTrackModel) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-            delWarningText = tr("Move these files to the trash bin?");
-#else
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
             delWarningText = tr("Permanently delete these files from disk?") +
                     QStringLiteral("<br><br><b>") +
                     tr("This can not be undone!") + QStringLiteral("</b>");
+#else
+            delWarningText = tr("Move these files to the trash bin?");
 #endif
         } else { // track menu of track labels
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-
-            delWarningText = tr("Move this track file to the trash bin?");
-#else
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
             delWarningText =
                     tr("Permanently delete this track file from disk?") +
                     QStringLiteral("<br><br><b>") +
                     tr("This can not be undone!") + QStringLiteral("</b>");
+#else
+            delWarningText = tr("Move this track file to the trash bin?");
 #endif
         }
         delWarningText.append(QStringLiteral("<br><br>"));
@@ -2468,47 +2624,56 @@ void WTrackMenu::slotRemoveFromDisk() {
         // Purge only those tracks whose files have actually been deleted.
         m_pLibrary->trackCollectionManager()->purgeTracks(tracksToPurge);
 
-        // Show purge summary message
-        QMessageBox msgBoxPurgeTracks;
-        msgBoxPurgeTracks.setIcon(QMessageBox::Information);
-        QString msgTitle;
-        QString msgText;
-        if (m_pTrackModel) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-            msgTitle = tr("Track Files Deleted");
+        if (s_showPurgeSuccessPopup) {
+            // Show purge summary message
+            QMessageBox msgBoxPurgeTracks;
+            msgBoxPurgeTracks.setIcon(QMessageBox::Information);
+            QString msgTitle;
+            QString msgText;
+            if (m_pTrackModel) {
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
+                msgTitle = tr("Track Files Deleted");
 #else
-            msgTitle = tr("Track Files Moved To Trash");
+                msgTitle = tr("Track Files Moved To Trash");
 #endif
-            msgText =
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-                    tr("%1 track files were moved to trash and purged "
-                       "from the Mixxx database.")
+                msgText =
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
+                        tr("%1 track files were deleted from disk and purged "
+                           "from the Mixxx database.")
 #else
-                    tr("%1 track files were deleted from disk and purged "
-                       "from the Mixxx database.")
+                        tr("%1 track files were moved to trash and purged "
+                           "from the Mixxx database.")
 #endif
-                            .arg(QString::number(tracksToPurge.length())) +
-                    QStringLiteral("<br><br>") +
-                    tr("Note: if you are in the Computer or Recording view you "
-                       "need to click the current view again to see changes.");
-        } else {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-            msgTitle = tr("Track File Moved To Trash");
-            msgText = tr(
-                    "Track file was moved to trash and purged "
-                    "from the Mixxx database.");
+                                .arg(QString::number(tracksToPurge.length())) +
+                        QStringLiteral("<br><br>") +
+                        tr("Note: if you are in the Computer or Recording view you "
+                           "need to click the current view again to see changes.");
+            } else {
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
+                msgTitle = tr("Track File Deleted");
+                msgText = tr(
+                        "Track file was deleted from disk and purged "
+                        "from the Mixxx database.");
 #else
-            msgTitle = tr("Track File Deleted");
-            msgText = tr(
-                    "Track file was deleted from disk and purged "
-                    "from the Mixxx database.");
+                msgTitle = tr("Track File Moved To Trash");
+                msgText = tr(
+                        "Track file was moved to trash and purged "
+                        "from the Mixxx database.");
 #endif
+            }
+            QCheckBox notAgainCB(tr("Don't show again during this session"));
+            notAgainCB.setCheckState(Qt::Unchecked);
+            msgBoxPurgeTracks.setWindowTitle(msgTitle);
+            msgBoxPurgeTracks.setText(msgText);
+            msgBoxPurgeTracks.setTextFormat(Qt::RichText);
+            msgBoxPurgeTracks.setCheckBox(&notAgainCB);
+            msgBoxPurgeTracks.setStandardButtons(QMessageBox::Ok);
+            msgBoxPurgeTracks.exec();
+
+            if (notAgainCB.isChecked()) {
+                s_showPurgeSuccessPopup = false;
+            }
         }
-        msgBoxPurgeTracks.setWindowTitle(msgTitle);
-        msgBoxPurgeTracks.setText(msgText);
-        msgBoxPurgeTracks.setTextFormat(Qt::RichText);
-        msgBoxPurgeTracks.setStandardButtons(QMessageBox::Ok);
-        msgBoxPurgeTracks.exec();
     }
 
     const QList<QString> tracksToKeep(trackOperator.getTracksToKeep());
@@ -2527,18 +2692,18 @@ void WTrackMenu::slotRemoveFromDisk() {
     QString msgText;
     if (m_pTrackModel) {
         msgText =
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-                tr("The following %1 file(s) could not be moved to trash")
-#else
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
                 tr("The following %1 file(s) could not be deleted from disk")
+#else
+                tr("The following %1 file(s) could not be moved to trash")
 #endif
                         .arg(QString::number(
                                 tracksToKeep.length()));
     } else {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-        msgText = tr("This track file could not be moved to trash");
-#else
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
         msgText = tr("This track file could not be deleted from disk");
+#else
+        msgText = tr("This track file could not be moved to trash");
 #endif
     }
     pNotDeletedLabel->setText(msgText);
@@ -2590,7 +2755,7 @@ void WTrackMenu::slotShowDlgTrackInfo() {
                 });
         QList<TrackPointer> tracks;
         tracks.reserve(getTrackCount());
-        for (const auto& index : m_trackIndexList) {
+        for (const auto& index : std::as_const(m_trackIndexList)) {
             const auto pTrack = m_pTrackModel->getTrack(index);
             if (pTrack) {
                 tracks.append(pTrack);
@@ -2675,9 +2840,35 @@ void WTrackMenu::addToAutoDJ(PlaylistDAO::AutoDJSendLoc loc) {
         return;
     }
 
+    // If the "Replace" action was clicked and there are tracks in the
+    // AutoDJ queue, ask for confirmation.
     PlaylistDAO& playlistDao = m_pLibrary->trackCollectionManager()
                                        ->internalCollection()
                                        ->getPlaylistDAO();
+    const auto autoDjTracks = playlistDao.getAutoDJTrackIds();
+    if (loc == PlaylistDAO::AutoDJSendLoc::REPLACE &&
+            autoDjTracks.size() > 0 &&
+            s_confirmForAutoDjReplace) {
+        QMessageBox pReplaceMsg;
+        pReplaceMsg.setWindowTitle(tr("Replace current Auto DJ queue?"));
+        pReplaceMsg.setText(
+                tr("Do you want to replace the entire Auto DJ queue with the "
+                   "selected tracks?"));
+
+        QCheckBox notAgainCB(tr("Don't ask again during this session"));
+        notAgainCB.setCheckState(Qt::Unchecked);
+        pReplaceMsg.setCheckBox(&notAgainCB);
+        pReplaceMsg.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
+        pReplaceMsg.setDefaultButton(QMessageBox::Cancel);
+
+        if (pReplaceMsg.exec() == QMessageBox::Cancel) {
+            return;
+        }
+
+        if (notAgainCB.isChecked()) {
+            s_confirmForAutoDjReplace = false;
+        }
+    }
 
     // TODO(XXX): Care whether the append succeeded.
     m_pLibrary->trackCollectionManager()->unhideTracks(trackIds);

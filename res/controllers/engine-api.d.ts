@@ -1,3 +1,6 @@
+declare interface QtSlot<F extends (...args: any[]) => void> {
+    connect(callback: F): void;
+}
 
 /** ScriptConnectionJSProxy */
 
@@ -31,10 +34,104 @@ declare interface ScriptConnection {
     readonly isConnected: boolean;
 }
 
+/** JavascriptPlayerProxy */
+
+declare interface Player {
+    /** Track's artist or empty string if no track is loaded */
+    readonly artist: string;
+    /** Track's title or empty string if no track is loaded */
+    readonly title: string;
+    /** Track's album or empty string if no track is loaded */
+    readonly album: string;
+    /** Track's album artist or empty string if no track is loaded */
+    readonly albumArtist: string;
+    /** Track's genre or empty string if no track is loaded */
+    readonly genre: string;
+    /** Track's composer or empty string if no track is loaded */
+    readonly composer: string;
+    /** Track's grouping or empty string if no track is loaded */
+    readonly grouping: string;
+    /** Track's year of release or empty string if no track is loaded */
+    readonly year: string;
+    /** Track's number or empty string if no track is loaded */
+    readonly trackNumber: string;
+    /** Total number of tracks in track's album or empty string if no track is loaded */
+    readonly trackTotal: string;
+    /** Tracks key, formatted in the user configured key notation */
+    readonly key: string;
+
+    /** Emitted when the track is unloaded from the player. */
+    trackUnloaded: QtSlot<() => void>;
+
+    /**
+     * Emitted with the new track's artist when a new track is loaded
+     * to the player or when the current track's metadata change.
+     */
+    artistChanged: QtSlot<(newArtist: string) => void>;
+    /**
+     * Emitted with the new track title when a new track is loaded
+     * to the player or when the current track's metadata change.
+     */
+    titleChanged: QtSlot<(newTitle: string) => void>;
+    /**
+     * Emitted with the new track album when a new track is loaded
+     * to the player or when the current track's metadata change.
+     */
+    albumChanged: QtSlot<(newAlbum: string) => void>;
+    /**
+     * Emitted with the new track album artist when a new track is loaded
+     * to the player or when the current track's metadata change.
+     */
+    albumArtistChanged: QtSlot<(newAlbumArtist: string) => void>;
+    /**
+     * Emitted with the new track genre when a new track is loaded
+     * to the player or when the current track's metadata change.
+     */
+    genreChanged: QtSlot<(newGenre: string) => void>;
+    /**
+     * Emitted with the new track's composer when a new track is loaded
+     * to the player or when the current track's metadata change.
+     */
+    composerChanged: QtSlot<(newComposer: string) => void>;
+    /**
+     * Emitted with the new track's grouping when a new track is loaded
+     * to the player or when the current track's metadata change.
+     */
+    groupingChanged: QtSlot<(newGrouping: string) => void>;
+    /**
+     * Emitted with the new track year of release when a new track is loaded
+     * to the player or when the current track's metadata change.
+     */
+    yearChanged: QtSlot<(newYear: string) => void>;
+    /**
+     * Emitted with the new track number when a new track is loaded
+     * to the player or when the current track's metadata change.
+     */
+    trackNumberChanged: QtSlot<(newTrackNumber: string) => void>;
+    /**
+     * Emitted with the new number of track in track's album when a new track
+     * is loaded to the player or when the current track's metadata change.
+     */
+    trackTotalChanged: QtSlot<(newTrackTotal: string) => void>;
+    /**
+     * Emitted with the new tracks key when a new track is loaded
+     * to the player, when the current track's metadata change
+     * or when the key notation configuration is changed.
+     */
+    keyChanged: QtSlot<(newKey: string) => void>;
+}
 
 /** ControllerScriptInterfaceLegacy */
 
 declare namespace engine {
+    /**
+     * Obtain the player associated with this deck.
+     * @param group The midi group for this deck; e.g. '[Channel1]' for deck 1.
+     * @returns The player providing track information and signals, or undefined
+     *          if not player associated with this group was found.
+     */
+    function getPlayer(group: string): Player | undefined;
+
     type SettingValue = string | number | boolean;
     /**
      * Gets the value of a controller setting
@@ -53,7 +150,7 @@ declare namespace engine {
      * @returns Value of the control (within it's range according Mixxx Controls manual page:
      *          https://manual.mixxx.org/latest/chapters/appendix/mixxx_controls.html)
      */
-    function getValue(group: string, name: string): number;
+    function getValue<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.Ctrl<TGroup>): number;
 
     /**
      * Sets a control value
@@ -63,7 +160,7 @@ declare namespace engine {
      * @param newValue Value to be set (within it's range according Mixxx Controls manual page:
      *                 https://manual.mixxx.org/latest/chapters/appendix/mixxx_controls.html)
      */
-    function setValue(group: string, name: string, newValue: number): void;
+    function setValue<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.CtrlRW<TGroup>, newValue: number): void;
 
     /**
      * Gets the control value normalized to a range of 0..1
@@ -72,7 +169,7 @@ declare namespace engine {
      * @param name Name of the control e.g. "play_indicator"
      * @returns Value of the control normalized to range of 0..1
      */
-    function getParameter(group: string, name: string): number;
+    function getParameter<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.Ctrl<TGroup>): number;
 
     /**
      * Sets the control value specified with normalized range of 0..1
@@ -81,7 +178,7 @@ declare namespace engine {
      * @param name Name of the control e.g. "play_indicator"
      * @param newValue Value to be set, normalized to a range of 0..1
      */
-    function setParameter(group: string, name: string, newValue: number): void;
+    function setParameter<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.CtrlRW<TGroup>, newValue: number): void;
 
     /**
      * Normalizes a specified value using the range of the given control,
@@ -93,7 +190,7 @@ declare namespace engine {
      *              https://manual.mixxx.org/latest/chapters/appendix/mixxx_controls.html
      * @returns Value normalized to range of 0..1
      */
-    function getParameterForValue(group: string, name: string, value: number): number;
+    function getParameterForValue<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.Ctrl<TGroup>, value: number): number;
 
     /**
      * Resets the control to its default value
@@ -101,7 +198,7 @@ declare namespace engine {
      * @param group Group of the control e.g. "[Channel1]"
      * @param name Name of the control e.g. "play_indicator"
      */
-    function reset(group: string, name: string): void;
+    function reset<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.CtrlRW<TGroup>): void;
 
     /**
      * Returns the default value of a control
@@ -111,7 +208,7 @@ declare namespace engine {
      * @returns Default value with the controls range according Mixxx Controls manual page:
      *          https://manual.mixxx.org/latest/chapters/appendix/mixxx_controls.html
      */
-    function getDefaultValue(group: string, name: string): number;
+    function getDefaultValue<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.Ctrl<TGroup>): number;
 
     /**
      * Returns the default value of a control, normalized to a range of 0..1
@@ -120,9 +217,9 @@ declare namespace engine {
      * @param name Name of the control e.g. "play_indicator"
      * @returns Default value of the specified control normalized to range of 0..1
      */
-    function getDefaultParameter(group: string, name: string): number;
+    function getDefaultParameter<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.Ctrl<TGroup>): number;
 
-    type CoCallback = (value: number, group: string, name: string) => void
+    type CoCallback<TGroup extends MixxxControls.Group> = (value: number, group: TGroup, name: MixxxControls.Ctrl<TGroup>) => void;
 
     /**
      * Connects a specified Mixxx Control with a callback function, which is executed if the value of the control changes
@@ -134,7 +231,7 @@ declare namespace engine {
      * @param callback JS function, which will be called every time, the value of the connected control changes.
      * @returns Returns script connection object on success, otherwise 'undefined''
      */
-    function makeConnection(group: string, name: string, callback: CoCallback): ScriptConnection |undefined;
+    function makeConnection<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.Ctrl<TGroup>, callback: CoCallback<TGroup>): ScriptConnection | undefined;
 
     /**
      * Connects a specified Mixxx Control with a callback function, which is executed if the value of the control changes
@@ -147,7 +244,11 @@ declare namespace engine {
      * @param callback JS function, which will be called every time, the value of the connected control changes.
      * @returns Returns script connection object on success, otherwise 'undefined''
      */
-    function makeUnbufferedConnection(group: string, name: string, callback: CoCallback): ScriptConnection | undefined;
+    function makeUnbufferedConnection<TGroup extends MixxxControls.Group>(
+        group: TGroup,
+        name: MixxxControls.Ctrl<TGroup>,
+        callback: CoCallback<TGroup>,
+    ): ScriptConnection | undefined;
 
     /**
      * This function is a legacy version of makeConnection with several alternate
@@ -161,8 +262,12 @@ declare namespace engine {
      * @returns Returns script connection object on success, otherwise 'undefined' or 'false' depending on the error cause.
      * @deprecated Use {@link engine.makeConnection} instead
      */
-    function connectControl(group: string, name: string, callback: CoCallback, disconnect?: boolean): ScriptConnection | boolean | undefined;
-
+    function connectControl<TGroup extends MixxxControls.Group>(
+        group: MixxxControls.Group,
+        name: MixxxControls.Ctrl<TGroup>,
+        callback: CoCallback<TGroup>,
+        disconnect?: boolean,
+    ): ScriptConnection | boolean | undefined;
 
     /**
      * Triggers the execution of all connected callback functions, with the actual value of a control.
@@ -171,7 +276,7 @@ declare namespace engine {
      * @param group Group of the control e.g. "[Channel1]"
      * @param name Name of the control e.g. "play_indicator"
      */
-    function trigger(group: string, name: string): void;
+    function trigger<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.CtrlRW<TGroup>): void;
 
     /**
      * @param message string to be logged
@@ -251,7 +356,7 @@ declare namespace engine {
      * @param name Name of the control e.g. "pregain"
      * @param enable Set true to enable soft-takeover for the specified control
      */
-    function softTakeover(group: string, name: string, enable: boolean): void;
+    function softTakeover<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.CtrlRW<TGroup>, enable: boolean): void;
 
     /**
      * Inhibits a sudden value change from the hardware control.
@@ -261,7 +366,7 @@ declare namespace engine {
      * @param group Group of the control e.g. "[Channel1]"
      * @param name Name of the control e.g. "pregain"
      */
-    function softTakeoverIgnoreNextValue(group: string, name: string): void;
+    function softTakeoverIgnoreNextValue<TGroup extends MixxxControls.Group>(group: TGroup, name: MixxxControls.CtrlRW<TGroup>): void;
 
     /**
      * To achieve a brake effect of the playback speed.
@@ -310,4 +415,64 @@ declare namespace engine {
      *               SoftStart with low factors would take a while until sound is audible. [default = 1.0]
      */
     function softStart(deck: number, activate: boolean, factor?: number): void;
+
+    /**
+     * Returns true if the deck is currently braking.
+     * @param deck The deck number to use, e.g: 1
+     * @returns Returns true if the deck is currently braking.
+     */
+    function isBrakeActive(deck: number): boolean;
+
+    /**
+     * Returns true if the deck is currently performing a spinback.
+     * @param deck The deck number to use, e.g: 1
+     * @returns Returns true if the deck is currently performing a spinback.
+     */
+    function isSpinbackActive(deck: number): boolean;
+
+    /**
+     * Returns true if the deck is currently soft-starting.
+     * @param deck The deck number to use, e.g: 1
+     * @returns Returns true if the deck is currently soft-starting.
+     */
+    function isSoftStartActive(deck: number): boolean;
+
+    // prettier-ignore
+    enum Charset {
+        ASCII,          // American Standard Code for Information Interchange (7-Bit)
+        UTF_8,          // Unicode Transformation Format (8-Bit)
+        UTF_16LE,       // UTF-16 for Little-Endian devices (ARM, x86)
+        UTF_16BE,       // UTF-16 for Big-Endian devices (MIPS, PPC)
+        UTF_32LE,       // UTF-32 for Little-Endian devices (ARM, x86)
+        UTF_32BE,       // UTF-32 for Big-Endian devices (MIPS, PPC)
+        CentralEurope,  // Windows_1250 which includes all characters of ISO_8859_2
+        Cyrillic,       // Windows_1251 which includes all characters of ISO_8859_5
+        WesternEurope,  // Windows_1252 which includes all characters of ISO_8859_1
+        Greek,          // Windows_1253 which includes all characters of ISO_8859_7
+        Turkish,        // Windows_1254 which includes all characters of ISO_8859_9
+        Hebrew,         // Windows_1255 which includes all characters of ISO_8859_8
+        Arabic,         // Windows_1256 which includes all characters of ISO_8859_6
+        Baltic,         // Windows_1257 which includes all characters of ISO_8859_13
+        Vietnamese,     // Windows_1258 which includes all characters of ISO_8859_14
+        Latin9,         // ISO_8859_15
+        Shift_JIS,      // Japanese Industrial Standard (JIS X 0208)
+        EUC_JP,         // Extended Unix Code for Japanese
+        EUC_KR,         // Extended Unix Code for Korean
+        Big5_HKSCS,     // Includes all characters of Big5 and the Hong Kong Supplementary Character Set (HKSCS)
+        KOI8_U,         // Includes all characters of KOI8_R for Russian language and adds Ukrainian language characters
+        UCS2,           // Universal Character Set (2-Byte) ISO_10646
+        SCSU,           // Standard Compression Scheme for Unicode
+        BOCU_1,         // Binary Ordered Compression for Unicode
+        CESU_8,         // Compatibility Encoding Scheme for UTF-16 (8-Bit)
+        Latin1          // ISO_8859_1, available on Qt < 6.5
+    }
+
+    /**
+     * Converts a string into another charset.
+     *
+     * @param value The string to encode
+     * @param targetCharset The charset to encode the string into.
+     * @returns The converted String as an array of bytes. Will return an empty buffer on conversion error or unavailable charset.
+     */
+    function convertCharset(targetCharset: Charset, value: string): ArrayBuffer;
 }

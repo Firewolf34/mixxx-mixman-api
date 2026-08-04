@@ -40,9 +40,10 @@ class DlgPrefBeats : public DlgPreferencePage, public Ui::DlgBeatsDlg {
     void slotReanalyzeChanged(int value);
     void slotReanalyzeImportedChanged(int value);
 #endif
+    void slotStemStrategyChanged(int index);
 
   private:
-    void loadSettings();
+    void updateGui();
 
     BeatDetectionSettings m_bpmSettings;
     QList<mixxx::AnalyzerPluginInfo> m_availablePlugins;
@@ -52,4 +53,5 @@ class DlgPrefBeats : public DlgPreferencePage, public Ui::DlgBeatsDlg {
     bool m_bFastAnalysisEnabled;
     bool m_bReanalyze;
     bool m_bReanalyzeImported;
+    BeatDetectionSettings::StemStrategy m_stemStrategy;
 };

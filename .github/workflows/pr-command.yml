@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Check if commenter is maintainer
         id: check-maintainer
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const response = await github.rest.repos.getCollaboratorPermissionLevel({
@@ -44,3 +44,9 @@ jobs:
         env:
           # PAT setup with content:write and pull_request:write
           GITHUB_TOKEN: ${{ secrets.MIXXX_SOFTFIX_PAT }}
+  benchmark:
+    name: Benchmark run
+    if: github.event.issue.pull_request != '' && startsWith(github.event.comment.body, '/benchmark')
+    uses: ./.github/workflows/benchmark.yml
+    with:
+      branch: ${{ github.head_ref || github.ref_name }}

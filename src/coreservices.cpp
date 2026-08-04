@@ -6,6 +6,7 @@
 #include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QtGlobal>
+#include <gsl/pointers>
 
 #ifdef __BROADCAST__
 #include "broadcast/broadcastmanager.h"
@@ -13,12 +14,18 @@
 #include "control/controlindicatortimer.h"
 #include "controllers/controllermanager.h"
 #include "controllers/keyboard/keyboardeventfilter.h"
+#include "controllers/scripting/controllerscriptenginebase.h"
 #include "database/mixxxdb.h"
 #include "effects/effectsmanager.h"
 #include "engine/enginemixer.h"
+#ifdef __RUBBERBAND__
+#include "engine/bufferscalers/rubberbandworkerpool.h"
+#endif
 #include "library/coverartcache.h"
 #include "library/library.h"
+#include "library/library_decl.h"
 #include "library/library_prefs.h"
+#include "library/overviewcache.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
 #include "mixer/playerinfo.h"
@@ -30,6 +37,18 @@
 #include "preferences/dialog/dlgprefmodplug.h"
 #endif
 #include "skin/skincontrols.h"
+#include "skin/skinloader.h"
+#ifdef MIXXX_USE_QML
+#include <QQuickWindow>
+#include <QSGRendererInterface>
+
+#include "qml/qmlconfigproxy.h"
+#include "qml/qmleffectsmanagerproxy.h"
+#include "qml/qmllibraryproxy.h"
+#include "qml/qmlplayermanagerproxy.h"
+#include "qml/qmlpreferencesproxy.h"
+#include "qml/qmlsoundmanagerproxy.h"
+#endif
 #include "soundio/soundmanager.h"
 #include "sources/soundsourceproxy.h"
 #include "util/clipboard.h"
@@ -47,12 +66,16 @@
 #include "util/sandbox.h"
 #endif
 
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) && defined(__X11__)
 #include <X11/XKBlib.h>
+#endif
+#if defined(Q_OS_ANDROID)
+#include <QtCore/private/qandroidextras_p.h>
 #endif
 
 #if defined(Q_OS_LINUX) && QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <X11/Xlibint.h>
+
 #include <QtX11Extras/QX11Info>
 
 #include "engine/channelhandle.h"
@@ -102,7 +125,7 @@ Bool __xErrorHandler(Display* display, XErrorEvent* event, xError* error) {
 
 #endif
 
-#if defined(Q_OS_LINUX)
+#if defined(Q_OS_LINUX) && defined(__X11__)
 QLocale localeFromXkbSymbol(const QString& xkbLayout) {
     // This maps XKB layouts to locales of keyboard mappings that are shipped with Mixxx
     static const QMap<QString, QLocale> xkbToLocaleMap = {
@@ -252,7 +275,7 @@ QString getCurrentXkbLayoutName() {
 // to "ibus engine". QGuiApplication::inputMethod() does not work with GNOME and XFCE
 // https://bugreports.qt.io/browse/QTBUG-137302
 inline QLocale inputLocale() {
-#if defined(Q_OS_LINUX)
+#if defined(Q_OS_LINUX) && defined(__X11__)
     QString layoutName = getCurrentXkbLayoutName();
     if (!layoutName.isEmpty()) {
         qDebug() << "Keyboard Layout from XKB:" << layoutName;
@@ -340,7 +363,7 @@ CoreServices::CoreServices(const CmdlineArgs& args, QApplication* pApp)
           m_isInitialized(false) {
     m_runtime_timer.start();
     mixxx::Time::start();
-    ScopedTimer t(u"CoreServices::CoreServices");
+    ScopedTimer t(QStringLiteral("CoreServices::CoreServices"));
     // All this here is running without without start up screen
     // Defer long initializations to CoreServices::initialize() which is
     // called after the GUI is initialized
@@ -362,8 +385,6 @@ CoreServices::~CoreServices() {
 
     // Tear down remaining stuff that was initialized in the constructor.
     CLEAR_AND_CHECK_DELETED(m_pKeyboardEventFilter);
-    CLEAR_AND_CHECK_DELETED(m_pKbdConfig);
-    CLEAR_AND_CHECK_DELETED(m_pKbdConfigEmpty);
 
     if (m_cmdlineArgs.getDeveloper()) {
         StatsManager::destroy();
@@ -420,6 +441,30 @@ void CoreServices::initializeSettings() {
     }
 #endif
     QString settingsPath = m_cmdlineArgs.getSettingsPath();
+
+    // Verify we can access the custom settings directory. If it is unwritable
+    // (e.g. due to macOS sandboxing, or restricted filesystem permissions),
+    // prompt the user to grant access or select a new location.
+    // See https://github.com/mixxxdj/mixxx/issues/15489
+    if (m_cmdlineArgs.getSettingsPathSet()) {
+        if (!Sandbox::ensureSettingsPathAccessible(&settingsPath)) {
+            // The user either declined the permission dialog or the
+            // folder remains unwritable. Show a clear error and exit.
+            QMessageBox::critical(nullptr,
+                    tr("Cannot access settings folder"),
+                    tr("Mixxx cannot access the settings folder:"
+                       "\n\n%1\n\n"
+                       "You can either:\n\n"
+                       "\u2022 Remove the --settings-path argument to use the "
+                       "default location\n"
+                       "\u2022 Re-run Mixxx and select a valid folder when prompted\n\n"
+                       "Click OK to exit.")
+                            .arg(settingsPath),
+                    QMessageBox::Ok);
+            exit(1);
+        }
+    }
+
     m_pSettingsManager = std::make_unique<SettingsManager>(settingsPath);
 }
 
@@ -440,7 +485,7 @@ void CoreServices::initialize(QApplication* pApp) {
         return;
     }
 
-    ScopedTimer t(u"CoreServices::initialize");
+    ScopedTimer t(QStringLiteral("CoreServices::initialize"));
 
     VERIFY_OR_DEBUG_ASSERT(SoundSourceProxy::registerProviders()) {
         qCritical() << "Failed to register any SoundSource providers";
@@ -494,12 +539,15 @@ void CoreServices::initialize(QApplication* pApp) {
             m_pEffectsManager.get(),
             pChannelHandleFactory,
             true);
+#ifdef __RUBBERBAND__
+    RubberBandWorkerPool::createInstance(pConfig);
+#endif
 
     emit initializationProgressUpdate(30, tr("audio interface"));
     // Although m_pSoundManager is created here, m_pSoundManager->setupDevices()
     // needs to be called after m_pPlayerManager registers sound IO for each EngineChannel.
     m_pSoundManager = std::make_shared<SoundManager>(pConfig, m_pEngine.get());
-    m_pEngine->registerNonEngineChannelSoundIO(m_pSoundManager.get());
+    m_pEngine->registerNonEngineChannelSoundIO(gsl::make_not_null(m_pSoundManager.get()));
 
     m_pRecordingManager = std::make_shared<RecordingManager>(pConfig, m_pEngine.get());
 
@@ -578,6 +626,12 @@ void CoreServices::initialize(QApplication* pApp) {
             m_pPlayerManager.get(),
             m_pRecordingManager.get());
 
+    OverviewCache* pOverviewCache = OverviewCache::createInstance(pConfig, m_pDbConnectionPool);
+    connect(&(m_pTrackCollectionManager->internalCollection()->getTrackDAO()),
+            &TrackDAO::waveformSummaryUpdated,
+            pOverviewCache,
+            &OverviewCache::onTrackSummaryChanged);
+
     // Binding the PlayManager to the Library may already trigger
     // loading of tracks which requires that the GlobalTrackCache has
     // been created. Otherwise Mixxx might hang when accessing
@@ -587,6 +641,58 @@ void CoreServices::initialize(QApplication* pApp) {
     bool musicDirAdded = false;
 
     if (m_pTrackCollectionManager->internalCollection()->loadRootDirs().isEmpty()) {
+#if defined(Q_OS_IOS) || defined(Q_OS_WASM)
+        // On the web and iOS, we are running in a sandbox (a virtual file
+        // system on the web). Since we are generally limited to paths within
+        // the sandbox, there is not much point in asking the user about a
+        // custom directory, so we just default to Qt's standard music directory
+        // (~/Documents/Music on iOS and ~/Music on Wasm). Since the sandbox is
+        // initially empty, we create that directory automatically.
+        // Advanced users can still customize this directory in the settings.
+        QString fd = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
+        QDir dir = fd;
+        if (!dir.exists()) {
+            dir.mkpath(".");
+        }
+#elif defined(Q_OS_ANDROID)
+        // if(QOperatingSystemVersion::current() <
+        // QOperatingSystemVersion(QOperatingSystemVersion::Android, 11)) {
+        //     qDebug() << "it is less then Android 11 - ALL FILES permission
+        //     isn't possible!";
+        // }
+        QString fd;
+        jboolean value = QJniObject::callStaticMethod<jboolean>(
+                "android/os/Environment", "isExternalStorageManager");
+        if (value == false) {
+            qDebug() << "requesting ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION";
+            QJniObject ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION =
+                    QJniObject::getStaticObjectField(
+                            "android/provider/Settings",
+                            "ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION",
+                            "Ljava/lang/String;");
+            QJniObject intent("android/content/Intent",
+                    "(Ljava/lang/String;)V",
+                    ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION.object());
+            QJniObject jniPath = QJniObject::fromString(
+                    QStringLiteral("package:%1").arg(ANDROID_PACKAGE_NAME));
+            QJniObject jniUri =
+                    QJniObject::callStaticObjectMethod("android/net/Uri",
+                            "parse",
+                            "(Ljava/lang/String;)Landroid/net/Uri;",
+                            jniPath.object<jstring>());
+            QJniObject jniResult = intent.callObjectMethod("setData",
+                    "(Landroid/net/Uri;)Landroid/content/Intent;",
+                    jniUri.object<jobject>());
+            QtAndroidPrivate::startActivity(intent, 0);
+        } else {
+            qDebug() << "Got ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION";
+        }
+        fd = "/storage/emulated/0/Music/";
+        QDir dir = fd;
+        if (!dir.exists()) {
+            dir.mkpath(".");
+        }
+#else
         // TODO(XXX) this needs to be smarter, we can't distinguish between an empty
         // path return value (not sure if this is normally possible, but it is
         // possible with the Windows 7 "Music" library, which is what
@@ -597,7 +703,9 @@ void CoreServices::initialize(QApplication* pApp) {
         QString fd = QFileDialog::getExistingDirectory(nullptr,
                 tr("Choose music library directory"),
                 QStandardPaths::writableLocation(
-                        QStandardPaths::MusicLocation));
+                        QStandardPaths::MusicLocation),
+                QFileDialog::ShowDirsOnly);
+#endif
         // request to add directory to database.
         if (!fd.isEmpty() && m_pLibrary->requestAddDir(fd)) {
             musicDirAdded = true;
@@ -612,8 +720,8 @@ void CoreServices::initialize(QApplication* pApp) {
     m_pControllerManager = std::make_shared<ControllerManager>(pConfig);
 
     // Scan the library for new files and directories
-    bool rescan = pConfig->getValue<bool>(
-            library::prefs::kRescanOnStartupConfigKey);
+    bool rescan = m_cmdlineArgs.getRescanLibrary() ||
+            pConfig->getValue<bool>(library::prefs::kRescanOnStartupConfigKey);
     // rescan the library if we get a new plugin
     QList<QString> prev_plugins_list =
             pConfig->getValueString(
@@ -649,10 +757,16 @@ void CoreServices::initialize(QApplication* pApp) {
     pConfig->set(ConfigKey("[Library]", "SupportedFileExtensions"),
             supportedFileSuffixes.join(","));
 
+    // Forward the scanner signal so MixxxMainWindow can display a summary popup.
+    connect(m_pTrackCollectionManager.get(),
+            &TrackCollectionManager::libraryScanSummary,
+            this,
+            &CoreServices::libraryScanSummary,
+            Qt::UniqueConnection);
     // Scan the library directory. Do this after the skinloader has
     // loaded a skin, see issue #6625
     if (rescan || musicDirAdded || m_pSettingsManager->shouldRescanLibrary()) {
-        m_pTrackCollectionManager->startLibraryScan();
+        m_pTrackCollectionManager->startLibraryAutoScan();
     }
 
     // This has to be done before m_pSoundManager->setupDevices()
@@ -677,81 +791,85 @@ void CoreServices::initialize(QApplication* pApp) {
     }
 
     m_isInitialized = true;
+
+    ControllerScriptEngineBase::registerPlayerManager(getPlayerManager());
+
+#ifdef MIXXX_USE_QML
+    initializeQMLSingletons();
+}
+
+void CoreServices::initializeQMLSingletons() {
+    // Any uncreateable non-singleton types registered here require
+    // arguments that we don't want to expose to QML directly. Instead, they
+    // can be retrieved by member properties or methods from the singleton
+    // types.
+    //
+    // The alternative would be to register their *arguments* in the QML
+    // system, which would improve nothing, or we had to expose them as
+    // singletons to that they can be accessed by components instantiated by
+    // QML, which would also be suboptimal.
+    mixxx::qml::QmlEffectsManagerProxy::registerEffectsManager(getEffectsManager());
+    mixxx::qml::QmlPlayerManagerProxy::registerPlayerManager(getPlayerManager());
+    mixxx::qml::QmlConfigProxy::registerUserSettings(getSettings());
+    mixxx::qml::QmlLibraryProxy::registerLibrary(getLibrary());
+    mixxx::qml::QmlLibraryProxy::registerKeyboardEventFilter(getKeyboardEventFilter());
+    mixxx::qml::QmlSoundManagerProxy::registerManager(getSoundManager());
+    mixxx::qml::QmlControllerManagerProxy::registerManager(
+            getControllerManager(),
+            CmdlineArgs::Instance().getControllerPreviewScreens());
+
+    ControllerScriptEngineBase::registerTrackCollectionManager(getTrackCollectionManager());
+
+    // Currently, it is required to enforce QQuickWindow RHI backend to use
+    // OpenGL on all platforms to allow offscreen rendering to function as
+    // expected
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+#endif
 }
 
 void CoreServices::initializeKeyboard() {
     UserSettingsPointer pConfig = m_pSettingsManager->settings();
-    QString resourcePath = pConfig->getResourcePath();
-
-    // Set the default value in settings file
-    if (pConfig->getValueString(ConfigKey("[Keyboard]", "Enabled")).length() == 0) {
-        pConfig->set(ConfigKey("[Keyboard]", "Enabled"), ConfigValue(1));
-    }
-
-    // Read keyboard configuration and set kdbConfig object in WWidget
-    // Check first in user's Mixxx directory
-    QString userKeyboard = QDir(pConfig->getSettingsPath()).filePath("Custom.kbd.cfg");
-
-    // Empty keyboard configuration
-    m_pKbdConfigEmpty = std::make_shared<ConfigObject<ConfigValueKbd>>(QString());
-
-    if (QFile::exists(userKeyboard)) {
-        qDebug() << "Found and will use custom keyboard mapping" << userKeyboard;
-        m_pKbdConfig = std::make_shared<ConfigObject<ConfigValueKbd>>(userKeyboard);
-    } else {
-        // Default to the locale for the main input method (e.g. keyboard).
-        QLocale locale = inputLocale();
-
-        // check if a default keyboard exists
-        QString defaultKeyboard = QString(resourcePath).append("keyboard/");
-        defaultKeyboard += locale.name();
-        defaultKeyboard += ".kbd.cfg";
-        qDebug() << "Found and will use default keyboard mapping" << defaultKeyboard;
-
-        if (!QFile::exists(defaultKeyboard)) {
-            qDebug() << defaultKeyboard << " not found, using en_US.kbd.cfg";
-            defaultKeyboard = QString(resourcePath).append("keyboard/").append("en_US.kbd.cfg");
-            if (!QFile::exists(defaultKeyboard)) {
-                qDebug() << defaultKeyboard << " not found, starting without shortcuts";
-                defaultKeyboard = "";
-            }
-        }
-        m_pKbdConfig = std::make_shared<ConfigObject<ConfigValueKbd>>(defaultKeyboard);
-    }
-
-    // TODO(XXX) leak pKbdConfig, KeyboardEventFilter owns it? Maybe roll all keyboard
-    // initialization into KeyboardEventFilter
-    // Workaround for today: KeyboardEventFilter calls delete
-    bool keyboardShortcutsEnabled = pConfig->getValue<bool>(
-            ConfigKey("[Keyboard]", "Enabled"));
-    m_pKeyboardEventFilter = std::make_shared<KeyboardEventFilter>(
-            keyboardShortcutsEnabled ? m_pKbdConfig.get() : m_pKbdConfigEmpty.get());
+    const QLocale locale = inputLocale();
+    m_pKeyboardEventFilter = std::make_shared<KeyboardEventFilter>(pConfig, locale);
 }
 
-void CoreServices::slotOptionsKeyboard(bool toggle) {
-    UserSettingsPointer pConfig = m_pSettingsManager->settings();
-    if (toggle) {
-        //qDebug() << "Enable keyboard shortcuts/mappings";
-        m_pKeyboardEventFilter->setKeyboardConfig(m_pKbdConfig.get());
-        pConfig->set(ConfigKey("[Keyboard]", "Enabled"), ConfigValue(1));
-    } else {
-        //qDebug() << "Disable keyboard shortcuts/mappings";
-        m_pKeyboardEventFilter->setKeyboardConfig(m_pKbdConfigEmpty.get());
-        pConfig->set(ConfigKey("[Keyboard]", "Enabled"), ConfigValue(0));
-    }
+std::shared_ptr<ConfigObject<ConfigValueKbd>> CoreServices::getKeyboardConfig() const {
+    return m_pKeyboardEventFilter->getKeyboardConfig();
 }
 
 bool CoreServices::initializeDatabase() {
     kLogger.info() << "Connecting to database";
     QSqlDatabase dbConnection = mixxx::DbConnectionPooled(m_pDbConnectionPool);
     if (!dbConnection.isOpen()) {
+        QString settingsPath = m_pSettingsManager->settings()->getSettingsPath();
+        QFileInfo settingsInfo(settingsPath);
+
+        QString errorDetail;
+        if (!settingsInfo.exists()) {
+            errorDetail = tr(
+                    "The settings directory does not exist:\n%1\n\n"
+                    "Please verify the --settings-path argument.")
+                                  .arg(settingsPath);
+        } else if (!settingsInfo.isWritable()) {
+            errorDetail = tr(
+                    "The settings directory is not writable:\n%1\n\n"
+                    "This may be caused by macOS sandbox restrictions "
+                    "if you are using a custom --settings-path outside "
+                    "the app container.\n\n"
+                    "Try running Mixxx without --settings-path, or "
+                    "grant Mixxx access to the folder when prompted.")
+                                  .arg(settingsPath);
+        } else {
+            errorDetail = tr(
+                    "Unable to establish a database connection.\n"
+                    "Mixxx requires Qt with SQLite support. Please read "
+                    "the Qt SQL driver documentation for information on how "
+                    "to build it.");
+        }
+
         QMessageBox::critical(nullptr,
                 tr("Cannot open database"),
-                tr("Unable to establish a database connection.\n"
-                   "Mixxx requires QT with SQLite support. Please read "
-                   "the Qt SQL driver documentation for information on how "
-                   "to build it.\n\n"
-                   "Click OK to exit."),
+                errorDetail + QStringLiteral("\n\n") + tr("Click OK to exit."),
                 QMessageBox::Ok);
         return false;
     }
@@ -763,9 +881,10 @@ bool CoreServices::initializeDatabase() {
 std::shared_ptr<QDialog> CoreServices::makeDlgPreferences() const {
     // Note: We return here the base class pointer to make the coreservices.h usable
     // in test classes where header included from dlgpreferences.h are not accessible.
+    auto pSkinLoader = std::make_shared<mixxx::skin::SkinLoader>(getSettings());
     std::shared_ptr<DlgPreferences> pDlgPreferences = std::make_shared<DlgPreferences>(
             getScreensaverManager(),
-            nullptr,
+            pSkinLoader,
             getSoundManager(),
             getControllerManager(),
             getVinylControlManager(),
@@ -783,6 +902,20 @@ void CoreServices::finalize() {
 
     Timer t("CoreServices::~CoreServices");
     t.start();
+
+#ifdef MIXXX_USE_QML
+    // Delete all the QML singletons in order to prevent controller leaks
+    mixxx::qml::QmlEffectsManagerProxy::registerEffectsManager(nullptr);
+    mixxx::qml::QmlPlayerManagerProxy::registerPlayerManager(nullptr);
+    mixxx::qml::QmlConfigProxy::registerUserSettings(nullptr);
+    mixxx::qml::QmlLibraryProxy::registerLibrary(nullptr);
+    mixxx::qml::QmlLibraryProxy::registerKeyboardEventFilter(nullptr);
+    mixxx::qml::QmlSoundManagerProxy::registerManager(nullptr);
+    mixxx::qml::QmlControllerManagerProxy::registerManager(nullptr);
+
+    ControllerScriptEngineBase::registerTrackCollectionManager(nullptr);
+#endif
+    ControllerScriptEngineBase::registerPlayerManager(nullptr);
 
     // Stop all pending library operations
     qDebug() << t.elapsed(false).debugMillisWithUnit() << "stopping pending Library tasks";
@@ -837,6 +970,9 @@ void CoreServices::finalize() {
     // EngineMixer depends on Config and m_pEffectsManager.
     qDebug() << t.elapsed(false).debugMillisWithUnit() << "deleting EngineMixer";
     CLEAR_AND_CHECK_DELETED(m_pEngine);
+#ifdef __RUBBERBAND__
+    RubberBandWorkerPool::destroy();
+#endif
 
     // Destroy PlayerInfo explicitly to release the track
     // pointers of tracks that were still loaded in decks

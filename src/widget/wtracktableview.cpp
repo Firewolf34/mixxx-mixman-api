@@ -4,6 +4,7 @@
 #include <QModelIndex>
 #include <QScrollBar>
 #include <QShortcut>
+#include <QStylePainter>
 #include <QUrl>
 
 #include "control/controlobject.h"
@@ -49,17 +50,20 @@ WTrackTableView::WTrackTableView(QWidget* pParent,
           m_pLibrary(pLibrary),
           m_backgroundColorOpacity(backgroundColorOpacity),
           // Default color for the focus border of TableItemDelegates
-          m_focusBorderColor(Qt::white),
-          m_trackPlayedColor(QColor(kDefaultTrackPlayedColor)),
-          m_trackMissingColor(QColor(kDefaultTrackMissingColor)),
+          m_focusBorderColor(kDefaultFocusBorderColor),
+          m_trackPlayedColor(kDefaultTrackPlayedColor),
+          m_trackMissingColor(kDefaultTrackMissingColor),
+          m_dropIndicatorColor(kDefaultDropIndicatorColor),
           m_sorting(false),
           m_selectionChangedSinceLastGuiTick(true),
-          m_loadCachedOnly(false) {
+          m_loadCachedOnly(false),
+          m_dropRow(-1) {
     // Connect slots and signals to make the world go 'round.
     connect(this, &WTrackTableView::doubleClicked, this, &WTrackTableView::slotMouseDoubleClicked);
 
-    m_pCOTGuiTick = new ControlProxy(
-            QStringLiteral("[App]"), QStringLiteral("gui_tick_50ms_period_s"), this);
+    m_pCOTGuiTick = new ControlProxy(QStringLiteral("[App]"),
+            QStringLiteral("gui_tick_50ms_period_s"),
+            this);
     m_pCOTGuiTick->connectValueChanged(this, &WTrackTableView::slotGuiTick50ms);
 
     m_pKeyNotation = new ControlProxy(mixxx::library::prefs::kKeyNotationConfigKey, this);
@@ -111,7 +115,7 @@ void WTrackTableView::enableCachedOnly() {
     if (!m_loadCachedOnly) {
         // don't try to load and search covers, drawing only
         // covers which are already in the QPixmapCache.
-        emit onlyCachedCoverArt(true);
+        emit onlyCachedCoversAndOverviews(true);
         m_loadCachedOnly = true;
     }
     m_lastUserAction = mixxx::Time::elapsed();
@@ -175,7 +179,7 @@ void WTrackTableView::slotGuiTick50ms(double /*unused*/) {
 
         // This allows CoverArtDelegate to request that we load covers from disk
         // (as opposed to only serving them from cache).
-        emit onlyCachedCoverArt(false);
+        emit onlyCachedCoversAndOverviews(false);
         m_loadCachedOnly = false;
     }
 }
@@ -219,10 +223,10 @@ void WTrackTableView::loadTrackModel(QAbstractItemModel* pNewModel, bool restore
     setVisible(false);
 
     // Save the previous track model's header state
-    WTrackTableViewHeader* oldHeader =
+    WTrackTableViewHeader* pOldheader =
             qobject_cast<WTrackTableViewHeader*>(horizontalHeader());
-    if (oldHeader) {
-        oldHeader->saveHeaderState();
+    if (pOldheader) {
+        pOldheader->saveHeaderState();
     }
 
     // rryan 12/2009 : Due to a bug in Qt, in order to switch to a model with
@@ -230,7 +234,7 @@ void WTrackTableView::loadTrackModel(QAbstractItemModel* pNewModel, bool restore
     // header. Also, for some reason the WTrackTableView has to be hidden or
     // else problems occur. Since we parent the WtrackTableViewHeader's to the
     // WTrackTableView, they are automatically deleted.
-    auto* header = new WTrackTableViewHeader(Qt::Horizontal, this);
+    auto* pHeader = new WTrackTableViewHeader(Qt::Horizontal, this);
 
     // WTF(rryan) The following saves on unnecessary work on the part of
     // WTrackTableHeaderView. setHorizontalHeader() calls setModel() on the
@@ -256,17 +260,17 @@ void WTrackTableView::loadTrackModel(QAbstractItemModel* pNewModel, bool restore
     setHorizontalHeader(tempHeader);
 
     setModel(pNewModel);
-    setHorizontalHeader(header);
-    header->setSectionsMovable(true);
-    header->setSectionsClickable(true);
+    setHorizontalHeader(pHeader);
+    pHeader->setSectionsMovable(true);
+    pHeader->setSectionsClickable(true);
     // Setting this to true would render all column labels BOLD as soon as the
     // tableview is focused -- and would not restore the previous style when
     // it's unfocused. This can not be overwritten with qss, so it can screw up
     // the skin design. Also, due to selectionModel()->selectedRows() it is not
     // even useful to indicate the focused column because all columns are highlighted.
-    header->setHighlightSections(false);
-    header->setSortIndicatorShown(m_sorting);
-    header->setDefaultAlignment(Qt::AlignLeft);
+    pHeader->setHighlightSections(false);
+    pHeader->setSortIndicatorShown(m_sorting);
+    pHeader->setDefaultAlignment(Qt::AlignLeft);
 
     // Initialize all column-specific things
     for (int i = 0; i < pNewModel->columnCount(); ++i) {
@@ -290,7 +294,7 @@ void WTrackTableView::loadTrackModel(QAbstractItemModel* pNewModel, bool restore
         // contain a potential large number of NULL values.  This will hide the
         // key column by default unless the user brings it to front
         if (pNewTrackModel->isColumnHiddenByDefault(i) &&
-                !header->hasPersistedHeaderState()) {
+                !pHeader->hasPersistedHeaderState()) {
             //qDebug() << "Hiding column" << i;
             horizontalHeader()->hideSection(i);
         }
@@ -306,6 +310,10 @@ void WTrackTableView::loadTrackModel(QAbstractItemModel* pNewModel, bool restore
                 this,
                 &WTrackTableView::slotSortingChanged,
                 Qt::AutoConnection);
+        connect(pHeader,
+                &WTrackTableViewHeader::shuffle,
+                this,
+                &WTrackTableView::slotRandomSorting);
 
         Qt::SortOrder sortOrder;
         TrackModel::SortColumnId sortColumn =
@@ -344,7 +352,6 @@ void WTrackTableView::loadTrackModel(QAbstractItemModel* pNewModel, bool restore
 
     // Defaults
     setAcceptDrops(true);
-    setDragDropMode(QAbstractItemView::DragOnly);
     // Always enable drag for now (until we have a model that doesn't support
     // this.)
     setDragEnabled(true);
@@ -352,8 +359,9 @@ void WTrackTableView::loadTrackModel(QAbstractItemModel* pNewModel, bool restore
     if (pNewTrackModel->hasCapabilities(TrackModel::Capability::ReceiveDrops)) {
         setDragDropMode(QAbstractItemView::DragDrop);
         setDropIndicatorShown(true);
-        setAcceptDrops(true);
         //viewport()->setAcceptDrops(true);
+    } else {
+        setDragDropMode(QAbstractItemView::DragOnly);
     }
 
     // Possible giant fuckup alert - It looks like Qt has something like these
@@ -361,6 +369,9 @@ void WTrackTableView::loadTrackModel(QAbstractItemModel* pNewModel, bool restore
     // the flags(...) function that we're already using in LibraryTableModel. I
     // haven't been able to get it to stop us from using a model as a drag
     // target though, so my hacks above may not be completely unjustified.
+
+    // Now also apply the current font to the new header
+    pHeader->setFont(font());
 
     setVisible(true);
 
@@ -603,6 +614,7 @@ void WTrackTableView::showTrackMenu(const QPoint pos, const QModelIndex& index) 
         return;
     }
     m_pTrackMenu->loadTrackModelIndices(indices);
+    m_pTrackMenu->updateMenus();
     m_pTrackMenu->setTrackPropertyName(columnNameOfIndex(index));
 
     saveCurrentIndex();
@@ -720,6 +732,12 @@ void WTrackTableView::dragEnterEvent(QDragEnterEvent * event) {
     }
 }
 
+void WTrackTableView::dragLeaveEvent(QDragLeaveEvent* /*event*/) {
+    // Reset drop indicator
+    m_dropRow = -1;
+    update();
+}
+
 // Drag move event, happens when a dragged item hovers over the track table view...
 // It changes the drop handle to a "+" when the drag content is acceptable.
 // Without it, the following drop is ignored.
@@ -732,6 +750,8 @@ void WTrackTableView::dragMoveEvent(QDragMoveEvent * event) {
     // Needed to allow auto-scrolling
     WLibraryTableView::dragMoveEvent(event);
 
+    int newDropRow = -1;
+
     //qDebug() << "dragMoveEvent" << event->mimeData()->formats();
     if (event->source() == this) {
         if (pTrackModel->hasCapabilities(TrackModel::Capability::Reorder)) {
@@ -741,6 +761,26 @@ void WTrackTableView::dragMoveEvent(QDragMoveEvent * event) {
         }
     } else {
         event->acceptProposedAction();
+    }
+
+    if (pTrackModel->hasCapabilities(TrackModel::Capability::Reorder) &&
+            event->isAccepted()) {
+        // If this is a playlist, calculate the position where the track(s)
+        // will be inserted.
+        // Handle above/below row v-center like in dropEvent()
+        int posY = event->position().toPoint().y();
+        int hoverRow = rowAt(posY);       // is -1 below last row
+        int height = rowHeight(hoverRow); // is 0 below last row
+        int yBelow = posY + static_cast<int>(height / 2);
+        newDropRow = rowAt(yBelow);
+        if (newDropRow == -1) {
+            newDropRow = model()->rowCount();
+        }
+    }
+
+    if (newDropRow != m_dropRow) {
+        m_dropRow = newDropRow;
+        update();
     }
 }
 
@@ -777,8 +817,8 @@ void WTrackTableView::dropEvent(QDropEvent * event) {
 #else
     QPoint position = event->pos();
 #endif
-    int dropRow = rowAt(position.y());
-    int height = rowHeight(dropRow);
+    int dropRow = rowAt(position.y()); // is -1 below last row
+    int height = rowHeight(dropRow);   // is 0 below last row
     QPoint pointOfRowBelowSeam(position.x(), position.y() + height / 2);
     QModelIndex destIndex = indexAt(pointOfRowBelowSeam);
 
@@ -857,6 +897,37 @@ void WTrackTableView::dropEvent(QDropEvent * event) {
     event->acceptProposedAction();
     updateGeometries();
     verticalScrollBar()->setValue(vScrollBarPos);
+
+    m_dropRow = -1;
+    update();
+}
+
+void WTrackTableView::paintEvent(QPaintEvent* e) {
+    QTableView::paintEvent(e);
+
+    if (m_dropRow < 0) {
+        return;
+    }
+
+    // Draw drop indicator line
+    int y;
+    int rowsTotal = model()->rowCount();
+    if (m_dropRow < rowsTotal) {
+        y = rowViewportPosition(m_dropRow);
+    } else {
+        y = rowViewportPosition(rowsTotal - 1) + rowHeight(0);
+    }
+    // Line is 2px tall. Make sure the entire line is visible.
+    if (y == 0) {
+        y += 1;
+    } else if (y + 1 > viewport()->height()) {
+        y = viewport()->height() - 1;
+    }
+
+    QPainter painter(viewport());
+    QPen pen(m_dropIndicatorColor, 2, Qt::SolidLine);
+    painter.setPen(pen);
+    painter.drawLine(0, y, viewport()->width(), y);
 }
 
 QModelIndexList WTrackTableView::getSelectedRows() const {
@@ -1179,6 +1250,8 @@ void WTrackTableView::keyPressEvent(QKeyEvent* event) {
     case kHideRemoveShortcutKey: {
         if (event->modifiers() == kHideRemoveShortcutModifier) {
             hideOrRemoveSelectedTracks();
+        } else if (event->modifiers().testFlag(Qt::ShiftModifier)) {
+            slotDeleteTracksFromDisk();
         }
         return;
     }
@@ -1371,6 +1444,14 @@ void WTrackTableView::hideOrRemoveSelectedTracks() {
     restoreCurrentIndex();
 }
 
+/// If applicable, requests that the selected field/item be edited
+/// Does nothing otherwise.
+void WTrackTableView::editSelectedItem() {
+    if (state() != EditingState) {
+        edit(currentIndex(), EditKeyPressed, nullptr);
+    }
+}
+
 void WTrackTableView::activateSelectedTrack() {
     const QModelIndexList indices = getSelectedRows();
     if (indices.isEmpty()) {
@@ -1379,7 +1460,14 @@ void WTrackTableView::activateSelectedTrack() {
     slotMouseDoubleClicked(indices.at(0));
 }
 
-void WTrackTableView::loadSelectedTrackToGroup(const QString& group, bool play) {
+#ifdef __STEM__
+void WTrackTableView::loadSelectedTrackToGroup(const QString& group,
+        mixxx::StemChannelSelection stemMask,
+        bool play) {
+#else
+void WTrackTableView::loadSelectedTrackToGroup(const QString& group,
+        bool play) {
+#endif
     const QModelIndexList indices = getSelectedRows();
     if (indices.isEmpty()) {
         return;
@@ -1413,7 +1501,12 @@ void WTrackTableView::loadSelectedTrackToGroup(const QString& group, bool play) 
     auto* pTrackModel = getTrackModel();
     TrackPointer pTrack;
     if (pTrackModel && (pTrack = pTrackModel->getTrack(index))) {
+#ifdef __STEM__
+        DEBUG_ASSERT(!stemMask || pTrack->hasStem());
+        emit loadTrackToPlayer(pTrack, group, stemMask, play);
+#else
         emit loadTrackToPlayer(pTrack, group, play);
+#endif
     }
 }
 
@@ -1820,6 +1913,15 @@ void WTrackTableView::slotSortingChanged(int headerSection, Qt::SortOrder order)
     if (sortingChanged) {
         applySortingIfVisible();
     }
+}
+
+void WTrackTableView::slotRandomSorting() {
+    // There's no need to remove the shuffle feature of the Preview column
+    // (and replace it with a dedicated randomize slot to BaseSqltableModel),
+    // so we simply abuse that column.
+    auto previewCol = TrackModel::SortColumnId::Preview;
+    m_pSortColumn->set(static_cast<int>(previewCol));
+    applySortingIfVisible();
 }
 
 bool WTrackTableView::hasFocus() const {

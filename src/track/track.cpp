@@ -2,6 +2,7 @@
 
 #include <QDebug>
 #include <atomic>
+#include <cmath>
 
 #include "library/library_prefs.h"
 #include "moc_track.cpp"
@@ -16,6 +17,9 @@ namespace {
 const mixxx::Logger kLogger("Track");
 
 constexpr bool kLogStats = false;
+
+constexpr double kCentsPerOctave = 1200.0;
+constexpr double kStandardTuningHz = 440.0;
 
 // Count the number of currently existing instances for detecting
 // memory leaks.
@@ -842,7 +846,7 @@ mixxx::audio::SampleRate Track::getSampleRate() const {
     return m_record.getMetadata().getStreamInfo().getSignalInfo().getSampleRate();
 }
 
-int Track::getChannels() const {
+mixxx::audio::ChannelCount Track::getChannels() const {
     const auto locked = lockMutex(&m_qMutex);
     return m_record.getMetadata().getStreamInfo().getSignalInfo().getChannelCount();
 }
@@ -945,12 +949,12 @@ void Track::setMainCuePosition(mixxx::audio::FramePos position) {
     }
 
     // Store the cue point as main cue
-    CuePointer pLoadCue = findCueByType(mixxx::CueType::MainCue);
+    CuePointer pMainCue = findCueByType(mixxx::CueType::MainCue);
     if (position.isValid()) {
-        if (pLoadCue) {
-            pLoadCue->setStartPosition(position);
+        if (pMainCue) {
+            pMainCue->setStartPosition(position);
         } else {
-            pLoadCue = CuePointer(new Cue(
+            pMainCue = CuePointer(new Cue(
                     mixxx::CueType::MainCue,
                     Cue::kNoHotCue,
                     position,
@@ -959,16 +963,16 @@ void Track::setMainCuePosition(mixxx::audio::FramePos position) {
             // While this method could be called from any thread,
             // associated Cue objects should always live on the
             // same thread as their host, namely this->thread().
-            pLoadCue->moveToThread(thread());
-            connect(pLoadCue.get(),
+            pMainCue->moveToThread(thread());
+            connect(pMainCue.get(),
                     &Cue::updated,
                     this,
                     &Track::slotCueUpdated);
-            m_cuePoints.push_back(pLoadCue);
+            m_cuePoints.push_back(pMainCue);
         }
-    } else if (pLoadCue) {
-        disconnect(pLoadCue.get(), nullptr, this, nullptr);
-        m_cuePoints.removeOne(pLoadCue);
+    } else if (pMainCue) {
+        disconnect(pMainCue.get(), nullptr, this, nullptr);
+        m_cuePoints.removeOne(pMainCue);
     }
 
     markDirtyAndUnlock(&locked);
@@ -987,6 +991,73 @@ void Track::shiftCuePositionsMillis(double milliseconds) {
     }
 
     markDirtyAndUnlock(&locked);
+}
+
+void Track::setHotcueIndicesSortedByPosition(HotcueSortMode sortMode) {
+    auto locked = lockMutex(&m_qMutex);
+
+    // Populate lists of positions and indices
+    QList<int> indices;
+    QList<mixxx::audio::FramePos> positions;
+    indices.reserve(m_cuePoints.size());
+    positions.reserve(m_cuePoints.size());
+    for (const CuePointer& pCue : std::as_const(m_cuePoints)) {
+        // We only want hotcues (regular, loop, jump) with a valid index.
+        // Note: Loop with index -1 is the temporary, unsaved loop.
+        // Also note that there may be orphaned hotcues with index -1.
+        // Remember to also run this check when setting the new indices.
+        if (pCue->getHotCue() == Cue::kNoHotCue ||
+                (pCue->getType() != mixxx::CueType::HotCue &&
+                        pCue->getType() != mixxx::CueType::Loop &&
+                        pCue->getType() != mixxx::CueType::Jump)) {
+            continue;
+        }
+        const auto pos = pCue->getPosition();
+        positions.append(pos);
+        if (sortMode == HotcueSortMode::KeepOffsets) {
+            // We shall keep empty hotcues (start offset, gaps), so we need
+            // to store the indices
+            indices.append(pCue->getHotCue());
+        }
+    }
+
+    std::sort(positions.begin(), positions.end());
+    if (sortMode == HotcueSortMode::KeepOffsets) {
+        DEBUG_ASSERT(positions.size() == indices.size());
+        std::sort(indices.begin(), indices.end());
+    }
+
+    // The actual sorting:
+    // re-map hotcue positions to indices in ascending order
+    QHash<mixxx::audio::FramePos, int> posIndexHash;
+    if (sortMode == HotcueSortMode::RemoveOffsets) {
+        // Assign new indices, start with 0
+        int index = mixxx::kFirstHotCueIndex;
+        for (int i = 0; i < positions.size(); i++) {
+            posIndexHash.insert(positions[i], index);
+            index++;
+        }
+    } else { // HotcueSortMode::KeepOffsets
+        // Assign sorted indices
+        for (int i = 0; i < positions.size(); i++) {
+            posIndexHash.insert(positions[i], indices[i]);
+        }
+    }
+
+    // Finally set new indices on hotcues
+    for (CuePointer& pCue : m_cuePoints) {
+        if (pCue->getHotCue() == Cue::kNoHotCue ||
+                (pCue->getType() != mixxx::CueType::HotCue &&
+                        pCue->getType() != mixxx::CueType::Loop &&
+                        pCue->getType() != mixxx::CueType::Jump)) {
+            continue;
+        }
+        int newIndex = posIndexHash.take(pCue->getPosition());
+        pCue->setHotCue(newIndex);
+    }
+
+    markDirtyAndUnlock(&locked);
+    emit cuesUpdated();
 }
 
 void Track::analysisFinished() {
@@ -1062,6 +1133,21 @@ CuePointer Track::findCueById(DbId id) const {
     return CuePointer();
 }
 
+CuePointer Track::findHotcueByIndex(int idx) const {
+    auto locked = lockMutex(&m_qMutex);
+    auto cueIt = std::find_if(
+            m_cuePoints.begin(),
+            m_cuePoints.end(),
+            [idx](const CuePointer& pCue) {
+                return pCue && pCue->getHotCue() == idx;
+            });
+    if (cueIt != m_cuePoints.end()) {
+        return *cueIt;
+    } else {
+        return {};
+    }
+}
+
 void Track::removeCue(const CuePointer& pCue) {
     if (!pCue) {
         return;
@@ -1093,14 +1179,38 @@ void Track::removeCuesOfType(mixxx::CueType type) {
             dirty = true;
         }
     }
-    // If loop cues are removed, also clear the last active loop
-    if (type == mixxx::CueType::Loop) {
-        emit loopRemove();
-    }
     if (dirty) {
+        // If loop cues have been removed, also clear the last active loop
+        if (type == mixxx::CueType::Loop) {
+            emit loopRemove();
+        }
         markDirtyAndUnlock(&locked);
         emit cuesUpdated();
     }
+}
+
+void Track::swapHotcues(int a, int b) {
+    VERIFY_OR_DEBUG_ASSERT(a != b) {
+        qWarning() << "Track::swapHotcues rejected," << a << "==" << b;
+        return;
+    }
+    VERIFY_OR_DEBUG_ASSERT(a != Cue::kNoHotCue || b != Cue::kNoHotCue) {
+        qWarning() << "Track::swapHotcues rejected, both a and b are kNoHotCue";
+        return;
+    }
+    auto locked = lockMutex(&m_qMutex);
+    CuePointer pCueA = findHotcueByIndex(a);
+    CuePointer pCueB = findHotcueByIndex(b);
+    if (!pCueA && !pCueB) {
+        return;
+    }
+    if (pCueA) {
+        pCueA->setHotCue(b);
+    }
+    if (pCueB) {
+        pCueB->setHotCue(a);
+    }
+    emit cuesUpdated();
 }
 
 void Track::setCuePoints(const QList<CuePointer>& cuePoints) {
@@ -1334,6 +1444,21 @@ bool Track::importPendingCueInfosWhileLocked() {
     return setCuePointsWhileLocked(cuePoints);
 }
 
+#ifdef __STEM__
+bool Track::setStemInfosWhileLocked(QList<StemInfo> stemInfos) {
+    m_stemInfo = std::move(stemInfos);
+    return true;
+}
+
+bool Track::importPendingStemInfosWhileLocked() {
+    const QList<StemInfo> stemInfos =
+            mixxx::StemInfoImporter::importStemInfos(
+                    getLocation());
+
+    return setStemInfosWhileLocked(stemInfos);
+}
+#endif
+
 void Track::importPendingCueInfosMarkDirtyAndUnlock(
         QT_RECURSIVE_MUTEX_LOCKER* pLock) {
     DEBUG_ASSERT(pLock);
@@ -1453,6 +1578,19 @@ mixxx::track::io::key::ChromaticKey Track::getKey() const {
 // returns the formatted key for display purpose
 QString Track::getKeyText() const {
     return KeyUtils::keyToString(getKey());
+}
+
+void Track::setTuningFrequencyHz(double tuningFrequencyHz) {
+    auto locked = lockMutex(&m_qMutex);
+    Keys keys = m_record.getKeys();
+    keys.setGlobalTuningFrequencyHz(tuningFrequencyHz);
+    m_record.setKeys(std::move(keys));
+    afterKeysUpdated(&locked);
+}
+
+double Track::getTuningFrequencyHz() const {
+    const auto locked = lockMutex(&m_qMutex);
+    return m_record.getKeys().getGlobalTuningFrequencyHz();
 }
 
 // normalizes the keyText before storing
@@ -1638,6 +1776,27 @@ ExportTrackMetadataResult Track::exportMetadata(
         // Prepare export by cloning and normalizing the metadata
         normalizedFromRecord = m_record.getMetadata();
         normalizedFromRecord.normalizeBeforeExport();
+        // Encode tuning offset (RapidEvolution style) into key text for tag roundtrip.
+        // Keep the database value untouched; only the exported metadata is modified.
+        const double tuningHz = m_record.getKeys().getGlobalTuningFrequencyHz();
+        if (tuningHz > 0.0) {
+            QString keyText = normalizedFromRecord.getTrackInfo().getKeyText();
+            if (keyText.isEmpty()) {
+                const auto key = m_record.getKeys().getGlobalKey();
+                if (key != mixxx::track::io::key::INVALID) {
+                    keyText = KeyUtils::keyToString(key);
+                }
+            }
+            if (!keyText.isEmpty()) {
+                const double cents = kCentsPerOctave * std::log2(tuningHz / kStandardTuningHz);
+                const int centsRounded = static_cast<int>(std::lround(cents));
+                const QString offsetText = centsRounded >= 0
+                        ? QStringLiteral("+%1").arg(centsRounded)
+                        : QString::number(centsRounded);
+                normalizedFromRecord.refTrackInfo().setKeyText(
+                        QStringLiteral("%1 %2").arg(keyText, offsetText));
+            }
+        }
 
         // Finally the track's current metadata and the imported/adjusted metadata
         // can be compared for differences to decide whether the tags in the file
@@ -1759,8 +1918,15 @@ void Track::updateStreamInfoFromSource(
 
     const bool importBeats = m_pBeatsImporterPending && !m_pBeatsImporterPending->isEmpty();
     const bool importCueInfos = m_pCueInfoImporterPending && !m_pCueInfoImporterPending->isEmpty();
+#ifdef __STEM__
+    const bool importStemInfos = mixxx::StemInfoImporter::maybeStemFile(getLocation());
+#endif
 
-    if (!importBeats && !importCueInfos) {
+    if (!importBeats && !importCueInfos
+#ifdef __STEM__
+            && !importStemInfos
+#endif
+    ) {
         // Nothing more to do
         if (updated) {
             markDirtyAndUnlock(&locked);
@@ -1785,7 +1951,20 @@ void Track::updateStreamInfoFromSource(
         cuesImported = importPendingCueInfosWhileLocked();
     }
 
-    if (!beatsImported && !cuesImported) {
+#ifdef __STEM__
+    auto stemsImported = false;
+    if (importStemInfos) {
+        kLogger.debug()
+                << "Importing stem(s) info";
+        stemsImported = importPendingStemInfosWhileLocked();
+    }
+#endif
+
+    if (!beatsImported && !cuesImported
+#ifdef __STEM__
+            && !stemsImported
+#endif
+    ) {
         return;
     }
 
@@ -1798,6 +1977,11 @@ void Track::updateStreamInfoFromSource(
     if (cuesImported) {
         emit cuesUpdated();
     }
+#ifdef __STEM__
+    if (stemsImported) {
+        emit stemsUpdated();
+    }
+#endif
 }
 
 QString Track::getGenre() const {

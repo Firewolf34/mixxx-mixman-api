@@ -1,8 +1,14 @@
 #pragma once
 
+#include <qglobal.h>
+
 #include <memory>
 
+#if defined(__HID__) && !defined(Q_OS_ANDROID)
+#include "controllers/controllerhidreporttabsmanager.h"
+#endif
 #include "controllers/controllermappinginfo.h"
+#include "controllers/legacycontrollermapping.h"
 #include "controllers/midi/midimessage.h"
 #include "controllers/ui_dlgprefcontrollerdlg.h"
 #include "preferences/dialog/dlgpreferencepage.h"
@@ -17,7 +23,11 @@ class ControllerManager;
 class ControllerOutputMappingTableModel;
 class ControlPickerMenu;
 class DlgControllerLearning;
+class LegacyControllerMapping;
 class MappingInfoEnumerator;
+#ifdef MIXXX_USE_QML
+class ControllerScriptEngineLegacy;
+#endif
 
 /// Configuration dialog for a single DJ controller
 class DlgPrefController : public DlgPreferencePage {
@@ -60,6 +70,16 @@ class DlgPrefController : public DlgPreferencePage {
     /// Called when the Controller Learning Wizard is closed.
     void slotStopLearning();
     void enableWizardAndIOTabs(bool enable);
+    void slotRefreshMappingList();
+
+#ifdef MIXXX_USE_QML
+    // Onboard screen controller.
+    void slotShowPreviewScreens(const ControllerScriptEngineLegacy* scriptEngine);
+    // Wrapper used on shutdown.
+    void slotClearPreviewScreens() {
+        slotShowPreviewScreens(nullptr);
+    }
+#endif
 
     // Input mappings
     void addInputMapping();
@@ -79,9 +99,6 @@ class DlgPrefController : public DlgPreferencePage {
     /// mapping information.
     void showMapping(std::shared_ptr<LegacyControllerMapping> mapping);
     QString mappingShortName(const std::shared_ptr<LegacyControllerMapping> pMapping) const;
-    QString mappingName(const std::shared_ptr<LegacyControllerMapping> pMapping) const;
-    QString mappingAuthor(const std::shared_ptr<LegacyControllerMapping> pMapping) const;
-    QString mappingDescription(const std::shared_ptr<LegacyControllerMapping> pMapping) const;
     QString mappingSupportLinks(const std::shared_ptr<LegacyControllerMapping> pMapping) const;
     QString mappingFileLinks(const std::shared_ptr<LegacyControllerMapping> pMapping) const;
     QString mappingFilePathFromIndex(int index) const;
@@ -89,6 +106,8 @@ class DlgPrefController : public DlgPreferencePage {
     void applyMappingChanges();
     bool saveMapping();
     void initTableView(QTableView* pTable);
+    unsigned int getNumberOfVisibleTabs();
+    int getIndexOfFirstVisibleTab();
 
     /// Set dirty state (i.e. changes have been made).
     ///
@@ -116,9 +135,6 @@ class DlgPrefController : public DlgPreferencePage {
             QSharedPointer<MappingInfoEnumerator> pMappingEnumerator,
             const QIcon& icon = QIcon());
 
-    void enableDevice();
-    void disableDevice();
-
     Ui::DlgPrefControllerDlg m_ui;
     UserSettingsPointer m_pConfig;
     const QString m_pUserDir;
@@ -134,4 +150,13 @@ class DlgPrefController : public DlgPreferencePage {
     ControllerMappingTableProxyModel* m_pOutputProxyModel;
     bool m_GuiInitialized;
     bool m_bDirty;
+    int m_inputMappingsTabIndex;  // Index of the input mappings tab
+    int m_outputMappingsTabIndex; // Index of the output mappings tab
+    int m_settingsTabIndex;       // Index of the settings tab
+    int m_screensTabIndex;        // Index of the screens tab
+    QHash<QString, bool> m_settingsCollapsedStates;
+
+#if defined(__HID__) && !defined(Q_OS_ANDROID)
+    std::unique_ptr<ControllerHidReportTabsManager> m_hidReportTabsManager;
+#endif
 };

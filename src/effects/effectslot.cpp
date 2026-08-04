@@ -68,7 +68,7 @@ EffectSlot::EffectSlot(const QString& group,
     // Default to disabled to prevent accidental activation of effects
     // at the beginning of a set.
     m_pControlEnabled = std::make_unique<ControlPushButton>(ConfigKey(m_group, "enabled"));
-    m_pControlEnabled->setButtonMode(ControlPushButton::POWERWINDOW);
+    m_pControlEnabled->setButtonMode(mixxx::control::ButtonMode::PowerWindow);
     connect(m_pControlEnabled.get(),
             &ControlObject::valueChanged,
             this,
@@ -113,6 +113,17 @@ EffectSlot::EffectSlot(const QString& group,
             &ControlObject::valueChanged,
             this,
             &EffectSlot::slotClear);
+
+    m_pControlShowPresetList =
+            std::make_unique<ControlPushButton>(ConfigKey(m_group, "show_preset_list"));
+    m_pControlShowPresetList->connectValueChangeRequest(
+            this,
+            [this](double value) {
+                emit presetListShowRequest(value > 0);
+            });
+    // All WEffectSelector of this slot receive this. If one of them is visible,
+    // it'll return a 'confirm' signal which we handle in slotPresetListVisibleChanged
+    // and set the control accordingly.
 
     for (unsigned int i = 0; i < kDefaultMaxParameters; ++i) {
         addEffectParameterSlot(EffectParameterType::Knob);
@@ -196,11 +207,11 @@ void EffectSlot::updateEngineState() {
     }
 }
 
-void EffectSlot::initalizeInputChannel(ChannelHandle inputChannel) {
+void EffectSlot::initializeInputChannel(ChannelHandle inputChannel) {
     if (!m_pEngineEffect) {
         return;
     }
-    m_pEngineEffect->initalizeInputChannel(inputChannel);
+    m_pEngineEffect->initializeInputChannel(inputChannel);
 };
 
 EffectManifestPointer EffectSlot::getManifest() const {
@@ -211,13 +222,11 @@ void EffectSlot::addEffectParameterSlot(EffectParameterType parameterType) {
     EffectParameterSlotBasePointer pParameterSlot =
             EffectParameterSlotBasePointer();
     if (parameterType == EffectParameterType::Knob) {
-        pParameterSlot = static_cast<EffectParameterSlotBasePointer>(
-                new EffectKnobParameterSlot(
-                        m_group, m_iNumParameterSlots[parameterType]));
+        pParameterSlot = QSharedPointer<EffectKnobParameterSlot>::create(
+                m_group, m_iNumParameterSlots[parameterType]);
     } else if (parameterType == EffectParameterType::Button) {
-        pParameterSlot = static_cast<EffectParameterSlotBasePointer>(
-                new EffectButtonParameterSlot(
-                        m_group, m_iNumParameterSlots[parameterType]));
+        pParameterSlot = QSharedPointer<EffectButtonParameterSlot>::create(
+                m_group, m_iNumParameterSlots[parameterType]);
     }
     ++m_iNumParameterSlots[parameterType];
     const auto pCONumParameterSlots = m_pControlNumParameterSlots[parameterType];
@@ -561,7 +570,7 @@ double EffectSlot::getMetaParameter() const {
 // This function is for the superknob to update individual effects' meta knobs
 // slotEffectMetaParameter does not need to update m_pControlMetaParameter's value
 void EffectSlot::setMetaParameter(double v, bool force) {
-    if (!m_metaknobSoftTakeover.ignore(m_pControlMetaParameter.get(), v) ||
+    if (!m_metaknobSoftTakeover.ignore(*m_pControlMetaParameter, v) ||
             !m_pControlEnabled->toBool() || force) {
         m_pControlMetaParameter->set(v);
         slotEffectMetaParameter(v, force);
@@ -586,4 +595,8 @@ void EffectSlot::slotEffectMetaParameter(double v, bool force) {
             pParameterSlot->onEffectMetaParameterChanged(v, force);
         }
     }
+}
+
+void EffectSlot::slotPresetListVisibleChanged(bool visible) {
+    m_pControlShowPresetList->setAndConfirm(visible ? 1.0 : 0.0);
 }

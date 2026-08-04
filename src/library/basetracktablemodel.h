@@ -3,10 +3,13 @@
 #include <QAbstractTableModel>
 #include <QList>
 #include <QPointer>
+#include <optional>
 
 #include "library/columncache.h"
 #include "library/trackmodel.h"
 #include "track/track_decl.h"
+#include "util/color/colorpalette.h"
+#include "util/datetime.h"
 
 class TrackCollectionManager;
 
@@ -122,8 +125,25 @@ class BaseTrackTableModel : public QAbstractTableModel, public TrackModel {
     static constexpr int kBpmColumnPrecisionMaximum = 10;
     static void setBpmColumnPrecision(int precision);
 
+    static constexpr bool kKeyColorsEnabledDefault = true;
+    static void setKeyColorsEnabled(bool keyColorsEnabled);
+
+    static void setKeyColorPalette(const ColorPalette& palette);
+
     static constexpr bool kApplyPlayedTrackColorDefault = true;
     static void setApplyPlayedTrackColor(bool apply);
+
+    enum class DateFormat {
+        Native = 0,        // System Default
+        ISO8601 = 1,       // yyyy-MM-dd
+        RegionalShort = 2, // d/M/yy
+        RegionalLong = 3,  // dd.MM.yyyy
+        Custom = 4,
+    };
+    Q_ENUM(DateFormat)
+
+    static const QString kDateFormatDefault;
+    static void setDateFormat(const QString& format);
 
   protected:
     // Build a map from the column names to their indices
@@ -246,6 +266,8 @@ class BaseTrackTableModel : public QAbstractTableModel, public TrackModel {
     void slotRefreshCoverRows(
             const QList<int>& rows);
 
+    void slotRefreshOverviewRows(const QList<int>& rows);
+
     void slotRefreshAllRows();
 
     void slotTracksRemoved(const QSet<TrackId>& trackIds);
@@ -294,6 +316,11 @@ class BaseTrackTableModel : public QAbstractTableModel, public TrackModel {
     mutable QModelIndex m_toolTipIndex;
 
     static int s_bpmColumnPrecision;
+    static bool s_keyColorsEnabled;
+    // The value need to be left uninitialized (std::nullopt) to avoid static
+    // initialization order issues
+    static std::optional<ColorPalette> s_keyColorPalette;
 
     static bool s_bApplyPlayedTrackColor;
+    static QString s_dateFormat;
 };

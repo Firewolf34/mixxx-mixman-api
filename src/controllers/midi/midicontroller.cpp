@@ -4,6 +4,7 @@
 #include <algorithm>
 
 #include "control/controlobject.h"
+#include "control/controlpotmeter.h"
 #include "controllers/defs_controllers.h"
 #include "controllers/midi/midioutputhandler.h"
 #include "controllers/midi/midiutils.h"
@@ -34,7 +35,6 @@ bool MidiInputHandleJSProxy::disconnect() {
 
 MidiController::MidiController(const QString& deviceName)
         : Controller(deviceName) {
-    setDeviceCategory(tr("MIDI Controller"));
 }
 
 void MidiController::slotBeforeEngineShutdown() {
@@ -75,6 +75,22 @@ QList<std::shared_ptr<AbstractLegacyControllerSetting>> MidiController::getMappi
     return m_pMapping->getSettings();
 }
 
+#ifdef MIXXX_USE_QML
+QList<LegacyControllerMapping::QMLModuleInfo> MidiController::getMappingModules() {
+    if (!m_pMapping) {
+        return {};
+    }
+    return m_pMapping->getModules();
+}
+
+QList<LegacyControllerMapping::ScreenInfo> MidiController::getMappingInfoScreens() {
+    if (!m_pMapping) {
+        return {};
+    }
+    return m_pMapping->getInfoScreens();
+}
+#endif
+
 int MidiController::close() {
     destroyOutputHandlers();
     return 0;
@@ -86,9 +102,9 @@ bool MidiController::matchMapping(const MappingInfo& mapping) {
     return false;
 }
 
-bool MidiController::applyMapping() {
+bool MidiController::applyMapping(const QString& resourcePath) {
     // Handles the engine
-    bool result = Controller::applyMapping();
+    bool result = Controller::applyMapping(resourcePath);
 
     // Only execute this code if this is an output device
     if (isOutputDevice()) {
@@ -314,7 +330,7 @@ void MidiController::processInputMapping(const MidiInputMapping& mapping,
     MidiOpCode opCode = MidiUtils::opCodeFromStatus(status);
 
     if (mapping.options.testFlag(MidiOption::Script)) {
-        ControllerScriptEngineLegacy* pEngine = getScriptEngine();
+        auto pEngine = getScriptEngine();
         if (pEngine == nullptr) {
             return;
         }
@@ -464,7 +480,11 @@ void MidiController::processInputMapping(const MidiInputMapping& mapping,
 
     if (mapping.options.testFlag(MidiOption::SoftTakeover)) {
         // This is the only place to enable it if it isn't already.
-        m_st.enable(pCO);
+        auto* pControlPotmeter = qobject_cast<ControlPotmeter*>(pCO);
+        if (!pControlPotmeter) {
+            return;
+        }
+        m_st.enable(gsl::not_null(pControlPotmeter));
         if (m_st.ignore(pCO, pCO->getParameterForMidi(newValue))) {
             return;
         }
@@ -609,7 +629,7 @@ void MidiController::processInputMapping(const MidiInputMapping& mapping,
                                          mixxx::Duration timestamp) {
     // Custom script handler
     if (mapping.options.testFlag(MidiOption::Script)) {
-        ControllerScriptEngineLegacy* pEngine = getScriptEngine();
+        auto pEngine = getScriptEngine();
         if (pEngine == nullptr) {
             return;
         }

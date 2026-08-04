@@ -8,8 +8,10 @@
 #include <QVBoxLayout>
 #include <QtDebug>
 #include <QtGlobal>
+#include <memory>
 
 #include "control/controlobject.h"
+#include "control/controlpushbutton.h"
 #include "controllers/controllerlearningeventfilter.h"
 #include "controllers/controllermanager.h"
 #include "controllers/keyboard/keyboardeventfilter.h"
@@ -23,6 +25,7 @@
 #include "skin/legacy/launchimage.h"
 #include "skin/legacy/skincontext.h"
 #include "track/track.h"
+#include "util/assert.h"
 #include "util/cmdlineargs.h"
 #include "util/timer.h"
 #include "util/valuetransformer.h"
@@ -33,8 +36,10 @@
 #include "widget/wbasewidget.h"
 #include "widget/wbattery.h"
 #include "widget/wbeatspinbox.h"
+#include "widget/wbpmeditor.h"
 #include "widget/wcombobox.h"
 #include "widget/wcoverart.h"
+#include "widget/wcuebutton.h"
 #include "widget/wdisplay.h"
 #include "widget/weffectbuttonparametername.h"
 #include "widget/weffectchain.h"
@@ -60,6 +65,7 @@
 #include "widget/wnumberrate.h"
 #include "widget/woverview.h"
 #include "widget/wpixmapstore.h"
+#include "widget/wplaybutton.h"
 #include "widget/wpushbutton.h"
 #include "widget/wraterange.h"
 #include "widget/wrecordingduration.h"
@@ -74,6 +80,9 @@
 #include "widget/wsplitter.h"
 #include "widget/wstarrating.h"
 #include "widget/wstatuslight.h"
+#ifdef __STEM__
+#include "widget/wstemlabel.h"
+#endif
 #include "widget/wtime.h"
 #include "widget/wtrackproperty.h"
 #include "widget/wtrackwidgetgroup.h"
@@ -117,7 +126,7 @@ ControlObject* LegacySkinParser::controlFromConfigKey(
     // Since the usual behavior here is to create a skin-defined push
     // button, actually make it a push button and set it to toggle.
     ControlPushButton* controlButton = new ControlPushButton(key, bPersist);
-    controlButton->setButtonMode(ControlPushButton::TOGGLE);
+    controlButton->setButtonMode(mixxx::control::ButtonMode::Toggle);
 
     if (pCreated) {
         *pCreated = true;
@@ -325,14 +334,19 @@ Qt::MouseButton LegacySkinParser::parseButtonState(const QDomNode& node,
 }
 
 QWidget* LegacySkinParser::parseSkin(const QString& skinPath, QWidget* pParent) {
-    ScopedTimer timer(u"SkinLoader::parseSkin");
+    ScopedTimer timer(QStringLiteral("SkinLoader::parseSkin"));
     qDebug() << "LegacySkinParser loading skin:" << skinPath;
+
+    // Remove all widget pointers we previously registered for shortcut tooltips.
+    m_pKeyboard->clearWidgets();
 
     m_pContext = std::make_unique<SkinContext>(m_pConfig, skinPath + "/skin.xml");
     m_pContext->setSkinBasePath(skinPath);
 
     if (m_pParent) {
-        qDebug() << "ERROR: Somehow a parent already exists -- you are probably re-using a LegacySkinParser which is not advisable!";
+        qDebug()
+                << "ERROR: Somehow a parent already exists -- you are probably "
+                   "reusing a LegacySkinParser which is not advisable!";
     }
     QDomElement skinDocument = openSkin(skinPath);
 
@@ -427,6 +441,11 @@ QWidget* LegacySkinParser::parseSkin(const QString& skinPath, QWidget* pParent) 
                 *m_pContext,
                 QStringLiteral("Skin produced more than 1 widget!"));
     }
+
+    // We have now registered all widgets with mappable connections.
+    // Trigger creation/population of shortcut tooltips.
+    m_pKeyboard->updateWidgetShortcuts();
+
     return widgets[0];
 }
 
@@ -530,6 +549,10 @@ QList<QWidget*> LegacySkinParser::parseNode(const QDomElement& node) {
         result = wrapWidget(parseStandardWidget<WSliderComposed>(node));
     } else if (nodeName == "PushButton") {
         result = wrapWidget(parseStandardWidget<WPushButton>(node));
+    } else if (nodeName == "PlayButton") {
+        result = wrapWidget(parsePlayButton(node));
+    } else if (nodeName == "CueButton") {
+        result = wrapWidget(parseCueButton(node));
     } else if (nodeName == "EffectPushButton") {
         result = wrapWidget(parseEffectPushButton(node));
     } else if (nodeName == "HotcueButton") {
@@ -563,10 +586,16 @@ QList<QWidget*> LegacySkinParser::parseNode(const QDomElement& node) {
     } else if (nodeName == "Number" || nodeName == "NumberBpm") {
         // NumberBpm is deprecated, and is now the same as a Number
         result = wrapWidget(parseLabelWidget<WNumber>(node));
+    } else if (nodeName == "BpmEditor") {
+        result = wrapWidget(parseBpmEditor(node));
     } else if (nodeName == "NumberDb") {
         result = wrapWidget(parseLabelWidget<WNumberDb>(node));
     } else if (nodeName == "Label") {
         result = wrapWidget(parseLabelWidget<WLabel>(node));
+    } else if (nodeName == "StemLabel") {
+#ifdef __STEM__
+        result = wrapWidget(parseStemLabelWidget(node));
+#endif
     } else if (nodeName == "Knob") {
         result = wrapWidget(parseStandardWidget<WKnob>(node));
     } else if (nodeName == "KnobComposed") {
@@ -739,6 +768,11 @@ void LegacySkinParser::parseChildren(
 }
 
 QWidget* LegacySkinParser::parseWidgetGroup(const QDomElement& node) {
+#ifndef __STEM__
+    if (requiresStem(node)) {
+        return nullptr;
+    }
+#endif
     WWidgetGroup* pGroup = new WWidgetGroup(m_pParent);
     setupBaseWidget(node, pGroup);
     setupWidget(node, pGroup->toQWidget());
@@ -907,11 +941,13 @@ QWidget* LegacySkinParser::parseBackground(const QDomElement& node,
     QLabel* bg = new QLabel(pInnerWidget);
 
     QString filename = m_pContext->selectString(node, "Path");
-    QPixmap* background = WPixmapStore::getPixmapNoCache(
-        m_pContext->makeSkinPath(filename), m_pContext->getScaleFactor());
+    auto background = WPixmapStore::getPixmapNoCache(
+            m_pContext->makeSkinPath(filename), m_pContext->getScaleFactor());
 
     bg->move(0, 0);
     if (background != nullptr && !background->isNull()) {
+        // setPixmap makes a copy of the background
+        // which can be disposed of afterwards.
         bg->setPixmap(*background);
     }
 
@@ -936,10 +972,6 @@ QWidget* LegacySkinParser::parseBackground(const QDomElement& node,
     pOuterWidget->setBackgroundRole(QPalette::Window);
     pOuterWidget->setPalette(palette);
     pOuterWidget->setAutoFillBackground(true);
-
-    // WPixmapStore::getPixmapNoCache() allocated background and gave us
-    // ownership. QLabel::setPixmap makes a copy, so we have to delete this.
-    delete background;
 
     return bg;
 }
@@ -975,6 +1007,59 @@ void LegacySkinParser::setupLabelWidget(const QDomElement& element, WLabel* pLab
     pLabel->installEventFilter(
             m_pControllerManager->getControllerLearningEventFilter());
     pLabel->Init();
+}
+
+#ifdef __STEM__
+QWidget* LegacySkinParser::parseStemLabelWidget(const QDomElement& element) {
+    WStemLabel* pLabel = new WStemLabel(m_pParent);
+    setupLabelWidget(element, pLabel);
+
+    QString group = lookupNodeGroup(element);
+    BaseTrackPlayer* pPlayer = m_pPlayerManager->getPlayer(group);
+    if (!pPlayer) {
+        SKIN_WARNING(element,
+                *m_pContext,
+                QStringLiteral("No player found for group: %1").arg(group));
+        return nullptr;
+    }
+
+    connect(pPlayer,
+            &BaseTrackPlayer::newTrackLoaded,
+            pLabel,
+            &WStemLabel::slotTrackLoaded);
+
+    connect(pPlayer,
+            &BaseTrackPlayer::trackUnloaded,
+            pLabel,
+            &WStemLabel::slotTrackUnloaded);
+
+    TrackPointer pTrack = pPlayer->getLoadedTrack();
+    if (pTrack) {
+        // Set the trackpoinnter to the already loaded track,
+        // needed at skin change
+        pLabel->slotTrackLoaded(pTrack);
+    }
+
+    return pLabel;
+}
+#endif
+
+QWidget* LegacySkinParser::parseBpmEditor(const QDomElement& node) {
+    const QString group = lookupNodeGroup(node);
+    BaseTrackPlayer* pPlayer = m_pPlayerManager->getPlayer(group);
+    if (!pPlayer) {
+        SKIN_WARNING(node, *m_pContext, QStringLiteral("No player found for group: %1").arg(group));
+        return nullptr;
+    }
+    WBpmEditor* pBpmEditor = new WBpmEditor(group, m_pParent);
+    pBpmEditor->setup(node, *m_pContext);
+    commonWidgetSetup(node, pBpmEditor);
+    // Set tooltips of child widgets for mode selection & editing
+    const QString tapTooltip = m_tooltips.tooltipForId("tempo_tap_bpm_tap");
+    const QString editTooltip = m_tooltips.tooltipForId("tempo_edit");
+    pBpmEditor->setTapButtonTooltip(tapTooltip);
+    pBpmEditor->setEditButtonTooltip(editTooltip);
+    return pBpmEditor;
 }
 
 QWidget* LegacySkinParser::parseOverview(const QDomElement& node) {
@@ -1055,6 +1140,17 @@ QWidget* LegacySkinParser::parseVisual(const QDomElement& node) {
             &BaseTrackPlayer::loadingTrack,
             viewer,
             &WWaveformViewer::slotLoadingTrack);
+#ifdef __STEM__
+    QObject::connect(pPlayer,
+            &BaseTrackPlayer::selectedStems,
+            viewer,
+            &WWaveformViewer::slotSelectStem);
+#endif
+
+    QObject::connect(pPlayer,
+            &BaseTrackPlayer::trackUnloaded,
+            viewer,
+            &WWaveformViewer::slotTrackUnloaded);
 
     connect(viewer,
             &WWaveformViewer::trackDropped,
@@ -1255,6 +1351,7 @@ QWidget* LegacySkinParser::parseNumberRate(const QDomElement& node) {
     WNumberRate* p = new WNumberRate(group, m_pParent);
     setupLabelWidget(node, p);
 
+    // TODO check this and other BgColor/palette hacks
     // TODO(rryan): Let's look at removing this palette change in 1.12.0. I
     // don't think it's needed anymore.
     p->setPalette(palette);
@@ -1271,7 +1368,7 @@ QWidget* LegacySkinParser::parseNumberPos(const QDomElement& node) {
 
 QWidget* LegacySkinParser::parseEngineKey(const QDomElement& node) {
     QString group = lookupNodeGroup(node);
-    WKey* pEngineKey = new WKey(group, m_pParent);
+    WKey* pEngineKey = new WKey(group, m_pConfig, m_pParent);
     setupLabelWidget(node, pEngineKey);
     return pEngineKey;
 }
@@ -1471,6 +1568,8 @@ QWidget* LegacySkinParser::parseSearchBox(const QDomElement& node) {
     commonWidgetSetup(node, pLineEditSearch, false);
     pLineEditSearch->setup(node, *m_pContext);
 
+    m_pKeyboard->registerSearchBar(pLineEditSearch);
+
     m_pLibrary->bindSearchboxWidget(pLineEditSearch);
 
     return pLineEditSearch;
@@ -1580,6 +1679,16 @@ QWidget* LegacySkinParser::parseLibrary(const QDomElement& node) {
                     mixxx::library::prefs::kBpmColumnPrecisionConfigKey,
                     BaseTrackTableModel::kBpmColumnPrecisionDefault);
     BaseTrackTableModel::setBpmColumnPrecision(bpmColumnPrecision);
+
+    const auto keyColorsEnabled =
+            m_pConfig->getValue(
+                    ConfigKey("[Config]", "key_colors_enabled"),
+                    BaseTrackTableModel::kKeyColorsEnabledDefault);
+    BaseTrackTableModel::setKeyColorsEnabled(keyColorsEnabled);
+
+    ColorPaletteSettings colorPaletteSettings(m_pConfig);
+    ColorPalette colorPalette = colorPaletteSettings.getTrackColorPalette();
+    BaseTrackTableModel::setKeyColorPalette(colorPaletteSettings.getConfigKeyColorPalette());
 
     const auto applyPlayedTrackColor =
             m_pConfig->getValue(
@@ -1853,7 +1962,7 @@ QString LegacySkinParser::getSharedGroupString(const QString& channelStr) {
 
 QWidget* LegacySkinParser::parseHotcueButton(const QDomElement& element) {
     QString group = lookupNodeGroup(element);
-    WHotcueButton* pWidget = new WHotcueButton(group, m_pParent);
+    WHotcueButton* pWidget = new WHotcueButton(m_pParent, group);
     commonWidgetSetup(element, pWidget);
     pWidget->setup(element, *m_pContext);
     pWidget->installEventFilter(m_pKeyboard);
@@ -1874,6 +1983,36 @@ QWidget* LegacySkinParser::parseHotcueButton(const QDomElement& element) {
             controlFromConfigKey(pWidget->getClearConfigKey(), false),
             ControlParameterWidgetConnection::EmitOption::EMIT_ON_PRESS_AND_RELEASE);
 
+    // The list of ConfigKeys and translatable command strings for the tooltip
+    // is created in WHotcueButton::setup().
+    // KeyboardEventFilter will take care of creating the tooltips,
+    // as well as updating them when the mapping file has changed.
+    m_pKeyboard->registerShortcutWidget(pWidget);
+
+    pWidget->Init();
+    return pWidget;
+}
+
+QWidget* LegacySkinParser::parsePlayButton(const QDomElement& element) {
+    QString group = lookupNodeGroup(element);
+    WPlayButton* pWidget = new WPlayButton(m_pParent, group);
+    commonWidgetSetup(element, pWidget);
+    pWidget->setup(element, *m_pContext);
+    pWidget->installEventFilter(m_pKeyboard);
+    pWidget->installEventFilter(
+            m_pControllerManager->getControllerLearningEventFilter());
+    pWidget->Init();
+    return pWidget;
+}
+
+QWidget* LegacySkinParser::parseCueButton(const QDomElement& element) {
+    QString group = lookupNodeGroup(element);
+    WCueButton* pWidget = new WCueButton(m_pParent, group);
+    commonWidgetSetup(element, pWidget);
+    pWidget->setup(element, *m_pContext);
+    pWidget->installEventFilter(m_pKeyboard);
+    pWidget->installEventFilter(
+            m_pControllerManager->getControllerLearningEventFilter());
     pWidget->Init();
     return pWidget;
 }
@@ -2308,7 +2447,8 @@ void LegacySkinParser::setupWidget(const QDomNode& node,
 }
 
 void LegacySkinParser::setupConnections(const QDomNode& node, WBaseWidget* pWidget) {
-    ControlParameterWidgetConnection* pLastLeftOrNoButtonConnection = nullptr;
+    // List of ConfigKeys and translatable command strings for the tooltip
+    QList<std::pair<ConfigKey, QString>> shortcutKeys;
 
     for (QDomNode con = m_pContext->selectNode(node, "Connection");
             !con.isNull();
@@ -2320,20 +2460,22 @@ void LegacySkinParser::setupConnections(const QDomNode& node, WBaseWidget* pWidg
             continue;
         }
 
-        ValueTransformer* pTransformer = nullptr;
+        std::unique_ptr<ValueTransformer> pTransformer = nullptr;
         QDomElement transform = m_pContext->selectElement(con, "Transform");
         if (!transform.isNull()) {
-            pTransformer = ValueTransformer::parseFromXml(transform, *m_pContext);
+            pTransformer =
+                    ValueTransformer::parseFromXml(transform, *m_pContext);
         }
 
         QString property;
         if (m_pContext->hasNodeSelectString(con, "BindProperty", &property)) {
             //qDebug() << "Making property connection for" << property;
 
-            ControlWidgetPropertyConnection* pConnection =
-                    new ControlWidgetPropertyConnection(pWidget, control->getKey(),
-                                                        pTransformer, property);
-            pWidget->addPropertyConnection(pConnection);
+            pWidget->addPropertyConnection(
+                    std::make_unique<ControlWidgetPropertyConnection>(pWidget,
+                            control->getKey(),
+                            std::move(pTransformer),
+                            property));
         } else {
             bool nodeValue;
             Qt::MouseButton state = parseButtonState(con, *m_pContext);
@@ -2394,26 +2536,36 @@ void LegacySkinParser::setupConnections(const QDomNode& node, WBaseWidget* pWidg
                 emitOption |= ControlParameterWidgetConnection::EMIT_DEFAULT;
             }
 
-            ControlParameterWidgetConnection* pConnection = new ControlParameterWidgetConnection(
-                    pWidget, control->getKey(), pTransformer,
-                    static_cast<ControlParameterWidgetConnection::DirectionOption>(directionOption),
-                    static_cast<ControlParameterWidgetConnection::EmitOption>(emitOption));
+            auto pConnection =
+                    std::make_unique<ControlParameterWidgetConnection>(pWidget,
+                            control->getKey(),
+                            std::move(pTransformer),
+                            static_cast<ControlParameterWidgetConnection::
+                                            DirectionOption>(directionOption),
+                            static_cast<ControlParameterWidgetConnection::
+                                            EmitOption>(emitOption));
 
             switch (state) {
             case Qt::NoButton:
-                pWidget->addConnection(pConnection);
                 if (directionOption & ControlParameterWidgetConnection::DIR_TO_WIDGET) {
-                    pLastLeftOrNoButtonConnection = pConnection;
+                    pWidget->addAndSetDisplayConnection(std::move(pConnection),
+                            WBaseWidget::ConnectionSide::None);
+                } else {
+                    pWidget->addConnection(std::move(pConnection),
+                            WBaseWidget::ConnectionSide::None);
                 }
                 break;
             case Qt::LeftButton:
-                pWidget->addLeftConnection(pConnection);
                 if (directionOption & ControlParameterWidgetConnection::DIR_TO_WIDGET) {
-                    pLastLeftOrNoButtonConnection = pConnection;
+                    pWidget->addAndSetDisplayConnection(std::move(pConnection),
+                            WBaseWidget::ConnectionSide::Left);
+                } else {
+                    pWidget->addConnection(std::move(pConnection),
+                            WBaseWidget::ConnectionSide::Left);
                 }
                 break;
             case Qt::RightButton:
-                pWidget->addRightConnection(pConnection);
+                pWidget->addConnection(std::move(pConnection), WBaseWidget::ConnectionSide::Right);
                 break;
             default:
                 // can't happen. Nothing else is returned by parseButtonState();
@@ -2421,118 +2573,86 @@ void LegacySkinParser::setupConnections(const QDomNode& node, WBaseWidget* pWidg
                 break;
             }
 
+            // Add keyboard shortcuts to tooltip.
             // We only add info for controls that this widget affects, not
             // controls that only affect the widget.
+            // I.e. do not add Shortcut string for feedback connections
             if (directionOption & ControlParameterWidgetConnection::DIR_FROM_WIDGET) {
                 m_pControllerManager->getControllerLearningEventFilter()
                         ->addWidgetClickInfo(pWidget->toQWidget(), state, control,
                                 static_cast<ControlParameterWidgetConnection::EmitOption>(emitOption));
 
-                // Add keyboard shortcut info to tooltip string
-                QString key = m_pContext->selectString(con, "ConfigKey");
-                ConfigKey configKey = ConfigKey::parseCommaSeparated(key);
-
-                // do not add Shortcut string for feedback connections
-                QString shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(configKey);
-                addShortcutToToolTip(pWidget, shortcut, QString(""));
-
                 const WSliderComposed* pSlider;
 
                 if (qobject_cast<const  WPushButton*>(pWidget->toQWidget())) {
-                    // check for "_activate", "_toggle"
-                    ConfigKey subkey;
-                    QString shortcut;
-
-                    subkey = configKey;
-                    subkey.item += "_activate";
-                    shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(subkey);
-                    addShortcutToToolTip(pWidget, shortcut, tr("activate"));
-
-                    subkey = configKey;
-                    subkey.item += "_toggle";
-                    shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(subkey);
-                    addShortcutToToolTip(pWidget, shortcut, tr("toggle"));
+                    shortcutKeys.append(std::make_pair(control->getKey(), QString()));
                 } else if ((pSlider = qobject_cast<const WSliderComposed*>(pWidget->toQWidget())) ||
                         qobject_cast<const WKnobComposed*>(pWidget->toQWidget())) {
-                    // check for "_up", "_down", "_up_small", "_down_small"
-                    ConfigKey subkey;
-                    QString shortcut;
-
+                    const ConfigKey cfgKey = control->getKey();
+                    // Add up/down controls with orientation-dependent tr strings
                     if (pSlider && pSlider->tryParseHorizontal(node)) {
-                        subkey = configKey;
-                        subkey.item += "_up";
-                        shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(subkey);
-                        addShortcutToToolTip(pWidget, shortcut, tr("right"));
-
-                        subkey = configKey;
-                        subkey.item += "_down";
-                        shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(subkey);
-                        addShortcutToToolTip(pWidget, shortcut, tr("left"));
-
-                        subkey = configKey;
-                        subkey.item += "_up_small";
-                        shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(subkey);
-                        addShortcutToToolTip(pWidget, shortcut, tr("right small"));
-
-                        subkey = configKey;
-                        subkey.item += "_down_small";
-                        shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(subkey);
-                        addShortcutToToolTip(pWidget, shortcut, tr("left small"));
-                    } else { // vertical slider of knob
-                        subkey = configKey;
-                        subkey.item += "_up";
-                        shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(subkey);
-                        addShortcutToToolTip(pWidget, shortcut, tr("up"));
-
-                        subkey = configKey;
-                        subkey.item += "_down";
-                        shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(subkey);
-                        addShortcutToToolTip(pWidget, shortcut, tr("down"));
-
-                        subkey = configKey;
-                        subkey.item += "_up_small";
-                        shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(subkey);
-                        addShortcutToToolTip(pWidget, shortcut, tr("up small"));
-
-                        subkey = configKey;
-                        subkey.item += "_down_small";
-                        shortcut = m_pKeyboard->getKeyboardConfig()->getValueString(subkey);
-                        addShortcutToToolTip(pWidget, shortcut, tr("down small"));
+                        shortcutKeys.emplace_back(
+                                subKey(cfgKey, QStringLiteral("_down")),
+                                tr("left"));
+                        shortcutKeys.emplace_back(
+                                subKey(cfgKey, QStringLiteral("_down_small")),
+                                tr("left small"));
+                        shortcutKeys.emplace_back(
+                                subKey(cfgKey, QStringLiteral("_up")),
+                                tr("right"));
+                        shortcutKeys.emplace_back(
+                                subKey(cfgKey, QStringLiteral("_up_small")),
+                                tr("right small"));
+                    } else { // vertical slider or knob
+                        shortcutKeys.emplace_back(
+                                subKey(cfgKey, QStringLiteral("_down")),
+                                tr("down"));
+                        shortcutKeys.emplace_back(
+                                subKey(cfgKey, QStringLiteral("_down_small")),
+                                tr("down small"));
+                        shortcutKeys.emplace_back(
+                                subKey(cfgKey, QStringLiteral("_up")),
+                                tr("up"));
+                        shortcutKeys.emplace_back(
+                                subKey(cfgKey, QStringLiteral("_up_small")),
+                                tr("up small"));
                     }
+                    // Add common PotmeterControls
+                    shortcutKeys.emplace_back(
+                            subKey(cfgKey, QStringLiteral("_set_default")),
+                            tr("set default"));
+                    shortcutKeys.emplace_back(
+                            subKey(cfgKey, QStringLiteral("_set_minus_one")),
+                            tr("set -1"));
+                    shortcutKeys.emplace_back(
+                            subKey(cfgKey, QStringLiteral("_set_zero")),
+                            tr("set 0"));
+                    shortcutKeys.emplace_back(
+                            subKey(cfgKey, QStringLiteral("_set_one")),
+                            tr("set 1"));
+                    shortcutKeys.emplace_back(
+                            subKey(cfgKey, QStringLiteral("_toggle")),
+                            tr("toggle"));
+                    shortcutKeys.emplace_back(
+                            subKey(cfgKey, QStringLiteral("_minus_toggle")),
+                            tr("minus toggle"));
                 }
             }
         }
     }
 
-    // Legacy behavior: The last left-button or no-button connection with
-    // connectValueToWidget is the display connection. If no left-button or
-    // no-button connection exists, use the last right-button connection as the
-    // display connection.
-    if (pLastLeftOrNoButtonConnection != nullptr) {
-        pWidget->setDisplayConnection(pLastLeftOrNoButtonConnection);
+    if (shortcutKeys.isEmpty()) {
+        // A widget with no control connections.
+        // We only make the connection to clear/fill the tooltip when the
+        //  tooltips mode "Keyboard shortcuts only" is toggled.
+        m_pKeyboard->connectShowOnlyKbdShortcuts(pWidget);
+    } else {
+        // A widget with at least one control connection.
+        // KeyboardEventFilter will take care of creating the tooltips,
+        // as well as updating them when the mapping file has changed.
+        pWidget->setShortcutControlsAndCommands(shortcutKeys);
+        m_pKeyboard->registerShortcutWidget(pWidget);
     }
-}
-
-void LegacySkinParser::addShortcutToToolTip(WBaseWidget* pWidget,
-                                            const QString& shortcut, const QString& cmd) {
-    if (shortcut.isEmpty()) {
-        return;
-    }
-
-    QString tooltip;
-
-    // translate shortcut to native text
-    QString nativeShortcut = QKeySequence(shortcut, QKeySequence::PortableText).toString(QKeySequence::NativeText);
-
-    tooltip += "\n";
-    tooltip += tr("Shortcut");
-    if (!cmd.isEmpty()) {
-        tooltip += " ";
-        tooltip += cmd;
-    }
-    tooltip += ": ";
-    tooltip += nativeShortcut;
-    pWidget->appendBaseTooltip(tooltip);
 }
 
 QString LegacySkinParser::parseLaunchImageStyle(const QDomNode& skinDoc) {
@@ -2564,4 +2684,9 @@ QString LegacySkinParser::stylesheetAbsIconPaths(QString& style) {
     // skins directory for the launch image style.
     style.replace("url(skins:", "url(" + m_pConfig->getResourcePath() + "skins/");
     return style.replace("url(skin:", "url(" + m_pContext->getSkinBasePath());
+}
+
+bool LegacySkinParser::requiresStem(const QDomElement& node) {
+    QDomElement requiresStemNode = node.firstChildElement("RequiresStem");
+    return !requiresStemNode.isNull() && requiresStemNode.text() == "true";
 }

@@ -11,7 +11,7 @@ QuantizeControl::QuantizeControl(const QString& group,
         UserSettingsPointer pConfig)
         : EngineControl(group, pConfig) {
     m_pCOQuantizeEnabled = new ControlPushButton(ConfigKey(group, "quantize"), true, 1.0);
-    m_pCOQuantizeEnabled->setButtonMode(ControlPushButton::TOGGLE);
+    m_pCOQuantizeEnabled->setButtonMode(mixxx::control::ButtonMode::Toggle);
     m_pCONextBeat = new ControlObject(ConfigKey(group, "beat_next"));
     m_pCONextBeat->setKbdRepeatable(true);
     m_pCONextBeat->set(mixxx::audio::kInvalidFramePos.toEngineSamplePosMaybeInvalid());

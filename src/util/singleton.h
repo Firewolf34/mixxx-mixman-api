@@ -7,13 +7,14 @@
 template<class T>
 class Singleton {
   public:
-    static T* createInstance() {
+    template<typename... Args>
+    static T* createInstance(Args&&... args) {
         VERIFY_OR_DEBUG_ASSERT(!m_instance) {
             qWarning() << "Singleton class has already been created!";
             return m_instance;
         }
 
-        m_instance = new T();
+        m_instance = new T(std::forward<Args>(args)...);
         return m_instance;
     }
 
@@ -22,6 +23,10 @@ class Singleton {
             qWarning() << "Singleton class has not been created yet, returning nullptr";
         }
         return m_instance;
+    }
+
+    static bool isCreated() {
+        return m_instance != nullptr;
     }
 
     static void destroy() {

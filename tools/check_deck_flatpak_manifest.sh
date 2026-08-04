@@ -7,12 +7,47 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 NORMAL_MANIFEST="${REPO_ROOT}/packaging/flatpak/org.mixxx.Mixxx.yaml"
 DECK_MANIFEST="${REPO_ROOT}/packaging/flatpak/org.mixxx.Mixxx.deck.yaml"
+NORMALIZED_NORMAL_MANIFEST="$(mktemp)"
 NORMALIZED_MANIFEST="$(mktemp)"
 
 cleanup() {
-    rm -f -- "${NORMALIZED_MANIFEST}"
+    rm -f -- "${NORMALIZED_NORMAL_MANIFEST}" "${NORMALIZED_MANIFEST}"
 }
 trap cleanup EXIT
+
+awk '
+    $0 == "  - name: mixxx" {
+        in_mixxx_module = 1
+        print
+        next
+    }
+    /^  - name:/ {
+        in_mixxx_module = 0
+        print
+        next
+    }
+    in_mixxx_module && $0 == "    run-tests: true" {
+        next
+    }
+    in_mixxx_module && $0 == "    build-options:" {
+        in_mixxx_build_options = 1
+        next
+    }
+    in_mixxx_build_options {
+        if ($0 == "    config-opts:") {
+            in_mixxx_build_options = 0
+            print
+        }
+        next
+    }
+    in_mixxx_module && $0 == "      - -DBUILD_TESTING=ON" {
+        print "      - -DBUILD_TESTING=OFF"
+        next
+    }
+    {
+        print
+    }
+' "${NORMAL_MANIFEST}" >"${NORMALIZED_NORMAL_MANIFEST}"
 
 awk '
     BEGIN {
@@ -59,7 +94,7 @@ awk '
     }
 ' "${DECK_MANIFEST}" >"${NORMALIZED_MANIFEST}"
 
-if ! diff -u "${NORMAL_MANIFEST}" "${NORMALIZED_MANIFEST}"; then
+if ! diff -u "${NORMALIZED_NORMAL_MANIFEST}" "${NORMALIZED_MANIFEST}"; then
     echo "Error: deck and normal Flatpak manifests have undocumented drift." >&2
     exit 1
 fi

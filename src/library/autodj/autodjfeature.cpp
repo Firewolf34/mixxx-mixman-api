@@ -3,6 +3,7 @@
 #include <QMenu>
 #include <QtDebug>
 
+#include "controllers/keyboard/keyboardeventfilter.h"
 #include "library/autodj/autodjprocessor.h"
 #include "library/autodj/dlgautodj.h"
 #include "library/dao/trackschema.h"
@@ -20,12 +21,6 @@
 #include "util/dnd.h"
 #include "widget/wlibrary.h"
 #include "widget/wlibrarysidebar.h"
-
-namespace {
-
-const QString kViewName = QStringLiteral("Auto DJ");
-
-} // namespace
 
 namespace {
 constexpr int kMaxRetrieveAttempts = 3;
@@ -54,6 +49,7 @@ AutoDJFeature::AutoDJFeature(Library* pLibrary,
           m_pAutoDJProcessor(nullptr),
           m_pSidebarModel(make_parented<TreeItemModel>(this)),
           m_pAutoDJView(nullptr),
+          m_viewName(Library::kAutoDJViewName),
           m_autoDjCratesDao(m_iAutoDJPlaylistId, pLibrary->trackCollectionManager(), m_pConfig) {
     qRegisterMetaType<AutoDJProcessor::AutoDJState>("AutoDJState");
     m_pAutoDJProcessor = new AutoDJProcessor(this,
@@ -96,6 +92,20 @@ AutoDJFeature::AutoDJFeature(Library* pLibrary,
             this,
             &AutoDJFeature::slotCrateChanged);
 
+    // Create context-menu items for enabling/disabling the auto-DJ
+    m_pEnableAutoDJAction = make_parented<QAction>(tr("Enable Auto DJ"), this);
+    connect(m_pEnableAutoDJAction.get(),
+            &QAction::triggered,
+            this,
+            &AutoDJFeature::slotEnableAutoDJ);
+
+    m_pDisableAutoDJAction = make_parented<QAction>(tr("Disable Auto DJ"), this);
+    connect(m_pDisableAutoDJAction.get(),
+            &QAction::triggered,
+            this,
+            &AutoDJFeature::slotDisableAutoDJ);
+
+    // Create context-menu item for clearing the auto-DJ queue
     m_pClearQueueAction = make_parented<QAction>(tr("Clear Auto DJ Queue"), this);
     const auto removeKeySequence =
             // TODO(XXX): Qt6 replace enum | with QKeyCombination
@@ -137,7 +147,7 @@ void AutoDJFeature::bindLibraryWidget(
             m_pLibrary,
             m_pAutoDJProcessor,
             keyboard);
-    libraryWidget->registerView(kViewName, m_pAutoDJView);
+    libraryWidget->registerView(m_viewName, m_pAutoDJView);
     connect(m_pAutoDJView,
             &DlgAutoDJ::loadTrack,
             this,
@@ -161,6 +171,13 @@ void AutoDJFeature::bindLibraryWidget(
             &DlgAutoDJ::addRandomTrackButton,
             this,
             &AutoDJFeature::slotAddRandomTrack);
+
+    // Update shortcuts displayed in the context menu
+    QKeySequence toggleAutoDJShortcut = QKeySequence(
+            keyboard->getKeyboardConfig()->getValueString(ConfigKey("[AutoDJ]", "enabled")),
+            QKeySequence::PortableText);
+    m_pEnableAutoDJAction->setShortcut(toggleAutoDJShortcut);
+    m_pDisableAutoDJAction->setShortcut(toggleAutoDJShortcut);
 }
 
 void AutoDJFeature::bindSidebarWidget(WLibrarySidebar* pSidebarWidget) {
@@ -174,7 +191,7 @@ TreeItemModel* AutoDJFeature::sidebarModel() const {
 
 void AutoDJFeature::activate() {
     //qDebug() << "AutoDJFeature::activate()";
-    emit switchToView(kViewName);
+    emit switchToView(m_viewName);
     emit disableSearch();
     emit enableCoverArtDisplay(true);
 }
@@ -218,8 +235,11 @@ bool AutoDJFeature::dropAccept(const QList<QUrl>& urls, QObject* pSource) {
     // Auto DJ playlist.
     // pSource != nullptr it is a drop from inside Mixxx and indicates all
     // tracks already in the DB
-    QList<TrackId> trackIds = m_pLibrary->trackCollectionManager()->resolveTrackIdsFromUrls(urls,
-            !pSource);
+    const QList<mixxx::FileInfo> fileInfos =
+            // collect all tracks, accept playlist files
+            DragAndDropHelper::supportedTracksFromUrls(urls, false, true);
+    const QList<TrackId> trackIds =
+            m_pLibrary->trackCollectionManager()->resolveTrackIds(fileInfos, pSource);
     if (trackIds.isEmpty()) {
         return false;
     }
@@ -228,9 +248,16 @@ bool AutoDJFeature::dropAccept(const QList<QUrl>& urls, QObject* pSource) {
     return m_playlistDao.appendTracksToPlaylist(trackIds, m_iAutoDJPlaylistId);
 }
 
-bool AutoDJFeature::dragMoveAccept(const QUrl& url) {
-    return SoundSourceProxy::isUrlSupported(url) ||
-            Parser::isPlaylistFilenameSupported(url.toLocalFile());
+bool AutoDJFeature::dragMoveAccept(const QList<QUrl>& urls) {
+    return DragAndDropHelper::urlsContainSupportedTrackFiles(urls, true);
+}
+
+void AutoDJFeature::slotEnableAutoDJ() {
+    m_pAutoDJProcessor->toggleAutoDJ(true);
+}
+
+void AutoDJFeature::slotDisableAutoDJ() {
+    m_pAutoDJProcessor->toggleAutoDJ(false);
 }
 
 void AutoDJFeature::slotClearQueue() {
@@ -340,6 +367,11 @@ void AutoDJFeature::constructCrateChildModel() {
 
 void AutoDJFeature::onRightClick(const QPoint& globalPos) {
     QMenu menu(m_pSidebarWidget);
+    if (m_pAutoDJProcessor->getState() == AutoDJProcessor::ADJ_DISABLED) {
+        menu.addAction(m_pEnableAutoDJAction.get());
+    } else {
+        menu.addAction(m_pDisableAutoDJAction.get());
+    }
     menu.addAction(m_pClearQueueAction.get());
     menu.exec(globalPos);
 }

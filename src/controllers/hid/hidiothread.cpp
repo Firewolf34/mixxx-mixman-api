@@ -1,7 +1,13 @@
 #include "controllers/hid/hidiothread.h"
 
-#include <hidapi.h>
+#include "util/assert.h"
 
+#ifdef __ANDROID__
+#include <android/log.h>
+#include <hidapi_libusb.h>
+#else
+#include <hidapi.h>
+#endif
 #include "moc_hidiothread.cpp"
 #include "util/runtimeloggingcategory.h"
 #include "util/string.h"
@@ -27,11 +33,13 @@ QString loggingCategoryPrefix(const QString& deviceName) {
 }
 } // namespace
 
-HidIoThread::HidIoThread(
-        hid_device* pHidDevice, const mixxx::hid::DeviceInfo& deviceInfo)
+HidIoThread::HidIoThread(hid_device* pHidDevice,
+        const mixxx::hid::DeviceInfo& deviceInfo,
+        std::optional<bool> deviceUsesReportIds)
         : QThread(),
           m_deviceInfo(deviceInfo),
-          // Defining RuntimeLoggingCategories locally in this thread improves runtime performance significiantly
+          // Defining RuntimeLoggingCategories locally in this thread improves
+          // runtime performance significantly
           m_logBase(loggingCategoryPrefix(deviceInfo.formatName())),
           m_logInput(loggingCategoryPrefix(deviceInfo.formatName()) +
                   QStringLiteral(".input")),
@@ -41,6 +49,7 @@ HidIoThread::HidIoThread(
           m_lastPollSize(0),
           m_pollingBufferIndex(0),
           m_hidReadErrorLogged(false),
+          m_deviceUsesReportIds(deviceUsesReportIds),
           m_globalOutputReportFifo(),
           m_runLoopSemaphore(1) {
     // Initializing isn't strictly necessary but is good practice.
@@ -53,6 +62,11 @@ HidIoThread::HidIoThread(
 
 HidIoThread::~HidIoThread() {
     hid_close(m_pHidDevice);
+#ifdef Q_OS_ANDROID
+    if (m_androidConnection.isValid()) {
+        m_androidConnection.callMethod<void>("close");
+    }
+#endif
 }
 
 void HidIoThread::run() {
@@ -151,6 +165,22 @@ void HidIoThread::processInputReport(int bytesRead) {
     emit receive(QByteArray(reinterpret_cast<const char*>(pCurrentBuffer),
                          bytesRead),
             mixxx::Time::elapsed());
+
+    if (m_deviceUsesReportIds.has_value() && bytesRead > 0) {
+        if (m_deviceUsesReportIds.value()) {
+            // Extract the ReportId from the buffer
+            quint8 reportId = pCurrentBuffer[0];
+            emit reportReceived(reportId,
+                    QByteArray(
+                            reinterpret_cast<const char*>(pCurrentBuffer + 1),
+                            bytesRead - 1));
+        } else {
+            quint8 reportId = 0;
+            emit reportReceived(reportId,
+                    QByteArray(reinterpret_cast<const char*>(pCurrentBuffer),
+                            bytesRead));
+        }
+    }
 }
 
 QByteArray HidIoThread::getInputReport(quint8 reportID) {
@@ -167,7 +197,7 @@ QByteArray HidIoThread::getInputReport(quint8 reportID) {
         qCWarning(m_logInput)
                 << "getInputReport is unable to get data from"
                 << m_deviceInfo.formatName() << "serial #"
-                << m_deviceInfo.serialNumber() << ":"
+                << m_deviceInfo.getSerialNumber() << ":"
                 << mixxx::convertWCStringToQString(
                            hid_error(m_pHidDevice), kMaxHidErrorMessageSize);
         // Note, that the GetInputReport request is optional, according to the HID specification,
@@ -184,7 +214,7 @@ QByteArray HidIoThread::getInputReport(quint8 reportID) {
 
     qCDebug(m_logInput) << bytesRead << "bytes received by hid_get_input_report"
                         << m_deviceInfo.formatName() << "serial #"
-                        << m_deviceInfo.serialNumber()
+                        << m_deviceInfo.getSerialNumber()
                         << "(including one byte for the report ID:"
                         << QString::number(static_cast<quint8>(reportID), 16)
                                    .toUpper()
@@ -235,7 +265,7 @@ bool HidIoThread::sendNextCachedOutputReport() {
         return true;
     }
 
-    // 2.) If non non-skipping reports were in the FIFO, send the skipable reports
+    // 2.) If non non-skipping reports were in the FIFO, send the skippable reports
     // from the m_outputReports cache
 
     // m_outputReports.size() doesn't need mutex protection, because the value of i is not used.
@@ -286,7 +316,7 @@ void HidIoThread::sendFeatureReport(
         qCWarning(m_logOutput)
                 << "sendFeatureReport is unable to send data to"
                 << m_deviceInfo.formatName() << "serial #"
-                << m_deviceInfo.serialNumber() << ":"
+                << m_deviceInfo.getSerialNumber() << ":"
                 << mixxx::convertWCStringToQString(
                            hid_error(m_pHidDevice), kMaxHidErrorMessageSize);
         return;
@@ -297,7 +327,7 @@ void HidIoThread::sendFeatureReport(
     qCDebug(m_logOutput)
             << result << "bytes sent by sendFeatureReport to"
             << m_deviceInfo.formatName() << "serial #"
-            << m_deviceInfo.serialNumber() << "(including report ID of"
+            << m_deviceInfo.getSerialNumber() << "(including report ID of"
             << reportID << ") - Needed: "
             << (mixxx::Time::elapsed() - startOfHidSendFeatureReport)
                        .formatMicrosWithUnit();
@@ -320,7 +350,7 @@ QByteArray HidIoThread::getFeatureReport(
         qCWarning(m_logInput)
                 << "getFeatureReport is unable to get data from"
                 << m_deviceInfo.formatName() << "serial #"
-                << m_deviceInfo.serialNumber() << ":"
+                << m_deviceInfo.getSerialNumber() << ":"
                 << mixxx::convertWCStringToQString(
                            hid_error(m_pHidDevice), kMaxHidErrorMessageSize);
         return {};
@@ -331,7 +361,7 @@ QByteArray HidIoThread::getFeatureReport(
     qCDebug(m_logInput)
             << bytesRead << "bytes received by getFeatureReport from"
             << m_deviceInfo.formatName() << "serial #"
-            << m_deviceInfo.serialNumber()
+            << m_deviceInfo.getSerialNumber()
             << "(including one byte for the report ID:"
             << QString::number(static_cast<quint8>(reportID), 16)
                        .toUpper()

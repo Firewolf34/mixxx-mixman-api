@@ -130,14 +130,18 @@
         disconnect: function() {
             if (this.connections[0] !== undefined) {
                 this.connections.forEach(function(conn) {
-                    conn.disconnect();
+                    if (conn !== undefined) {
+                        conn.disconnect();
+                    }
                 });
             }
         },
         trigger: function() {
             if (this.connections[0] !== undefined) {
                 this.connections.forEach(function(conn) {
-                    conn.trigger();
+                    if (conn !== undefined) {
+                        conn.trigger();
+                    }
                 });
             }
         },
@@ -177,6 +181,7 @@
         // in any Buttons that act differently with short and long presses
         // to keep the timeouts uniform.
         longPressTimeout: 275,
+        triggerOnRelease: false,
         isLongPressed: false,
         longPressTimer: NO_TIMER,
         isPress: function(channel, control, value, _status) {
@@ -200,6 +205,8 @@
                 } else {
                     if (this.isLongPressed) {
                         this.inToggle();
+                    } else if (this.triggerOnRelease) {
+                        this.trigger();
                     }
                     if (this.longPressTimer !== NO_TIMER) {
                         engine.stopTimer(this.longPressTimer);
@@ -653,6 +660,10 @@
             // Unset isShifted for each ComponentContainer recursively
             this.isShifted = false;
         },
+        /**
+         * @param newLayer Layer to apply to this
+         * @param reconnectComponents Whether components should be reconnected or not
+         */
         applyLayer: function(newLayer, reconnectComponents) {
             if (reconnectComponents !== false) {
                 reconnectComponents = true;
@@ -701,13 +712,14 @@
         setCurrentDeck: function(newGroup) {
             this.currentDeck = newGroup;
             this.reconnectComponents(function(component) {
-                if (component.group === undefined
-                      || component.group.search(script.channelRegEx) !== -1) {
+                if (component.group === undefined) {
                     component.group = newGroup;
-                } else if (component.group.search(script.eqRegEx) !== -1) {
-                    component.group = "[EqualizerRack1_" + newGroup + "_Effect1]";
-                } else if (component.group.search(script.quickEffectRegEx) !== -1) {
-                    component.group = "[QuickEffectRack1_" + newGroup + "]";
+                } else {
+                    // Match the channel anywhere it might appear in the group
+                    // whether it includes the closing brace or is part of
+                    // another group name such as "Channel1_Stem1".
+                    const anyChannelRegEx = /\[Channel\d+([\]_])/;
+                    component.group = component.group.replace(anyChannelRegEx, `${newGroup.slice(0, -1)}$1`);
                 }
                 // Do not alter the Component's group if it does not match any of those RegExs.
 
@@ -735,14 +747,48 @@
     });
 
     const JogWheelBasic = function(options) {
+        if (options.deck !== undefined && options.group !== undefined) {
+            console.warn(
+                "options.deck and option.group are both set; " +
+                "options.deck will take priority"
+            );
+        }
+
+        const deck = options.deck;
+        const deckFromGroup = script.deckFromGroup(options.group);
+        delete options.deck;
+        delete options.group;
+
         Component.call(this, options);
 
-        if (!Number.isInteger(this.deck)) {
-            console.warn("missing scratch deck");
-            return;
+        this._deck = undefined;
+
+        Object.defineProperties(this, {
+            deck: {
+                get: () => this._deck,
+                set: value => {
+                    if (Number.isInteger(value) && value > 0) {
+                        this._deck = value;
+                        this.reset();
+                    }
+                },
+            },
+            group: {
+                get: () => `[Channel${this.deck}]`,
+                set: value => {
+                    this.deck = script.deckFromGroup(value);
+                },
+            }
+        });
+
+        this.deck = deck;
+
+        if (!this.deck) {
+            this.deck = deckFromGroup;  // try setting deck from group
         }
-        if (this.deck <= 0) {
-            console.warn("invalid deck number: " + this.deck);
+
+        if (!Number.isInteger(this.deck)) {
+            console.warn("missing deck or group");
             return;
         }
         if (!Number.isInteger(this.wheelResolution)) {
@@ -759,9 +805,7 @@
         if (!Number.isFinite(this.rpm)) {
             this.rpm = 33 + 1/3;
         }
-        if (this.group === undefined) {
-            this.group = "[Channel" + this.deck + "]";
-        }
+
         this.inKey = "jog";
     };
 
@@ -773,6 +817,10 @@
             return value < 0x40 ? value : value - (this.max + 1);
         },
         inputWheel: function(_channel, _control, value, _status, _group) {
+            if (!this.deck) {
+                return;
+            }
+
             value = this.inValueScale(value);
             if (engine.isScratching(this.deck)) {
                 engine.scratchTick(this.deck, value);
@@ -781,6 +829,10 @@
             }
         },
         inputTouch: function(channel, control, value, status, _group) {
+            if (!this.deck) {
+                return;
+            }
+
             if (this.isPress(channel, control, value, status) && this.vinylMode) {
                 engine.scratchEnable(this.deck,
                     this.wheelResolution,
@@ -795,13 +847,7 @@
             throw "Called wrong input handler for " + status + ": " + control + ".\n" +
                 "Please bind jogwheel-related messages to inputWheel and inputTouch!\n";
         },
-        // this is needed for features such as "deck switching" that work
-        // by changing the component group. It is assumed they call `connect`
-        // afterwards.
-        connect: function() {
-            Component.prototype.connect.call(this);
-            this.deck = parseInt(script.channelRegEx.exec(this.group)[1]);
-        }
+        reset() {},
     });
     Object.defineProperty(JogWheelBasic.prototype, "vinylMode", {
         get() {

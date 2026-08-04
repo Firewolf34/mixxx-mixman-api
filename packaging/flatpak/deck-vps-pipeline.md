@@ -229,6 +229,8 @@ manifest except for these intentional low-memory changes:
 - GNU BFD forced for executable and shared-library links;
 - `--no-keep-memory` makes BFD reread symbols instead of retaining them;
 - `--reduce-memory-overheads` selects slower, smaller linker data structures.
+- The full Flatpak test suite is disabled; publication instead requires OSTree
+  validation and a headless Mixxx smoke test.
 - Source publication compression uses one Zstandard worker at level 3.
 
 The normal manifest retains its existing developer/debug behavior.

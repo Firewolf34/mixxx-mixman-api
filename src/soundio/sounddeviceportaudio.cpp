@@ -2,9 +2,14 @@
 
 #include <float.h>
 
+#if __has_include(<valgrind/valgrind.h>)
+#include <valgrind/valgrind.h>
+#endif
+
 #include <QRegularExpression>
 #include <QThread>
 #include <QtDebug>
+#include <cstddef>
 
 #include "control/controlobject.h"
 #include "sounddevicenetwork.h"
@@ -25,6 +30,11 @@
 #include <pa_linux_alsa.h>
 // for sched_getscheduler
 #include <sched.h>
+#endif
+
+#ifdef PA_USE_OBOE
+// for PaOboe_InitializeStreamInfo
+#include <pa_oboe.h>
 #endif
 
 namespace {
@@ -241,7 +251,24 @@ SoundDeviceStatus SoundDevicePortAudio::open(bool isClkRefDevice, int syncBuffer
     m_outputParams.device = m_deviceId.portAudioIndex;
     m_outputParams.sampleFormat = paFloat32;
     m_outputParams.suggestedLatency = bufferMSec / 1000.0;
-    m_outputParams.hostApiSpecificStreamInfo = nullptr;
+#ifdef PA_USE_OBOE
+    PaOboeStreamInfo obeoStreamInfo;
+    if (m_deviceTypeId == PaHostApiTypeId::paOboe) {
+        PaOboe_InitializeStreamInfo(&obeoStreamInfo);
+        obeoStreamInfo.androidOutputUsage = PaOboe_Usage::Media,
+        obeoStreamInfo.androidInputPreset = PaOboe_InputPreset::Generic,
+        obeoStreamInfo.performanceMode = PaOboe_PerformanceMode::LowLatency,
+        obeoStreamInfo.sharingMode = PaOboe_SharingMode::Exclusive,
+        obeoStreamInfo.contentType = PaOboe_ContentType::Music,
+        obeoStreamInfo.packageName = ANDROID_PACKAGE_NAME;
+
+        m_outputParams.hostApiSpecificStreamInfo = (void*)&obeoStreamInfo;
+    } else {
+#endif
+        m_outputParams.hostApiSpecificStreamInfo = nullptr;
+#ifdef PA_USE_OBOE
+    }
+#endif
 
     m_inputParams.device  = m_deviceId.portAudioIndex;
     m_inputParams.sampleFormat  = paFloat32;
@@ -1009,9 +1036,16 @@ int SoundDevicePortAudio::callbackProcessClkRef(
         // verify if flush to zero or denormals to zero works
         // test passes if one of the two flag is set.
         volatile double doubleMin = DBL_MIN; // the smallest normalized double
-        VERIFY_OR_DEBUG_ASSERT(doubleMin / 2 == 0.0) {
-            qWarning() << "Denormals to zero mode is not working. EQs and effects may suffer high CPU load";
-        } else {
+#if __has_include(<valgrind/valgrind.h>)
+        if (RUNNING_ON_VALGRIND) {
+            qDebug() << "Skipping denormals to zero check: running under Valgrind";
+        } else
+#endif
+            VERIFY_OR_DEBUG_ASSERT(doubleMin / 2 == 0.0) {
+                qWarning() << "Denormals to zero mode is not working. EQs and "
+                              "effects may suffer high CPU load";
+            }
+        else {
             qDebug() << "Denormals to zero mode is working";
         }
     }
@@ -1039,7 +1073,7 @@ int SoundDevicePortAudio::callbackProcessClkRef(
 
     // Send audio from the soundcard's input off to the SoundManager...
     if (in) {
-        ScopedTimer t(u"SoundDevicePortAudio::callbackProcess input %1",
+        ScopedTimer t(QStringLiteral("SoundDevicePortAudio::callbackProcess input %1"),
                 m_deviceId.debugName());
         composeInputBuffer(in, framesPerBuffer, 0, m_inputParams.channelCount);
         m_pSoundManager->pushInputBuffers(m_audioInputs, framesPerBuffer);
@@ -1048,13 +1082,13 @@ int SoundDevicePortAudio::callbackProcessClkRef(
     m_pSoundManager->readProcess(framesPerBuffer);
 
     {
-        ScopedTimer t(u"SoundDevicePortAudio::callbackProcess prepare %1",
+        ScopedTimer t(QStringLiteral("SoundDevicePortAudio::callbackProcess prepare %1"),
                 m_deviceId.debugName());
         m_pSoundManager->onDeviceOutputCallback(framesPerBuffer);
     }
 
     if (out) {
-        ScopedTimer t(u"SoundDevicePortAudio::callbackProcess output %1",
+        ScopedTimer t(QStringLiteral("SoundDevicePortAudio::callbackProcess output %1"),
                 m_deviceId.debugName());
 
         if (m_outputParams.channelCount <= 0) {

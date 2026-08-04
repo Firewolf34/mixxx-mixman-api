@@ -8,6 +8,7 @@
 #include "engine/enginebuffer.h"
 #include "engine/enginemixer.h"
 #include "engine/sync/enginesync.h"
+#include "mixer/playermanager.h"
 #include "moc_synccontrol.cpp"
 #include "track/track.h"
 #include "util/assert.h"
@@ -45,22 +46,21 @@ SyncControl::SyncControl(const QString& group,
     m_pPlayButton->connectValueChanged(this, &SyncControl::slotControlPlay, Qt::DirectConnection);
 
     m_pSyncMode.reset(new ControlPushButton(ConfigKey(group, "sync_mode")));
-    m_pSyncMode->setButtonMode(ControlPushButton::TOGGLE);
-    m_pSyncMode->setStates(static_cast<int>(SyncMode::NumModes));
+    m_pSyncMode->setBehavior(mixxx::control::ButtonMode::Toggle,
+            static_cast<int>(SyncMode::NumModes));
     m_pSyncMode->connectValueChangeRequest(
             this, &SyncControl::slotSyncModeChangeRequest, Qt::DirectConnection);
 
     m_pSyncLeaderEnabled.reset(
             new ControlPushButton(ConfigKey(group, "sync_leader")));
-    m_pSyncLeaderEnabled->setButtonMode(ControlPushButton::TOGGLE);
-    m_pSyncLeaderEnabled->setStates(3);
+    m_pSyncLeaderEnabled->setBehavior(mixxx::control::ButtonMode::Toggle, 3);
     m_pSyncLeaderEnabled->connectValueChangeRequest(
             this, &SyncControl::slotSyncLeaderEnabledChangeRequest, Qt::DirectConnection);
     m_pSyncLeaderEnabled->addAlias(ConfigKey(group, QStringLiteral("sync_master")));
 
     m_pSyncEnabled.reset(
             new ControlPushButton(ConfigKey(group, "sync_enabled")));
-    m_pSyncEnabled->setButtonMode(ControlPushButton::LONGPRESSLATCHING);
+    m_pSyncEnabled->setButtonMode(mixxx::control::ButtonMode::LongPressLatching);
     m_pSyncEnabled->connectValueChangeRequest(
             this, &SyncControl::slotSyncEnabledChangeRequest, Qt::DirectConnection);
 
@@ -124,15 +124,18 @@ void SyncControl::setEngineControls(RateControl* pRateControl,
     m_pSyncPhaseButton = new ControlProxy(getGroup(), "beatsync_phase", this);
 
 #ifdef __VINYLCONTROL__
-    m_pVCEnabled = new ControlProxy(
-            getGroup(), "vinylcontrol_enabled", this);
+    // Vinyl control COs are only created for main decks
+    if (PlayerManager::isDeckGroup(getGroup())) {
+        m_pVCEnabled = new ControlProxy(
+                getGroup(), "vinylcontrol_enabled", this);
+        // TODO Remove, ControlProxy asserts that the control exists
+        // Throw a hissy fit if somebody moved us such that the vinylcontrol_enabled
+        // control doesn't exist yet. This will blow up immediately, won't go unnoticed.
+        DEBUG_ASSERT(m_pVCEnabled->valid());
 
-    // Throw a hissy fit if somebody moved us such that the vinylcontrol_enabled
-    // control doesn't exist yet. This will blow up immediately, won't go unnoticed.
-    DEBUG_ASSERT(m_pVCEnabled->valid());
-
-    m_pVCEnabled->connectValueChanged(
-            this, &SyncControl::slotVinylControlChanged, Qt::DirectConnection);
+        m_pVCEnabled->connectValueChanged(
+                this, &SyncControl::slotVinylControlChanged, Qt::DirectConnection);
+    }
 #endif
 }
 
@@ -279,7 +282,7 @@ void SyncControl::reinitLeaderParams(
         kLogger.trace() << "reinitLeaderParams" << getGroup()
                         << beatDistance << baseBpm << bpm;
     }
-    m_leaderBpmAdjustFactor = determineBpmMultiplier(fileBpm(), baseBpm);
+    m_leaderBpmAdjustFactor = determineBpmMultiplier(mixxx::Bpm(m_pBpm->get()), bpm);
     updateLeaderBpm(bpm);
     updateLeaderBeatDistance(beatDistance);
 }
