@@ -109,6 +109,10 @@ Before changing the deck pipeline, read:
 - No Docker socket, privileged mode, setuid Bubblewrap, added Linux
   capabilities, arbitrary host paths, sudo access, or login shell. Host
   Bubblewrap must use Ubuntu's enforced unprivileged-user-namespace profile.
+- The native service deliberately does not use `ProtectKernelTunables=yes`:
+  that setting locks `/proc` and breaks Bubblewrap's inner Flatpak sandbox.
+  The non-login runner still has no capabilities or sudo, so it cannot alter
+  host tunables.
 - The current VPS has only 2 GiB physical RAM and also hosts production.
 - One concurrent job, one CPU, 768-MiB resident-memory, 768-MiB swap,
   1536-MiB combined RAM+swap, 512-PID, and three-hour limits.

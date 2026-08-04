@@ -215,6 +215,10 @@ The runner:
   unprivileged build namespaces; the unit deliberately permits namespace
   creation but retains its cgroup, filesystem, device, process, syscall, and
   network-family restrictions;
+- omits systemd `ProtectKernelTunables=yes`, because that recursively locks
+  `/proc` and prevents Bubblewrap from mounting Flatpak Builder's required
+  inner `/proc`; the non-login, no-capability runner still cannot alter host
+  tunables;
 - writes only its private `/data` runner-state bind and private `/srv/artifacts`
   publication bind;
 - restarts on failure.
