@@ -25,6 +25,8 @@ jobs:
       MIXXX_FLATPAK_BUILDER_STATE_DIR: /data/flatpak-builder-state
       MIXXX_DECK_SOURCE_DOWNLOAD_ATTEMPTS: "3"
       MIXXX_DECK_SOURCE_RETRY_DELAY_SECONDS: "20"
+      MIXXX_DECK_PRIVATE_LOG_DIR: /data/logs
+      MIXXX_DECK_PRIVATE_LOG_MAX_BYTES: "2097152"
       MIXXX_DECK_PUBLISH_ROOT: /srv/artifacts
       MIXXX_DECK_PUBLIC_BASE_URL: https://forge.polinaria.world/artifacts
       MIXXX_BUILD_MAX_PSI_SOME_AVG60: "10.00"
@@ -42,18 +44,18 @@ jobs:
           submodules: false
 
       - name: Prepare bounded runner cache
-        run: tools/deck_runner_cache_cleanup.sh --prepare
+        run: tools/deck_private_log.sh prepare-cache -- tools/deck_runner_cache_cleanup.sh --prepare
 
       - name: Check low-memory VPS build headroom
         run: |
-          tools/check_deck_flatpak_manifest.sh
-          tools/deck_build_preflight.sh --phase=prepare
+          tools/deck_private_log.sh manifest-check -- tools/check_deck_flatpak_manifest.sh
+          tools/deck_private_log.sh preflight -- tools/deck_build_preflight.sh --phase=prepare
 
       - name: Ensure the Flatpak SDK is available
-        run: tools/deck_pressure_guard.sh tools/flatpak_buildenv.sh setup --user
+        run: tools/deck_private_log.sh sdk-setup -- tools/deck_pressure_guard.sh tools/flatpak_buildenv.sh setup --user
 
       - name: Build, validate, and publish
-        run: tools/deck_pressure_guard.sh tools/deck_flatpak_publish.sh
+        run: tools/deck_private_log.sh build-publish -- tools/deck_pressure_guard.sh tools/deck_flatpak_publish.sh
 
       - name: Clean transient runner data
         if: always()

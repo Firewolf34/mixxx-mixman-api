@@ -103,6 +103,9 @@ Before changing the deck pipeline, read:
   never retry or weaken an integrity failure.
 - Store any Forgejo API token outside the repository with mode 0600. Use a
   token restricted to `total-infra/mixxx`; never print, log, or commit it.
+- Store the most recent failed custom workflow-step output only at private
+  runner path `/data/logs/latest.log` (0700 directory, 0600 log, 2 MiB cap).
+  It is diagnostic state, never a Git file or `/srv/artifacts`/Caddy content.
 
 ## Runner And Infrastructure Invariants
 

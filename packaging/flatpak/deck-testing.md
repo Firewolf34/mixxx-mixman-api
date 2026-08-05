@@ -72,6 +72,11 @@ Forge-generated archives whose container bytes have proved unstable should be
 replaced with exact Git commit-plus-tag pins. This keeps the source immutable
 without compiling or investigating on the deck laptop.
 
+For a failed custom runner step, the VPS operator can inspect the runner-only
+`/data/logs/latest.log` record. It retains the last 2 MiB of the most recent
+failure with mode 0600 and is intentionally outside the published artifact
+tree. Do not copy this diagnostic log to the deck, Git, or a public web route.
+
 The current VPS has only 2 GiB RAM. The workflow requires at least 512 MiB host
 swap, 1536 MiB currently free memory-plus-swap, 12 GiB free for a cold SDK
 setup or 6.5 GiB for a warm build, and 1 GiB free on a separate artifact

@@ -230,6 +230,16 @@ the source state on the private `/data` filesystem. A cold first build may be
 much slower than later builds. The workflow sets `FLATPAK_BUILDER_JOBS=1`, and
 `packaging/flatpak/flatpak_build.sh` passes that as `--jobs=1`.
 
+Each custom workflow step runs through `tools/deck_private_log.sh`. On failure,
+it atomically records the step name, UTC timestamp, exit status, and the last
+2 MiB of that step's output at private runner path `/data/logs/latest.log`.
+The directory is mode 0700 and the log is mode 0600. It is deliberately outside
+`/srv/artifacts`, is not mounted into Caddy, is not published, and is replaced
+only by a newer failed wrapped step. The final cleanup step is intentionally not
+wrapped so it cannot replace the causal failure record. The log is diagnostic
+output, not an artifact; inspect it only through the VPS runner-state path and
+do not copy it to Git or the public artifact tree.
+
 Before compilation, the publisher runs Flatpak Builder's `--download-only`
 mode. A recognized transient network failure (connection/DNS timeout, reset,
 unreachable network, HTTP 429, or HTTP 5xx) is retried at most three times,
@@ -358,6 +368,9 @@ https://forge.polinaria.world/artifacts/builds/<sha>/source.tar.zst
 
 Caddy serves `latest.json` with `Cache-Control: no-store`. Build paths receive
 a long-lived immutable cache policy.
+
+`/data/logs/latest.log` is not part of this layout and must never be added to
+it or served by Caddy.
 
 Do not edit files inside a published SHA directory. Fix forward with a new Git
 commit and candidate SHA.
