@@ -76,11 +76,13 @@ The pure-QML `Mixxx.Controls` module intentionally does not generate C++ type
 metadata or a QML cache loader. This avoids Qt 6.10 registrar/cache-generator
 failures while retaining embedded QML resources, generated `qmldir`, and the
 static plugin; it does not change deck runtime behavior or acceptance steps.
-The C++-backed `Mixxx` module keeps automatic type registration and QML caching;
-the Flatpak manifests enable a Qt 6.10 no-FUSE workaround that keeps the
-generated C++ registration source and provides a valid empty `.qmltypes`
-tooling marker. This limits QML editor metadata for the Flatpak build only; it
-does not change deck runtime behavior or grant the runner access to `/dev/fuse`.
+The C++-backed `Mixxx` module keeps automatic type registration, but also uses
+its embedded original QML sources instead of cache generation after Qt 6.10
+fails while building its cache loader. The Flatpak manifests enable a no-FUSE
+workaround that keeps the generated C++ registration source and provides a
+valid empty `.qmltypes` tooling marker. This limits QML editor metadata and
+bytecode caching for the Flatpak build only; it does not change deck runtime
+behavior or grant the runner access to `/dev/fuse`.
 
 For a failed custom runner step, the VPS operator can inspect the runner-only
 `/data/logs/latest.log` record. It retains the last 2 MiB of the most recent

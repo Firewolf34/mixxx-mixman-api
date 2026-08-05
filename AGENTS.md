@@ -131,6 +131,9 @@ Before changing the deck pipeline, read:
 - Keep the synchronized Flatpak typeinfo workaround enabled. It preserves Qt
   C++ runtime registration while supplying a valid tooling-only marker for
   Qt 6.10's no-FUSE Flatpak Builder typeinfo-generation failure.
+- Keep Qt QML cache generation disabled for the `Mixxx` and `Mixxx.Controls`
+  modules in that environment. Their original embedded QML sources remain the
+  runtime fallback; do not disable C++ type registration for `Mixxx`.
 - Require the hard-budget preflight: numeric cgroup v2 limits, no more than
   1536 MiB combined RAM+swap, at least 512 MiB host swap, 1536 MiB currently
   free memory-plus-swap, 15 GiB free runner data disk, 1 GiB free artifact

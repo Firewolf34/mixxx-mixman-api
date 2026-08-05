@@ -3943,11 +3943,19 @@ if(QML)
     endforeach()
   endif()
   set_target_properties(mixxx-qml-lib PROPERTIES AUTOMOC ON)
+  set(MIXXX_QML_LIB_CACHEGEN_OPTION)
+  if(MIXXX_FLATPAK_QMLTYPEINFO_WORKAROUND)
+    # Qt 6.10's qmlcachegen fails while creating this module's cache loader in
+    # the constrained no-FUSE Flatpak Builder environment. Keep the original
+    # embedded sources, which the QML engine can load normally at runtime.
+    set(MIXXX_QML_LIB_CACHEGEN_OPTION NO_CACHEGEN)
+  endif()
   qt_add_qml_module(mixxx-qml-lib
     URI Mixxx
     VERSION 1.0
     RESOURCE_PREFIX /mixxx.org/imports
     IMPORTS QtQuick
+    ${MIXXX_QML_LIB_CACHEGEN_OPTION}
     QML_FILES
       res/qml/Mixxx/MathUtils.mjs
       res/qml/Mixxx/PlayerDropArea.qml
