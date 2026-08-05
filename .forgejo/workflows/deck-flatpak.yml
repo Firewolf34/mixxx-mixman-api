@@ -15,7 +15,9 @@ jobs:
   flatpak-x86_64:
     name: Build and publish x86_64 deck Flatpak
     runs-on: mixxx-flatpak-x86_64
-    timeout-minutes: 180
+    # A first cold or partially cached one-core build can exceed three hours.
+    # The runner's CPU, memory, swap, PID, and PSI limits remain independent.
+    timeout-minutes: 480
     env:
       CCACHE_DIR: /data/ccache
       CCACHE_MAXSIZE: 512M

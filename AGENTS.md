@@ -122,7 +122,7 @@ Before changing the deck pipeline, read:
   set and no sudo, so it cannot alter host tunables or read kernel logs.
 - The current VPS has only 2 GiB physical RAM and also hosts production.
 - One concurrent job, one CPU, 768-MiB resident-memory, 768-MiB swap,
-  1536-MiB combined RAM+swap, 512-PID, and three-hour limits.
+  1536-MiB combined RAM+swap, 512-PID, and eight-hour workflow limits.
 - Flatpak Builder must run with one job.
 - Deck candidates use the dedicated Release/no-debug manifest, GNU BFD
   low-memory flags, disabled LTO, and inherited low CPU/I/O priority.

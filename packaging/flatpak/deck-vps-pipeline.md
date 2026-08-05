@@ -150,7 +150,7 @@ The workflow selects the custom runner label:
 mixxx-flatpak-x86_64
 ```
 
-It has a three-hour job timeout, checks out a shallow copy of the exact Forgejo
+It has an eight-hour job timeout, checks out a shallow copy of the exact Forgejo
 event SHA without unused submodules, installs the required Flatpak SDK for the
 runner user, and calls the publisher through the PSI pressure guard.
 
