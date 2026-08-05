@@ -77,8 +77,8 @@ metadata or a QML cache loader. This avoids Qt 6.10 registrar/cache-generator
 failures while retaining embedded QML resources, generated `qmldir`, and the
 static plugin; it does not change deck runtime behavior or acceptance steps.
 The C++-backed `Mixxx` module keeps automatic type registration and QML caching;
-its generated output directory is created by an explicit CMake build dependency
-for the Qt 6.10 registrar.
+its generated output directory is explicitly provided to the Qt 6.10 registrar
+through `qt_add_qml_module`.
 
 For a failed custom runner step, the VPS operator can inspect the runner-only
 `/data/logs/latest.log` record. It retains the last 2 MiB of the most recent

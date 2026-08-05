@@ -3889,20 +3889,13 @@ if(QML)
   qt_add_qml_module(mixxx-qml-lib
     URI Mixxx
     VERSION 1.0
+    OUTPUT_DIRECTORY "${QT_QML_OUTPUT_DIRECTORY}/Mixxx"
     RESOURCE_PREFIX /mixxx.org/imports
     IMPORTS QtQuick
     QML_FILES
       res/qml/Mixxx/MathUtils.mjs
       res/qml/Mixxx/PlayerDropArea.qml
   )
-  # Qt 6.10 does not create this URI-derived directory before invoking
-  # qmltyperegistrar for the C++-backed Mixxx module. Make it an explicit
-  # build dependency so it is present when the generated command runs.
-  add_custom_target(
-    mixxx-qml-output-directory
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${QT_QML_OUTPUT_DIRECTORY}/Mixxx"
-  )
-  add_dependencies(mixxx-qml-lib mixxx-qml-output-directory)
   target_link_libraries(mixxx-lib PRIVATE mixxx-qml-lib)
 
   # FIXME: Currently we need to add these include directories due to
@@ -3936,6 +3929,7 @@ if(QML)
   qt_add_qml_module(mixxx-qml-mixxxcontrols
     URI Mixxx.Controls
     VERSION 1.0
+    OUTPUT_DIRECTORY "${QT_QML_OUTPUT_DIRECTORY}/Mixxx/Controls"
     RESOURCE_PREFIX /mixxx.org/imports
     OPTIONAL_IMPORTS Mixxx
     NO_GENERATE_QMLTYPES
