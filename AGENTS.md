@@ -17,7 +17,8 @@ Before changing the deck pipeline, read:
   operations contract.
 - `packaging/flatpak/deck-testing.md` — concise deck acceptance procedure.
 - `.forgejo/workflows/deck-flatpak.yml` — Forgejo build trigger.
-- `.github/workflows/deck-flatpak.yml` — GitHub fallback build trigger.
+- `.github/workflows/github-deck-candidate.yml` — GitHub fallback build
+  trigger.
 - `tools/deck_flatpak_publish.sh` — VPS build/validation/publication behavior.
 - `tools/deck_flatpak_deploy.sh` — laptop staging/activation/rollback behavior.
 - `tools/deck_forgejo_actions.sh` — authenticated Actions status, waiting,

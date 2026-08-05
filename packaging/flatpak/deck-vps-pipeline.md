@@ -120,9 +120,9 @@ git push github <candidate-sha>:refs/heads/github/candidate
 
 The Forgejo push runs `.forgejo/workflows/deck-flatpak.yml` on the VPS and may
 publish `latest.json`. The GitHub push runs
-`.github/workflows/deck-flatpak.yml` on a GitHub-hosted runner and uploads a
-three-day `Mixxx-flatpak-x86_64` artifact without publishing it. The same commit
-may be promoted to either or both refs. Historical refs such as
+`.github/workflows/github-deck-candidate.yml` on a GitHub-hosted runner and
+uploads a three-day `Mixxx-flatpak-x86_64` artifact without publishing it. The
+same commit may be promoted to either or both refs. Historical refs such as
 `github-main-deck-workflow` must not be recreated.
 
 The workflow triggers automatically for pushes to that branch. It also supports
