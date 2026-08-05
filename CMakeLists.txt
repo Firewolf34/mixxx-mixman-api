@@ -3860,9 +3860,6 @@ if(QML)
   add_subdirectory(res/shaders)
 
   set(QT_QML_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml)
-  # Qt 6.10 does not create this URI-derived directory before invoking
-  # qmltyperegistrar for the C++-backed Mixxx module.
-  file(MAKE_DIRECTORY "${QT_QML_OUTPUT_DIRECTORY}/Mixxx")
   qt_add_library(mixxx-qml-lib STATIC)
   mixxx_target_warnings_fatal(mixxx-qml-lib PUBLIC)
 
@@ -3898,6 +3895,14 @@ if(QML)
       res/qml/Mixxx/MathUtils.mjs
       res/qml/Mixxx/PlayerDropArea.qml
   )
+  # Qt 6.10 does not create this URI-derived directory before invoking
+  # qmltyperegistrar for the C++-backed Mixxx module. Make it an explicit
+  # build dependency so it is present when the generated command runs.
+  add_custom_target(
+    mixxx-qml-output-directory
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${QT_QML_OUTPUT_DIRECTORY}/Mixxx"
+  )
+  add_dependencies(mixxx-qml-lib mixxx-qml-output-directory)
   target_link_libraries(mixxx-lib PRIVATE mixxx-qml-lib)
 
   # FIXME: Currently we need to add these include directories due to

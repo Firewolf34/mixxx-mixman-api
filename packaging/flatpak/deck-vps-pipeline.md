@@ -295,9 +295,9 @@ embedded; generated `qmldir` and the static plugin remain enabled. This is
 limited to the small Controls module and does not alter deployment contracts.
 
 The C++-backed `Mixxx` module retains its normal type registration and QML
-cache generation. CMake creates its `qml/Mixxx` output directory during
-configuration before Qt 6.10 invokes `qmltyperegistrar`, which prevents that
-tool from failing before it can write the generated typeinfo file.
+cache generation. CMake creates its `qml/Mixxx` output directory as an explicit
+target dependency before Qt 6.10 invokes `qmltyperegistrar`, which prevents
+that tool from failing before it can write the generated typeinfo file.
 
 The infrastructure uses two explicit, provider-backed host paths. Systemd
 binds them privately into the runner as `/data` and `/srv/artifacts`. Runner
