@@ -264,12 +264,13 @@ output, not an artifact; inspect it only through the VPS runner-state path and
 do not copy it to Git or the public artifact tree.
 
 Before compilation, the publisher runs Flatpak Builder's `--download-only`
-mode. A recognized transient network failure (connection/DNS timeout, reset,
-unreachable network, HTTP 429, or HTTP 5xx) is retried at most three times,
-with 20- and 40-second backoff. The successful source state is then reused for
-the real build with `--disable-download`; this avoids an unavailable mirror
-failing after compilation has started. A checksum or any other unrecognized
-source failure is not retried and remains an integrity incident.
+mode. A recognized transient network failure (connection/DNS or low-throughput
+timeout, reset, unreachable network, HTTP 429, or HTTP 5xx) is retried at most
+three times, with 20- and 40-second backoff. The successful source state is
+then reused for the real build with `--disable-download`; this avoids an
+unavailable mirror failing after compilation has started. A checksum or any
+other unrecognized source failure is not retried and remains an integrity
+incident.
 
 `tools/deck_build_preflight.sh` distinguishes cold and warm runner state. It
 requires 12 GiB free before a cold SDK setup and 6.5 GiB before a warm compile;

@@ -93,7 +93,7 @@ flock 9
 is_transient_source_download_failure() {
     local log_path="$1"
     grep -Eiq \
-        'Failed to connect|Timeout was reached|Could not resolve host|Connection reset|Connection timed out|Network is unreachable|[Ss]tatus[[:space:]]+(429|5[0-9]{2})|HTTP/[0-9.]+[[:space:]]+(429|5[0-9]{2})' \
+        'Failed to connect|Timeout was reached|Operation too slow|Could not resolve host|Connection reset|Connection timed out|Network is unreachable|[Ss]tatus[[:space:]]+(429|5[0-9]{2})|HTTP/[0-9.]+[[:space:]]+(429|5[0-9]{2})' \
         "${log_path}"
 }
 
