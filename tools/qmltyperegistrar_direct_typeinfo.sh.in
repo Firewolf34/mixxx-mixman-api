@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Work around Qt 6.10 QSaveFile commits in Flatpak Builder's no-FUSE rofiles
+# mode. The registrar still generates the C++ registration and full typeinfo in
+# a private temporary file; only the final copy to the generated QML directory
+# is non-atomic.
+
+set -euo pipefail
+
+real_registrar='@MIXXX_QMLTYPEREGISTRAR_REAL@'
+requested_typeinfo=''
+registration_source=''
+expect_registration_source=0
+rewritten_args=()
+
+for argument in "$@"; do
+    if ((expect_registration_source)); then
+        registration_source="$argument"
+        expect_registration_source=0
+        rewritten_args+=("$argument")
+        continue
+    fi
+
+    case "$argument" in
+        --generate-qmltypes=*)
+            requested_typeinfo="${argument#--generate-qmltypes=}"
+            ;;
+        -o)
+            expect_registration_source=1
+            rewritten_args+=("$argument")
+            ;;
+        *)
+            rewritten_args+=("$argument")
+            ;;
+    esac
+done
+
+if [[ -z "$requested_typeinfo" || -z "$registration_source" ]]; then
+    exec "$real_registrar" "$@"
+fi
+
+temporary_root="${TMPDIR:-/tmp}"
+if [[ ! -d "$temporary_root" || ! -w "$temporary_root" ]]; then
+    temporary_root=/tmp
+fi
+temporary_typeinfo="$(mktemp "${temporary_root}/mixxx-qmltypes.XXXXXX")"
+cleanup() {
+    rm -f -- "$temporary_typeinfo"
+}
+trap cleanup EXIT
+
+"$real_registrar" \
+    "--generate-qmltypes=${temporary_typeinfo}" \
+    "${rewritten_args[@]}"
+
+[[ -s "$registration_source" ]] || {
+    echo "Error: qmltyperegistrar did not produce C++ registration source." >&2
+    exit 1
+}
+
+mkdir -p -- "$(dirname -- "$requested_typeinfo")"
+cp -- "$temporary_typeinfo" "$requested_typeinfo"
+echo "Qt QML typeinfo copied from a private temporary file for no-FUSE Flatpak Builder."

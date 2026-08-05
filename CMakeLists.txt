@@ -409,6 +409,11 @@ cmake_dependent_option(
   "QT6"
   OFF
 )
+option(
+  MIXXX_FLATPAK_QMLTYPEINFO_DIRECT_WRITE_WORKAROUND
+  "Use a direct final copy for Qt QML typeinfo in Flatpak Builder no-FUSE mode"
+  OFF
+)
 
 if(QT6)
   set(QOPENGL ON CACHE INTERNAL "Forced ON because QT6=ON")
@@ -3826,6 +3831,59 @@ find_package(
   COMPONENTS ${QT_COMPONENTS} ${QT_EXTRA_COMPONENTS}
   REQUIRED
 )
+if(QML AND QT6 AND MIXXX_FLATPAK_QMLTYPEINFO_DIRECT_WRITE_WORKAROUND)
+  # Qt 6.10's qmltyperegistrar uses QSaveFile for the typeinfo file. Its
+  # atomic commit fails in Flatpak Builder's required no-FUSE rofiles mode,
+  # even though the generated QML directory accepts normal writes. Preserve
+  # Qt's full typeinfo and C++ registration generation in a private temporary
+  # file, then copy only the completed typeinfo file into the output directory.
+  get_target_property(
+    MIXXX_QMLTYPEREGISTRAR_REAL
+    Qt${QT_VERSION_MAJOR}::qmltyperegistrar
+    IMPORTED_LOCATION
+  )
+  if(NOT MIXXX_QMLTYPEREGISTRAR_REAL)
+    get_target_property(
+      MIXXX_QMLTYPEREGISTRAR_REAL
+      Qt${QT_VERSION_MAJOR}::qmltyperegistrar
+      IMPORTED_LOCATION_NONE
+    )
+  endif()
+  if(NOT MIXXX_QMLTYPEREGISTRAR_REAL)
+    message(FATAL_ERROR "Could not locate Qt's qmltyperegistrar executable")
+  endif()
+
+  set(
+    MIXXX_QMLTYPEREGISTRAR_WRAPPER
+    "${CMAKE_BINARY_DIR}/mixxx-qmltyperegistrar-direct-typeinfo"
+  )
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/qmltyperegistrar_direct_typeinfo.sh.in"
+    "${MIXXX_QMLTYPEREGISTRAR_WRAPPER}"
+    @ONLY
+  )
+  file(
+    CHMOD "${MIXXX_QMLTYPEREGISTRAR_WRAPPER}"
+    PERMISSIONS
+      OWNER_READ OWNER_WRITE OWNER_EXECUTE
+      GROUP_READ GROUP_EXECUTE
+      WORLD_READ WORLD_EXECUTE
+  )
+  set_property(
+    TARGET Qt${QT_VERSION_MAJOR}::qmltyperegistrar
+    PROPERTY IMPORTED_LOCATION "${MIXXX_QMLTYPEREGISTRAR_WRAPPER}"
+  )
+  set_property(
+    TARGET Qt${QT_VERSION_MAJOR}::qmltyperegistrar
+    PROPERTY IMPORTED_LOCATION_NONE "${MIXXX_QMLTYPEREGISTRAR_WRAPPER}"
+  )
+  foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_property(
+      TARGET Qt${QT_VERSION_MAJOR}::qmltyperegistrar
+      PROPERTY IMPORTED_LOCATION_${config} "${MIXXX_QMLTYPEREGISTRAR_WRAPPER}"
+    )
+  endforeach()
+endif()
 # PUBLIC is required below to find included headers
 foreach(component ${QT_COMPONENTS})
   target_link_libraries(mixxx-lib PUBLIC Qt${QT_VERSION_MAJOR}::${component})
@@ -3889,7 +3947,6 @@ if(QML)
   qt_add_qml_module(mixxx-qml-lib
     URI Mixxx
     VERSION 1.0
-    OUTPUT_DIRECTORY "${QT_QML_OUTPUT_DIRECTORY}/Mixxx"
     RESOURCE_PREFIX /mixxx.org/imports
     IMPORTS QtQuick
     QML_FILES
@@ -3929,7 +3986,6 @@ if(QML)
   qt_add_qml_module(mixxx-qml-mixxxcontrols
     URI Mixxx.Controls
     VERSION 1.0
-    OUTPUT_DIRECTORY "${QT_QML_OUTPUT_DIRECTORY}/Mixxx/Controls"
     RESOURCE_PREFIX /mixxx.org/imports
     OPTIONAL_IMPORTS Mixxx
     NO_GENERATE_QMLTYPES
