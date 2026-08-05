@@ -17,6 +17,7 @@ Before changing the deck pipeline, read:
   operations contract.
 - `packaging/flatpak/deck-testing.md` — concise deck acceptance procedure.
 - `.forgejo/workflows/deck-flatpak.yml` — Forgejo build trigger.
+- `.github/workflows/deck-flatpak.yml` — GitHub fallback build trigger.
 - `tools/deck_flatpak_publish.sh` — VPS build/validation/publication behavior.
 - `tools/deck_flatpak_deploy.sh` — laptop staging/activation/rollback behavior.
 - `tools/deck_forgejo_actions.sh` — authenticated Actions status, waiting,
@@ -26,34 +27,70 @@ Before changing the deck pipeline, read:
 
 - Forgejo repository:
   `ssh://git@forge.polinaria.world:900/total-infra/mixxx.git`
-- Forgejo is authoritative. GitHub is not part of the operational pipeline.
-- `deck/candidate` is the only publication branch.
+- GitHub fallback-builder fork:
+  `https://github.com/Firewolf34/mixxx-mixman-api.git`
+- Official OSS upstream:
+  `https://github.com/mixxxdj/mixxx.git`
+- Forgejo is the source and published-artifact authority. GitHub is an optional
+  faster fallback builder and never updates Forgejo publication state.
+- `deck/candidate` triggers the Forgejo build/publish path.
+- `github/candidate` triggers the GitHub artifact-only build path.
 - Port 900 is Forgejo Git SSH, not proof of an OS-level VPS shell.
 - Promote an exact reviewed commit:
 
   ```bash
   git push origin <commit>:refs/heads/deck/candidate
+  git push github <commit>:refs/heads/github/candidate
   ```
 
 - Do not force-push shared development branches for deployment.
+- The two promotions are independent and may point to different reviewed
+  commits. Push only the provider-specific candidate ref whose build is wanted.
 - A manual workflow dispatch must select `deck/candidate`.
 
 ## Branch Model
 
-- `dev` is the only long-lived development and integration branch. Start normal
-  work from a clean, current `dev` checkout and push reviewed work there.
+- Expected remotes are `origin` for `total-infra/mixxx` on Forgejo, `github`
+  for `Firewolf34/mixxx-mixman-api`, and `upstream` for `mixxxdj/mixxx`.
+- `main` is a clean mirror of official `upstream/main`. Never commit custom work
+  to it, merge `dev` into it, or use it as a release branch. Update it only by
+  fast-forwarding from freshly fetched `upstream/main`.
+- `dev` is the long-lived custom development and integration branch. Start
+  normal work from a clean, current `dev` checkout and push reviewed work there.
 - Forgejo's repository default branch must be `dev`. Repair that setting before
   deleting superseded branch refs, because a bare clone otherwise starts on an
   obsolete development line.
-- `deck/candidate` is the only release/build pointer. Do not develop directly
-  on it; promote an exact reviewed commit reachable from `dev` when a VPS build
-  is desired.
+- `deck/candidate` and `github/candidate` are release/build pointers, not
+  development branches. Promote an exact reviewed commit reachable from `dev`.
+  Forgejo builds and publishes `deck/candidate`; GitHub builds and retains a
+  short-lived Actions artifact for `github/candidate`.
 - Short-lived `feature/*` and `fix/*` branches are optional implementation
   aids. Merge them into `dev`, push `dev`, then delete them only after their
   commits are reachable from `dev`.
-- `origin/main`, `github/*`, and historical branch refs are upstream/reference
-  inputs, not development or deployment targets. Never push custom work to
-  them or select them for a deck workflow.
+- For a possible OSS contribution, branch from clean `main`, cherry-pick only
+  the selected fork commits, and open a PR against official upstream. This is
+  separate from merging upstream updates into `dev`.
+- Do not recreate historical branches such as `github-main-deck-workflow`; the
+  provider-specific candidate branches replace that experiment.
+- From any configured clone, promotion requires no checkout or merge:
+
+  ```bash
+  git fetch origin github upstream
+  git push origin <reviewed-dev-sha>:refs/heads/deck/candidate
+  git push github <reviewed-dev-sha>:refs/heads/github/candidate
+  ```
+
+- Synchronize the clean mirrors separately from custom development:
+
+  ```bash
+  git fetch upstream
+  git branch --force main upstream/main
+  git push origin upstream/main:refs/heads/main
+  git push github upstream/main:refs/heads/main
+  ```
+
+  The pushes must normally be fast-forwards. Stop and investigate divergence;
+  do not casually force-push either `main` or shared `dev`.
 - Before editing, stop if the current worktree is dirty for an unrelated
   reason. The normal starting point is:
 
@@ -83,7 +120,9 @@ Before changing the deck pipeline, read:
 - Build architecture is `x86_64`.
 - Application ID is `org.mixxx.Mixxx`.
 - Expected ref is `app/org.mixxx.Mixxx/x86_64/master`.
-- Source ref must be `refs/heads/deck/candidate`.
+- Forgejo publication source ref must be `refs/heads/deck/candidate`.
+- GitHub artifact builds must come from `refs/heads/github/candidate` and use
+  the same deck-specific manifest and bundle validation.
 - The event SHA must equal checked-out `HEAD`.
 - Tracked working-tree changes are forbidden during publication.
 - Validate the bundle with OSTree import/fsck and a headless Mixxx smoke test.
@@ -196,15 +235,21 @@ Before changing the deck pipeline, read:
    git diff --check
    ```
 
-6. Run actual compilation and bundle validation only on the VPS runner.
+6. Run actual compilation and bundle validation on a configured CI runner,
+   never on the deck laptop.
 7. Push the reviewed commit to `dev`, then promote that exact commit to
-   `deck/candidate`.
-8. Treat the newest **Deck Flatpak Build** run in Forgejo Actions as the build
-   authority. Confirm its checkout SHA, runner label, preflight, one-job build,
-   absence of PSI/OOM termination, and final **Success** state.
-9. Verify the public manifest and immutable files before staging.
-10. Stage before ending the DJ session.
-11. Activate only with explicit operator approval and retain rollback.
+   `deck/candidate`, `github/candidate`, or both depending on which build is
+   wanted.
+8. Treat the newest **Deck Flatpak Build** run in Forgejo Actions as the
+   publication authority. Treat GitHub's **GitHub Deck Candidate Flatpak** run
+   only as a downloadable fallback artifact.
+9. For Forgejo publication, confirm the checkout SHA, runner label, preflight,
+   one-job build, absence of PSI/OOM termination, and final **Success** state.
+10. Verify the public manifest and immutable files before staging a Forgejo
+    build; verify the Actions artifact and exact SHA before manually installing
+    a GitHub build.
+11. Stage before ending the DJ session.
+12. Activate only with explicit operator approval and retain rollback.
 
 ## Incident Defaults
 

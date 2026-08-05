@@ -9,19 +9,29 @@ notes, read [deck-vps-pipeline.md](deck-vps-pipeline.md).
 
 ## Source And Build
 
-Forgejo is the source of truth:
+Forgejo is the source of truth, GitHub is an optional faster builder, and the
+official upstream remote remains the clean source for future synchronization:
 
 ```text
 ssh://git@forge.polinaria.world:900/total-infra/mixxx.git
 ```
 
-Work from `dev`; it is the only long-lived development branch. `deck/candidate`
-is the build/release pointer, so promote an exact reviewed commit already
-reachable from `dev` only when you want a VPS build:
+Work from `dev`; keep `main` identical to official `upstream/main` and never put
+custom fork commits on it. Promote an exact reviewed commit already reachable
+from `dev` to the provider-specific release branch:
 
 ```bash
 git push origin HEAD:refs/heads/deck/candidate
+git push github HEAD:refs/heads/github/candidate
 ```
+
+The first command triggers the resource-constrained Forgejo runner and its
+authoritative publication pipeline. The second triggers a GitHub-hosted build
+using the same deck-specific manifest and validation, then retains
+`Mixxx-flatpak-x86_64` as a three-day Actions artifact. It does not update
+Forgejo's `latest.json`; download and install it manually when using the
+fallback path. The release refs are pointers only and must never receive direct
+development commits.
 
 Forgejo Actions builds the `x86_64` Flatpak on the isolated VPS runner, validates
 the OSTree bundle and Mixxx binary, then publishes immutable build files and

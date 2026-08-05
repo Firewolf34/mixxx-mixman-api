@@ -10,8 +10,10 @@ performance-critical. The laptop must not compile Mixxx. Forgejo is the source
 authority, a dedicated VPS runner does build work, Caddy distributes immutable
 artifacts, and a small client stages/activates/rolls back user Flatpaks.
 
-GitHub is not required by this pipeline. A GitHub fork may remain as a mirror,
-but it is not a source, build, or deployment dependency.
+GitHub is not required by the authoritative publication pipeline. The GitHub
+fork provides an optional faster artifact-only build from `github/candidate`;
+it never updates Forgejo publication state or replaces Forgejo as source
+authority.
 
 ## Goals
 
@@ -25,7 +27,7 @@ but it is not a source, build, or deployment dependency.
 - Preserve the Mixxx profile and Flatpak application data.
 - Snapshot the installed app before first replacement so rollback works on the
   first candidate.
-- Keep GitHub out of the operational loop.
+- Keep the GitHub build optional, independently triggered, and artifact-only.
 
 ## Non-Goals
 
@@ -88,7 +90,12 @@ operating-system VPS shell.
 
 ## Branch And Promotion Model
 
-`dev` is the only long-lived development and integration branch. Begin normal
+`main` is a clean mirror of official `upstream/main`. Never commit custom work
+to it or merge `dev` into it. A future upstream contribution should use a
+short-lived branch from clean `main` with only intentionally cherry-picked fork
+commits.
+
+`dev` is the long-lived custom development and integration branch. Begin normal
 work from a clean `dev` checkout. Short-lived `feature/*` or `fix/*` branches
 may support a focused change, but merge them into `dev` and delete them only
 after their commits are reachable from `dev`.
@@ -97,9 +104,9 @@ Forgejo's repository default branch must also be `dev`, so a fresh clone starts
 on the supported development line. Change the default before deleting a
 superseded branch; Git cannot alter that Forgejo repository setting.
 
-`deck/candidate` is not a development branch; it is the only release/build
-pointer. A deck build is authorized only by promoting an exact reviewed commit
-that is already reachable from `dev`:
+`deck/candidate` and `github/candidate` are not development branches. They are
+provider-specific release/build pointers. A build is authorized only by
+promoting an exact reviewed commit already reachable from `dev`:
 
 ```bash
 git fetch origin
@@ -108,12 +115,15 @@ git pull --ff-only origin dev
 git status --short
 git show --stat <candidate-sha>
 git push origin <candidate-sha>:refs/heads/deck/candidate
+git push github <candidate-sha>:refs/heads/github/candidate
 ```
 
-`origin/main`, `github/*`, and historical branch refs are upstream/reference
-inputs. They are not build targets and must never be selected for a deck
-workflow. After integrating an upstream update into `dev`, use the same
-promotion procedure for a deck release.
+The Forgejo push runs `.forgejo/workflows/deck-flatpak.yml` on the VPS and may
+publish `latest.json`. The GitHub push runs
+`.github/workflows/deck-flatpak.yml` on a GitHub-hosted runner and uploads a
+three-day `Mixxx-flatpak-x86_64` artifact without publishing it. The same commit
+may be promoted to either or both refs. Historical refs such as
+`github-main-deck-workflow` must not be recreated.
 
 The workflow triggers automatically for pushes to that branch. It also supports
 manual dispatch, but the dispatch must select `deck/candidate`.
@@ -141,6 +151,19 @@ refs/heads/deck/candidate
 
 Do not force-push shared development branches to promote a build. Moving the
 dedicated candidate ref is the promotion operation.
+
+## GitHub Fallback Workflow
+
+The GitHub fork keeps `main` synchronized exactly with official upstream and
+keeps `github/candidate` as its only custom release pointer. A push to
+`github/candidate` triggers a GitHub-hosted `ubuntu-24.04` build. The workflow
+uses the deck-specific Release/no-debug manifest, verifies the event ref and
+SHA, checks manifest synchronization, imports and fscks the OSTree bundle, runs
+the same headless Mixxx version smoke test, and uploads `Mixxx.flatpak`.
+
+GitHub artifacts are an expedited manual-install option only. They do not
+produce the Forgejo source archive or schema-1 publication manifest, do not
+update `latest.json`, and are not consumed automatically by `mixxx-deck`.
 
 ## Forgejo Workflow
 
@@ -535,6 +558,8 @@ Never use an uninstall/delete-data cycle as a deployment shortcut.
 git fetch origin
 git show --stat <candidate-sha>
 git push origin <candidate-sha>:refs/heads/deck/candidate
+# Optional expedited artifact-only build:
+git push github <candidate-sha>:refs/heads/github/candidate
 ```
 
 Open the newest **Deck Flatpak Build** in Forgejo Actions and validate the
