@@ -3922,14 +3922,16 @@ if(QML)
   set_target_properties(mixxx-qml-mixxxcontrols PROPERTIES AUTOMOC ON)
   # This module contains QML files only. Qt 6.10's qmltyperegistrar rejects
   # its empty C++ metadata, so do not generate a qmltypes file or registration
-  # source. QML caching, embedded resources, the generated qmldir, and the
-  # static plugin remain enabled.
+  # source. Qt 6.10's qmlcachegen also fails while producing this module's
+  # cache loader, so retain the embedded QML sources instead of cache output.
+  # The generated qmldir and static plugin remain enabled.
   qt_add_qml_module(mixxx-qml-mixxxcontrols
     URI Mixxx.Controls
     VERSION 1.0
     RESOURCE_PREFIX /mixxx.org/imports
     OPTIONAL_IMPORTS Mixxx
     NO_GENERATE_QMLTYPES
+    NO_CACHEGEN
     QML_FILES
       res/qml/Mixxx/Controls/Knob.qml
       res/qml/Mixxx/Controls/Fader.qml

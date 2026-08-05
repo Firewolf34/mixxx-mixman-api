@@ -73,9 +73,9 @@ replaced with exact Git commit-plus-tag pins. This keeps the source immutable
 without compiling or investigating on the deck laptop.
 
 The pure-QML `Mixxx.Controls` module intentionally does not generate C++ type
-metadata. This avoids a Qt 6.10 registrar failure while retaining its QML
-cache, resources, generated `qmldir`, and static plugin; it does not change
-deck runtime behavior or acceptance steps.
+metadata or a QML cache loader. This avoids Qt 6.10 registrar/cache-generator
+failures while retaining embedded QML resources, generated `qmldir`, and the
+static plugin; it does not change deck runtime behavior or acceptance steps.
 
 For a failed custom runner step, the VPS operator can inspect the runner-only
 `/data/logs/latest.log` record. It retains the last 2 MiB of the most recent

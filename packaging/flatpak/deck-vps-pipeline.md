@@ -288,10 +288,11 @@ differences and compares the result with the normal manifest. Both the workflow
 and publisher refuse to build if any other manifest content drifts.
 
 `Mixxx.Controls` is a pure-QML module with no C++ types. Qt 6.10's
-`qmltyperegistrar` rejects generation of its empty C++ type metadata, so the
-module uses `NO_GENERATE_QMLTYPES`. This disables only the unnecessary
-qmltypes/C++-registration output; QML caching, embedded resources, generated
-`qmldir`, and the static plugin remain enabled.
+`qmltyperegistrar` rejects generation of its empty C++ type metadata and its
+`qmlcachegen` fails while creating the cache loader, so the module uses
+`NO_GENERATE_QMLTYPES` and `NO_CACHEGEN`. Its original QML sources remain
+embedded; generated `qmldir` and the static plugin remain enabled. This is
+limited to the small Controls module and does not alter deployment contracts.
 
 The infrastructure uses two explicit, provider-backed host paths. Systemd
 binds them privately into the runner as `/data` and `/srv/artifacts`. Runner
