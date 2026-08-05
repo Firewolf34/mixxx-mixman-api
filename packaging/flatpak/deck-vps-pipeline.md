@@ -294,15 +294,15 @@ and publisher refuse to build if any other manifest content drifts.
 embedded; generated `qmldir` and the static plugin remain enabled. This is
 limited to the small Controls module and does not alter deployment contracts.
 
-The C++-backed `Mixxx` module retains its normal type registration, complete
-typeinfo, and QML cache generation. Qt 6.10 writes typeinfo through
-`QSaveFile`, whose atomic commit fails under Flatpak Builder's required
-no-FUSE rofiles mode even though ordinary writes work. Both Flatpak manifests
-therefore enable the narrowly scoped CMake workaround: it runs the real
-registrar with a private temporary typeinfo path, verifies the generated C++
-registration source, and copies the completed full typeinfo file to Qt's
-normal output path. It does not disable registration, alter QML resources, or
-weaken the runner's device isolation.
+The C++-backed `Mixxx` module retains its normal C++ runtime registration and
+QML cache generation. Qt 6.10 fails while generating its `.qmltypes` tooling
+file in Flatpak Builder's required no-FUSE rofiles mode, including when that
+file is redirected to private `/tmp`. Both Flatpak manifests therefore enable
+a narrowly scoped CMake workaround: it runs the real registrar without the
+failing tooling-file option, verifies the generated C++ registration source,
+and writes Qt's valid empty tooling marker at the expected `.qmltypes` path.
+This limits editor/tool metadata for that build environment only; it does not
+disable runtime registration, alter QML resources, or weaken runner isolation.
 
 The infrastructure uses two explicit, provider-backed host paths. Systemd
 binds them privately into the runner as `/data` and `/srv/artifacts`. Runner

@@ -410,8 +410,8 @@ cmake_dependent_option(
   OFF
 )
 option(
-  MIXXX_FLATPAK_QMLTYPEINFO_DIRECT_WRITE_WORKAROUND
-  "Use a direct final copy for Qt QML typeinfo in Flatpak Builder no-FUSE mode"
+  MIXXX_FLATPAK_QMLTYPEINFO_WORKAROUND
+  "Keep Qt QML C++ registration when Flatpak Builder typeinfo generation fails"
   OFF
 )
 
@@ -3831,12 +3831,11 @@ find_package(
   COMPONENTS ${QT_COMPONENTS} ${QT_EXTRA_COMPONENTS}
   REQUIRED
 )
-if(QML AND QT6 AND MIXXX_FLATPAK_QMLTYPEINFO_DIRECT_WRITE_WORKAROUND)
-  # Qt 6.10's qmltyperegistrar uses QSaveFile for the typeinfo file. Its
-  # atomic commit fails in Flatpak Builder's required no-FUSE rofiles mode,
-  # even though the generated QML directory accepts normal writes. Preserve
-  # Qt's full typeinfo and C++ registration generation in a private temporary
-  # file, then copy only the completed typeinfo file into the output directory.
+if(QML AND QT6 AND MIXXX_FLATPAK_QMLTYPEINFO_WORKAROUND)
+  # Qt 6.10's qmltyperegistrar fails while generating typeinfo in Flatpak
+  # Builder's required no-FUSE rofiles mode. Preserve generated C++ type
+  # registration and replace only the tooling metadata with Qt's valid empty
+  # marker. Runtime registration and QML resources remain unchanged.
   get_target_property(
     MIXXX_QMLTYPEREGISTRAR_REAL
     Qt${QT_VERSION_MAJOR}::qmltyperegistrar
@@ -3855,10 +3854,10 @@ if(QML AND QT6 AND MIXXX_FLATPAK_QMLTYPEINFO_DIRECT_WRITE_WORKAROUND)
 
   set(
     MIXXX_QMLTYPEREGISTRAR_WRAPPER
-    "${CMAKE_BINARY_DIR}/mixxx-qmltyperegistrar-direct-typeinfo"
+    "${CMAKE_BINARY_DIR}/mixxx-qmltyperegistrar-typeinfo-marker"
   )
   configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/qmltyperegistrar_direct_typeinfo.sh.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/qmltyperegistrar_typeinfo_marker.sh.in"
     "${MIXXX_QMLTYPEREGISTRAR_WRAPPER}"
     @ONLY
   )

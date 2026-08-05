@@ -128,9 +128,9 @@ Before changing the deck pipeline, read:
   low-memory flags, disabled LTO, and inherited low CPU/I/O priority.
 - Keep `org.mixxx.Mixxx.deck.yaml` synchronized with the normal manifest.
   `tools/check_deck_flatpak_manifest.sh` must pass.
-- Keep the synchronized Flatpak typeinfo direct-write workaround enabled. It
-  preserves full Qt C++ registration and typeinfo while avoiding the known
-  Qt 6.10 `QSaveFile` commit failure in the runner's no-FUSE rofiles mode.
+- Keep the synchronized Flatpak typeinfo workaround enabled. It preserves Qt
+  C++ runtime registration while supplying a valid tooling-only marker for
+  Qt 6.10's no-FUSE Flatpak Builder typeinfo-generation failure.
 - Require the hard-budget preflight: numeric cgroup v2 limits, no more than
   1536 MiB combined RAM+swap, at least 512 MiB host swap, 1536 MiB currently
   free memory-plus-swap, 15 GiB free runner data disk, 1 GiB free artifact
