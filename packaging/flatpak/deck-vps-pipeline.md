@@ -287,6 +287,12 @@ The normal manifest retains its existing developer/debug behavior.
 differences and compares the result with the normal manifest. Both the workflow
 and publisher refuse to build if any other manifest content drifts.
 
+`Mixxx.Controls` is a pure-QML module with no C++ types. Qt 6.10's
+`qmltyperegistrar` rejects generation of its empty C++ type metadata, so the
+module uses `NO_GENERATE_QMLTYPES`. This disables only the unnecessary
+qmltypes/C++-registration output; QML caching, embedded resources, generated
+`qmldir`, and the static plugin remain enabled.
+
 The infrastructure uses two explicit, provider-backed host paths. Systemd
 binds them privately into the runner as `/data` and `/srv/artifacts`. Runner
 data is writable only by the runner; artifacts are writable by the runner and

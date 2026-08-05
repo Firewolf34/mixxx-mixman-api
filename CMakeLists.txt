@@ -3860,10 +3860,6 @@ if(QML)
   add_subdirectory(res/shaders)
 
   set(QT_QML_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml)
-  # Qt 6.10's qmltyperegistrar does not create the URI-derived output
-  # directory before generating the typeinfo file. Ensure the output tree
-  # exists for both the Mixxx and Mixxx.Controls QML modules.
-  file(MAKE_DIRECTORY "${QT_QML_OUTPUT_DIRECTORY}/Mixxx/Controls")
   qt_add_library(mixxx-qml-lib STATIC)
   mixxx_target_warnings_fatal(mixxx-qml-lib PUBLIC)
 
@@ -3924,11 +3920,16 @@ if(QML)
 
   qt_add_library(mixxx-qml-mixxxcontrols STATIC)
   set_target_properties(mixxx-qml-mixxxcontrols PROPERTIES AUTOMOC ON)
+  # This module contains QML files only. Qt 6.10's qmltyperegistrar rejects
+  # its empty C++ metadata, so do not generate a qmltypes file or registration
+  # source. QML caching, embedded resources, the generated qmldir, and the
+  # static plugin remain enabled.
   qt_add_qml_module(mixxx-qml-mixxxcontrols
     URI Mixxx.Controls
     VERSION 1.0
     RESOURCE_PREFIX /mixxx.org/imports
     OPTIONAL_IMPORTS Mixxx
+    NO_GENERATE_QMLTYPES
     QML_FILES
       res/qml/Mixxx/Controls/Knob.qml
       res/qml/Mixxx/Controls/Fader.qml
