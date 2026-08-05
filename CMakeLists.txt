@@ -3860,6 +3860,9 @@ if(QML)
   add_subdirectory(res/shaders)
 
   set(QT_QML_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml)
+  # Qt 6.10 does not create this URI-derived directory before invoking
+  # qmltyperegistrar for the C++-backed Mixxx module.
+  file(MAKE_DIRECTORY "${QT_QML_OUTPUT_DIRECTORY}/Mixxx")
   qt_add_library(mixxx-qml-lib STATIC)
   mixxx_target_warnings_fatal(mixxx-qml-lib PUBLIC)
 

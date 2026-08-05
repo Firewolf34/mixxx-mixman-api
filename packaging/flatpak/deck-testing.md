@@ -76,6 +76,9 @@ The pure-QML `Mixxx.Controls` module intentionally does not generate C++ type
 metadata or a QML cache loader. This avoids Qt 6.10 registrar/cache-generator
 failures while retaining embedded QML resources, generated `qmldir`, and the
 static plugin; it does not change deck runtime behavior or acceptance steps.
+The C++-backed `Mixxx` module keeps automatic type registration and QML caching;
+its generated output directory is created during CMake configuration for the
+Qt 6.10 registrar.
 
 For a failed custom runner step, the VPS operator can inspect the runner-only
 `/data/logs/latest.log` record. It retains the last 2 MiB of the most recent
