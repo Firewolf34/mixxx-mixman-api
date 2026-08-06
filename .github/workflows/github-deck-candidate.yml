@@ -74,15 +74,48 @@ jobs:
           ostree --repo="${validation_repo}" refs | \
             grep -Fxq app/org.mixxx.Mixxx/x86_64/master
 
+          flatpak_commit="$(ostree --repo="${validation_repo}" rev-parse \
+            app/org.mixxx.Mixxx/x86_64/master)"
+          commit_subject="$(ostree --repo="${validation_repo}" show \
+            --print-detached-metadata-key=ostree.commit.subject \
+            "${flatpak_commit}" 2>/dev/null || true)"
+          if [ -z "${commit_subject}" ]; then
+            commit_subject="$(ostree --repo="${validation_repo}" show -s \
+              "${flatpak_commit}")"
+          fi
+          [[ "${commit_subject}" == *"${GITHUB_SHA}"* ]]
+
           timeout 30 flatpak build \
             --env=QT_QPA_PLATFORM=offscreen \
             build_flatpak \
             /app/bin/mixxx --version
 
+          bundle_sha256="$(sha256sum Mixxx.flatpak | awk '{print $1}')"
+          bundle_size="$(stat -c '%s' Mixxx.flatpak)"
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          cat > github-candidate-manifest.json <<EOF
+          {
+            "schema_version": 1,
+            "provider": "github-actions",
+            "channel": "github-candidate",
+            "app_id": "org.mixxx.Mixxx",
+            "arch": "x86_64",
+            "source_sha": "${GITHUB_SHA}",
+            "source_ref": "${GITHUB_REF}",
+            "built_at": "${built_at}",
+            "workflow_run_id": "${GITHUB_RUN_ID}",
+            "bundle_filename": "Mixxx.flatpak",
+            "sha256": "${bundle_sha256}",
+            "size_bytes": ${bundle_size}
+          }
+          EOF
+
       - name: Upload Flatpak bundle
         uses: actions/upload-artifact@v7.0.0
         with:
           name: Mixxx-flatpak-x86_64
-          path: Mixxx.flatpak
+          path: |
+            Mixxx.flatpak
+            github-candidate-manifest.json
           compression-level: 0
           retention-days: 3

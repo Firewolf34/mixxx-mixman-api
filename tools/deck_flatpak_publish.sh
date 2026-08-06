@@ -78,6 +78,13 @@ tools/deck_build_preflight.sh --phase=build
 ccache --set-config="max_size=${CCACHE_MAXSIZE:-512M}"
 ccache --set-config="compression=${CCACHE_COMPRESS:-true}"
 ccache --cleanup
+ccache --zero-stats
+
+report_ccache_stats() {
+    echo "ccache statistics for this workflow attempt:"
+    ccache --show-stats || true
+}
+trap report_ccache_stats EXIT
 SOURCE_SHA="$(git rev-parse --verify HEAD)"
 if [[ -n "${EVENT_SHA}" && "${SOURCE_SHA}" != "${EVENT_SHA}" ]]; then
     die "Checked-out SHA ${SOURCE_SHA} does not match event SHA ${EVENT_SHA}."
@@ -145,7 +152,11 @@ TEMP_DIR="$(mktemp -d)"
 cleanup() {
     rm -rf -- "${TEMP_DIR}"
 }
-trap cleanup EXIT
+cleanup_and_report_ccache_stats() {
+    cleanup
+    report_ccache_stats
+}
+trap cleanup_and_report_ccache_stats EXIT
 
 VALIDATION_REPO="${TEMP_DIR}/validation-repo"
 ostree init --repo="${VALIDATION_REPO}" --mode=archive-z2

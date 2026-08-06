@@ -123,7 +123,9 @@ Before changing the deck pipeline, read:
 - Expected ref is `app/org.mixxx.Mixxx/x86_64/master`.
 - Forgejo publication source ref must be `refs/heads/deck/candidate`.
 - GitHub artifact builds must come from `refs/heads/github/candidate` and use
-  the same deck-specific manifest and bundle validation.
+  the same deck-specific manifest and bundle validation. Their retained
+  artifact must contain `Mixxx.flatpak` plus schema-1 GitHub candidate metadata,
+  and its OSTree subject must identify the event SHA.
 - The event SHA must equal checked-out `HEAD`.
 - Tracked working-tree changes are forbidden during publication.
 - Validate the bundle with OSTree import/fsck and a headless Mixxx smoke test.
@@ -174,6 +176,10 @@ Before changing the deck pipeline, read:
 - Keep Qt QML cache generation disabled for the `Mixxx` and `Mixxx.Controls`
   modules in that environment. Their original embedded QML sources remain the
   runtime fallback; do not disable C++ type registration for `Mixxx`.
+- Keep the shared Flatpak ccache key normalization (`CCACHE_BASEDIR=/run/build`
+  and `CCACHE_NOHASHDIR=true`) in both synchronized manifests. The publisher
+  must reset and report per-attempt ccache statistics without increasing the
+  512 MiB cache cap or retaining resumable build trees.
 - Require the hard-budget preflight: numeric cgroup v2 limits, no more than
   1536 MiB combined RAM+swap, at least 512 MiB host swap, 1536 MiB currently
   free memory-plus-swap, 15 GiB free runner data disk, 1 GiB free artifact
@@ -201,9 +207,21 @@ Before changing the deck pipeline, read:
 - Default manifest:
   `https://forge.polinaria.world/artifacts/latest.json`
 - Accept only HTTPS `latest.json` publication roots.
-- Validate schema, channel, app, architecture, source ref, SHA formats, size,
-  and exact immutable URLs.
+- `auto`/`latest` selects the newest verified Forgejo or configured GitHub
+  candidate completion, with Forgejo winning an exact tie. Explicit provider
+  targets must never silently switch provider.
+- Forgejo validation requires schema, channel, app, architecture, source ref,
+  SHA formats, size, and exact immutable URLs. GitHub validation requires a
+  successful `github/candidate` run, an unexpired exact artifact, its Actions
+  API ZIP digest, schema-1 artifact metadata, and matching run/source SHA.
 - Verify downloaded size and SHA-256.
+- Import every staged bundle into a temporary local OSTree repository, fsck it,
+  require the expected ref, and require its commit subject to identify its
+  source SHA before installation.
+- GitHub fallback tokens belong only in
+  `~/.config/mixxx-deck/github-actions-token` mode 0600. Use a fine-grained
+  token restricted to `Firewolf34/mixxx-mixman-api` with Actions:read only;
+  never print, log, or commit it.
 - Take an exclusive lock for activation.
 - Refuse activation and rollback while Mixxx runs.
 - Snapshot a different installed user Flatpak before replacing it.
@@ -242,13 +260,15 @@ Before changing the deck pipeline, read:
    `deck/candidate`, `github/candidate`, or both depending on which build is
    wanted.
 8. Treat the newest **Deck Flatpak Build** run in Forgejo Actions as the
-   publication authority. Treat GitHub's **GitHub Deck Candidate Flatpak** run
-   only as a downloadable fallback artifact.
+   publication authority. GitHub's **GitHub Deck Candidate Flatpak** is an
+   independently verified, short-lived fallback artifact and never updates
+   Forgejo publication state.
 9. For Forgejo publication, confirm the checkout SHA, runner label, preflight,
    one-job build, absence of PSI/OOM termination, and final **Success** state.
 10. Verify the public manifest and immutable files before staging a Forgejo
-    build; verify the Actions artifact and exact SHA before manually installing
-    a GitHub build.
+    build. Before staging a GitHub build, verify the successful exact-SHA run,
+    artifact digest/metadata, bundle checksum, and OSTree source subject through
+    `mixxx-deck`; never manually bypass the client checks.
 11. Stage before ending the DJ session.
 12. Activate only with explicit operator approval and retain rollback.
 

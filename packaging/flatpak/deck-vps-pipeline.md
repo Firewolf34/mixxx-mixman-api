@@ -13,7 +13,8 @@ artifacts, and a small client stages/activates/rolls back user Flatpaks.
 GitHub is not required by the authoritative publication pipeline. The GitHub
 fork provides an optional faster artifact-only build from `github/candidate`;
 it never updates Forgejo publication state or replaces Forgejo as source
-authority.
+authority. A configured deck client may select its verified, short-lived
+Actions artifact when it is newer than the Forgejo candidate.
 
 ## Goals
 
@@ -28,6 +29,8 @@ authority.
 - Snapshot the installed app before first replacement so rollback works on the
   first candidate.
 - Keep the GitHub build optional, independently triggered, and artifact-only.
+- Let a configured deck choose the newest fully verified candidate without
+  weakening Forgejo publication authority.
 
 ## Non-Goals
 
@@ -121,9 +124,10 @@ git push github <candidate-sha>:refs/heads/github/candidate
 The Forgejo push runs `.forgejo/workflows/deck-flatpak.yml` on the VPS and may
 publish `latest.json`. The GitHub push runs
 `.github/workflows/github-deck-candidate.yml` on a GitHub-hosted runner and
-uploads a three-day `Mixxx-flatpak-x86_64` artifact without publishing it. The
-same commit may be promoted to either or both refs. Historical refs such as
-`github-main-deck-workflow` must not be recreated.
+uploads a three-day `Mixxx-flatpak-x86_64` artifact containing `Mixxx.flatpak`
+and its GitHub candidate manifest. The same commit may be promoted to either or
+both refs. Historical refs such as `github-main-deck-workflow` must not be
+recreated.
 
 The workflow triggers automatically for pushes to that branch. It also supports
 manual dispatch, but the dispatch must select `deck/candidate`.
@@ -158,12 +162,20 @@ The GitHub fork keeps `main` synchronized exactly with official upstream and
 keeps `github/candidate` as its only custom release pointer. A push to
 `github/candidate` triggers a GitHub-hosted `ubuntu-24.04` build. The workflow
 uses the deck-specific Release/no-debug manifest, verifies the event ref and
-SHA, checks manifest synchronization, imports and fscks the OSTree bundle, runs
-the same headless Mixxx version smoke test, and uploads `Mixxx.flatpak`.
+SHA, checks manifest synchronization, imports and fscks the OSTree bundle,
+requires the bundle commit subject to identify `GITHUB_SHA`, runs the same
+headless Mixxx version smoke test, and uploads `Mixxx.flatpak` beside a
+schema-1 GitHub candidate manifest.
 
-GitHub artifacts are an expedited manual-install option only. They do not
-produce the Forgejo source archive or schema-1 publication manifest, do not
-update `latest.json`, and are not consumed automatically by `mixxx-deck`.
+GitHub artifacts do not produce the Forgejo source archive or public
+publication manifest, and do not update `latest.json`. They are a temporary
+fallback selected only by the deck client with a configured GitHub token. The
+client lists only successful `github/candidate` workflow runs, requires an
+unexpired exact artifact, verifies the API SHA-256 digest of its ZIP archive,
+requires exactly the bundle and metadata files, verifies the metadata/run/SHA
+contract and bundle checksum/size, then imports and fscks the bundle and checks
+its OSTree commit subject. These checks make GitHub a verified build provider,
+not a source or publication authority.
 
 ## Forgejo Workflow
 
@@ -252,6 +264,14 @@ output, temporary files, and action cache before and after each job, but retains
 the source state on the private `/data` filesystem. A cold first build may be
 much slower than later builds. The workflow sets `FLATPAK_BUILDER_JOBS=1`, and
 `packaging/flatpak/flatpak_build.sh` passes that as `--jobs=1`.
+
+Both synchronized manifests set `CCACHE_BASEDIR=/run/build` and
+`CCACHE_NOHASHDIR=true` only inside Flatpak build sandboxes. This removes the
+per-Actions-job host checkout path from cache keys while retaining compiler,
+flags, headers, and generated-source inputs in the key. The publisher resets
+ccache counters at the start of each attempt and prints the attempt hit/miss
+statistics on either success or failure. It does not retain resumable build
+trees or raise the 512 MiB cache budget.
 
 Each custom workflow step runs through `tools/deck_private_log.sh`. On failure,
 it atomically records the step name, UTC timestamp, exit status, and the last
@@ -471,8 +491,12 @@ Installed path:
 Cache:
 
 ```text
-~/.cache/mixxx-deck/builds/<source-sha>/
+~/.cache/mixxx-deck/builds/<provider>/<source-sha>/
 ```
+
+`provider` is `forgejo`, `github`, or `local` for an exported rollback
+snapshot. A pre-provider cache at `builds/<source-sha>/` remains readable as
+`legacy:<source-sha>` and is not destructively migrated.
 
 State:
 
@@ -487,28 +511,52 @@ staged builds protected from pruning even when those are distinct.
 
 ```bash
 mixxx-deck status
+mixxx-deck github-configure
 mixxx-deck check
-mixxx-deck stage [latest|<source-sha>]
-mixxx-deck activate [latest|<source-sha>]
-mixxx-deck deploy [latest|<source-sha>]
+mixxx-deck stage [auto|forgejo|github|forgejo:<source-sha>|github:<source-sha>]
+mixxx-deck activate [auto|forgejo|github|forgejo:<source-sha>|github:<source-sha>]
+mixxx-deck deploy [auto|forgejo|github|forgejo:<source-sha>|github:<source-sha>]
 mixxx-deck rollback
 mixxx-deck run [mixxx-args...]
 ```
 
+`auto` is the default and `latest` remains an alias. It compares Forgejo's
+manifest `built_at` with GitHub's successful workflow completion timestamp;
+Forgejo wins an exact timestamp tie. If the selected provider fails final
+download or provenance verification, automatic staging tries the other already
+verified descriptor. Explicit provider targets never silently switch provider.
+
+Configure GitHub only on decks that should use that fallback:
+
+```bash
+mixxx-deck github-configure
+```
+
+Use a fine-grained token limited to the fallback repository with **Actions:
+read** only. The client writes it to
+`~/.config/mixxx-deck/github-actions-token` mode 0600, validates it against the
+repository API, and passes it to curl through a temporary mode-0600 config file
+instead of the command line. Do not put the token in Git, shell history, or a
+manifest.
+
 ### Status
 
-Local, read-only view of installed/staged/previous source SHAs, manifest URL,
-running state, and Flatpak metadata.
+Local, read-only view of installed/staged/previous provider-qualified builds,
+Forgejo manifest URL, GitHub fallback configuration state, running state, and
+Flatpak metadata.
 
 ### Check
 
-Fetches and validates only the latest manifest, then compares installed and
-available source SHAs.
+Selects the newest verified available provider descriptor, then compares its
+source SHA with the installed Flatpak. No bundle is downloaded.
 
 ### Stage
 
-Fetches and verifies a manifest and bundle. Staging may run while Mixxx is
-active because it does not alter the installed app.
+Fetches and verifies the selected provider's metadata and bundle. Forgejo uses
+the immutable public manifest/bundle contract; GitHub uses the authenticated
+Actions artifact contract. Both require local OSTree import/fsck and a source
+SHA in the bundle subject. Staging may run while Mixxx is active because it does
+not alter the installed app.
 
 ### Activate
 

@@ -64,11 +64,16 @@ awk '
     }
     !modules_seen && $0 == "build-options:" {
         in_top_build_options = 1
+        print
         next
     }
     in_top_build_options {
         if ($0 == "cleanup:") {
             in_top_build_options = 0
+            print
+        } else if ($0 == "  no-debuginfo: true" || $0 == "  strip: true") {
+            next
+        } else {
             print
         }
         next

@@ -36,6 +36,12 @@ add-extensions:
     subdirectories: true
     no-autodownload: true
 build-options:
+  # Flatpak Builder's persistent ccache is shared by the constrained runner.
+  # Its host checkout path changes for every Actions job, but build paths below
+  # /run/build remain stable. Do not add source or output directories here.
+  env:
+    CCACHE_BASEDIR: /run/build
+    CCACHE_NOHASHDIR: "true"
   no-debuginfo: true
   strip: true
 cleanup:

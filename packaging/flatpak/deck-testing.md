@@ -29,9 +29,9 @@ The first command triggers the resource-constrained Forgejo runner and its
 authoritative publication pipeline. The second triggers a GitHub-hosted build
 using the same deck-specific manifest and validation, then retains
 `Mixxx-flatpak-x86_64` as a three-day Actions artifact. It does not update
-Forgejo's `latest.json`; download and install it manually when using the
-fallback path. The release refs are pointers only and must never receive direct
-development commits.
+Forgejo's `latest.json`; it contains the bundle and a workflow-produced
+metadata contract for the deck client. The release refs are pointers only and
+must never receive direct development commits.
 
 Forgejo Actions builds the `x86_64` Flatpak on the isolated VPS runner, validates
 the OSTree bundle and Mixxx binary, then publishes immutable build files and
@@ -120,6 +120,19 @@ tools/deck_flatpak_deploy.sh setup
 This installs `~/.local/bin/mixxx-deck`. Reconnect controllers after the first
 udev setup.
 
+Forgejo is always available through its public manifest. To let the laptop use
+the temporary GitHub fallback too, create a fine-grained GitHub token restricted
+to `Firewolf34/mixxx-mixman-api` with **Actions: read** only, then run:
+
+```bash
+mixxx-deck github-configure
+```
+
+The client stores the token only at
+`~/.config/mixxx-deck/github-actions-token` mode 0600. It never writes the
+token to the checkout, an artifact, or a command line. Without this setup, the
+client safely uses Forgejo alone.
+
 ## Stage, Activate, And Roll Back
 
 Checking and staging are safe while Mixxx is running:
@@ -128,6 +141,23 @@ Checking and staging are safe while Mixxx is running:
 mixxx-deck check
 mixxx-deck stage
 ```
+
+`stage` defaults to `auto`: it chooses the newest verified completion between
+Forgejo and GitHub, with Forgejo winning an exact timestamp tie. Use an explicit
+provider when testing a particular build:
+
+```bash
+mixxx-deck stage forgejo
+mixxx-deck stage github
+mixxx-deck stage forgejo:<source-sha>
+mixxx-deck stage github:<source-sha>
+```
+
+The client validates the Forgejo manifest/immutable bundle or, for GitHub, the
+successful candidate run, unexpired artifact, Actions API archive digest,
+artifact metadata, bundle checksum and size. It then imports the bundle into a
+temporary local OSTree repository, runs `fsck`, and requires the expected
+Flatpak ref and source SHA in its commit subject before recording it as staged.
 
 Activation is deliberately blocked while Mixxx runs. Stop Mixxx, then:
 
@@ -151,14 +181,15 @@ Return to the previously cached build with:
 mixxx-deck rollback
 ```
 
-Use `mixxx-deck status` to show installed, staged, previous, and available
-source revisions.
+Use `mixxx-deck status` to show installed, staged, and rollback
+provider-qualified builds. `mixxx-deck check` shows the current available
+provider and source revision.
 
 ## Acceptance Checklist
 
 - Confirm the authoritative Forgejo Actions run finished **Success** for the
   exact candidate SHA.
-- Confirm the manifest and bundle identify the requested source commit.
+- Confirm the selected provider and bundle identify the requested source commit.
 - Confirm Mixxx launches from the user Flatpak.
 - Confirm audio input and output devices appear.
 - Confirm decks and controllers are detected after reconnecting them.
