@@ -147,7 +147,9 @@ Before changing the deck pipeline, read:
   token restricted to `total-infra/mixxx`; never print, log, or commit it.
 - Store the most recent failed custom workflow-step output only at private
   runner path `/data/logs/latest.log` (0700 directory, 0600 log, 2 MiB cap).
-  It is diagnostic state, never a Git file or `/srv/artifacts`/Caddy content.
+  It records caught `HUP`, `INT`, and `TERM` cancellations as well as ordinary
+  failures; correlate it with the `mixxx-runner` system journal. It is
+  diagnostic state, never a Git file or `/srv/artifacts`/Caddy content.
 
 ## Runner And Infrastructure Invariants
 

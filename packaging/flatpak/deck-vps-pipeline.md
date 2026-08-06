@@ -273,15 +273,18 @@ ccache counters at the start of each attempt and prints the attempt hit/miss
 statistics on either success or failure. It does not retain resumable build
 trees or raise the 512 MiB cache budget.
 
-Each custom workflow step runs through `tools/deck_private_log.sh`. On failure,
-it atomically records the step name, UTC timestamp, exit status, and the last
-2 MiB of that step's output at private runner path `/data/logs/latest.log`.
+Each custom workflow step runs through `tools/deck_private_log.sh`. On an
+ordinary nonzero exit, or a caught `HUP`, `INT`, or `TERM`, it atomically records
+the step name, UTC timestamp, exit status, optional termination signal, and the
+last 2 MiB of that step's streamed output at private runner path
+`/data/logs/latest.log`. `SIGKILL` and an abrupt host failure cannot be caught.
 The directory is mode 0700 and the log is mode 0600. It is deliberately outside
 `/srv/artifacts`, is not mounted into Caddy, is not published, and is replaced
 only by a newer failed wrapped step. The final cleanup step is intentionally not
 wrapped so it cannot replace the causal failure record. The log is diagnostic
-output, not an artifact; inspect it only through the VPS runner-state path and
-do not copy it to Git or the public artifact tree.
+output, not an artifact; an administrator may read it through the runner's
+private `/data` bind and correlate it with the `mixxx-runner` system journal.
+Do not copy it to Git or the public artifact tree.
 
 Before compilation, the publisher runs Flatpak Builder's `--download-only`
 mode. A recognized transient network failure (connection/DNS or low-throughput
@@ -709,6 +712,7 @@ After bootstrap, routine builds require no server login.
 | Dependency archive checksum fails | stop before compilation; compare its complete tree with the authoritative upstream tag/commit; never copy the received checksum blindly |
 | Hard-budget preflight fails | correct cgroup/headroom/disk/PSI configuration; do not bypass |
 | PSI guard exits 75 | host pressure remained severe for one minute; let production recover before retrying |
+| Action stops without a compiler error | inspect the private `latest.log` signal record and `mixxx-runner` journal; `SIGKILL` or host loss leaves no signal record |
 | Build OOMs inside 1536 MiB | keep the ceiling and reduce build/link requirements further |
 | Host thrashes/services degrade | stop the runner; verify the cgroup ceiling is actually active |
 | OSTree check fails | bundle is not publishable |

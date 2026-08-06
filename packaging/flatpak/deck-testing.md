@@ -94,10 +94,13 @@ valid empty `.qmltypes` tooling marker. This limits QML editor metadata and
 bytecode caching for the Flatpak build only; it does not change deck runtime
 behavior or grant the runner access to `/dev/fuse`.
 
-For a failed custom runner step, the VPS operator can inspect the runner-only
-`/data/logs/latest.log` record. It retains the last 2 MiB of the most recent
-failure with mode 0600 and is intentionally outside the published artifact
-tree. Do not copy this diagnostic log to the deck, Git, or a public web route.
+For a failed or gracefully cancelled custom runner step, the VPS operator can
+inspect the runner-only `/data/logs/latest.log` record and correlate it with the
+`mixxx-runner` system journal. It retains the last 2 MiB of the most recent
+failure with mode 0600; a caught `HUP`, `INT`, or `TERM` is labelled in its
+header. `SIGKILL` and abrupt host loss cannot be recorded. The file is
+intentionally outside the published artifact tree. Do not copy this diagnostic
+log to the deck, Git, or a public web route.
 
 The current VPS has only 2 GiB RAM. The workflow requires at least 512 MiB host
 swap, 1536 MiB currently free memory-plus-swap, 12 GiB free for a cold SDK
