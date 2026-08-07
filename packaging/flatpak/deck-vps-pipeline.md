@@ -163,7 +163,8 @@ keeps `github/candidate` as its only custom release pointer. A push to
 `github/candidate` triggers a GitHub-hosted `ubuntu-24.04` build. The workflow
 uses the deck-specific Release/no-debug manifest, verifies the event ref and
 SHA, checks manifest synchronization, imports and fscks the OSTree bundle,
-reads the locale-stable subject field from normal `ostree show` output and
+relies on the Flatpak action's `Built from GITHUB_SHA` export subject, reads
+that locale-stable subject from normal `ostree show` output, and
 requires it to identify `GITHUB_SHA`, runs the same
 headless Mixxx version smoke test, and uploads `Mixxx.flatpak` beside a
 schema-1 GitHub candidate manifest.
@@ -392,7 +393,9 @@ The fixed storage budget is made workable by:
    state. Retry only recognized transient network failures at most three times;
    checksum and other source failures stop immediately.
 8. Build `Mixxx.flatpak` with one Flatpak Builder job and disable new source
-   downloads so it uses the verified prefetch state:
+   downloads so it uses the verified prefetch state. Pass the exact source SHA
+   through `MIXXX_FLATPAK_SOURCE_SHA`; `flatpak_build.sh` exports the commit
+   with `--subject=Built from <SHA>`:
 
    ```bash
    packaging/flatpak/flatpak_build.sh bundle

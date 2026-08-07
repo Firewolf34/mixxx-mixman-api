@@ -10,20 +10,30 @@ source "${SCRIPT_DIR}/deck_ostree_validation.sh"
 SOURCE_SHA="70412b6b79fdc897701f48ea7dd64ded69f311bb"
 
 ostree() {
-    printf 'commit %s\nDate: 2026-08-06 00:00:00 +0000\nSubject: Built from %s\n' \
+    printf 'commit %s\nContentChecksum:  test\nDate:  2026-08-06 00:00:00 +0000\n\n    Built from %s\n' \
         "${SOURCE_SHA}" "${SOURCE_SHA}"
 }
 
 deck_ostree_commit_subject_contains_source test-repo test-commit "${SOURCE_SHA}"
 
 ostree() {
-    printf 'commit %s\nDate: 2026-08-06 00:00:00 +0000\nSubject: Built from another commit\n' \
-        "${SOURCE_SHA}"
+    printf 'commit %s\nContentChecksum:  test\nDate:  2026-08-06 00:00:00 +0000\n\n    Built from another commit\n\n    Body mentions %s\n' \
+        "${SOURCE_SHA}" "${SOURCE_SHA}"
 }
 
 if deck_ostree_commit_subject_contains_source \
         test-repo test-commit "${SOURCE_SHA}" 2>/dev/null; then
     echo "Error: source SHA outside the commit subject was accepted." >&2
+    exit 1
+fi
+
+ostree() {
+    printf 'commit test\nContentChecksum:  test\nDate:  2026-08-06 00:00:00 +0000\n(no subject)\n'
+}
+
+if deck_ostree_commit_subject_contains_source \
+        test-repo test-commit "${SOURCE_SHA}" 2>/dev/null; then
+    echo "Error: an OSTree commit without a subject was accepted." >&2
     exit 1
 fi
 

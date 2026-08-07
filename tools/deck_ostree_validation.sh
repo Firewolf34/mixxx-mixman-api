@@ -13,6 +13,7 @@ deck_ostree_commit_subject_contains_source() {
     local commit_details
     local commit_subject=""
     local line
+    local saw_date=false
 
     if [[ ! "${source_sha}" =~ ^[0-9a-f]{40}$ ]]; then
         echo "Error: source SHA must be exactly 40 lowercase hexadecimal characters." >&2
@@ -25,8 +26,15 @@ deck_ostree_commit_subject_contains_source() {
     fi
 
     while IFS= read -r line; do
-        if [[ "${line}" =~ ^[[:space:]]*Subject:[[:space:]]*(.*)$ ]]; then
-            commit_subject="${BASH_REMATCH[1]}"
+        if [[ "${line}" == Date:* ]]; then
+            saw_date=true
+            continue
+        fi
+        if [[ "${saw_date}" == true && "${line}" == "(no subject)" ]]; then
+            break
+        fi
+        if [[ "${saw_date}" == true && "${line}" == "    "* ]]; then
+            commit_subject="${line#    }"
             break
         fi
     done <<<"${commit_details}"

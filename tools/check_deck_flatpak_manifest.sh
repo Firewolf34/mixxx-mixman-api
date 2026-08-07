@@ -10,6 +10,8 @@ DECK_MANIFEST="${REPO_ROOT}/packaging/flatpak/org.mixxx.Mixxx.deck.yaml"
 CMAKE_FILE="${REPO_ROOT}/CMakeLists.txt"
 QML_CONTROLS_REGISTRATION_SOURCE="${REPO_ROOT}/src/qml/qmlcontrolsregistration.cpp"
 DECK_DEPLOY_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_deploy.sh"
+FLATPAK_BUILD_SCRIPT="${REPO_ROOT}/packaging/flatpak/flatpak_build.sh"
+DECK_PUBLISH_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_publish.sh"
 NORMALIZED_NORMAL_MANIFEST="$(mktemp)"
 NORMALIZED_MANIFEST="$(mktemp)"
 
@@ -123,6 +125,14 @@ fi
 if ! grep -Fq 'install -m 0644 "${OSTREE_VALIDATION_HELPER}" "${installed_helper}"' \
         "${DECK_DEPLOY_SCRIPT}"; then
     echo "Error: mixxx-deck setup does not install its OSTree validator." >&2
+    exit 1
+fi
+
+if ! grep -Fq 'BUILD_OPTIONS+=("--subject=Built from ${FLATPAK_SOURCE_SHA}")' \
+        "${FLATPAK_BUILD_SCRIPT}" ||
+    ! grep -Fq 'MIXXX_FLATPAK_SOURCE_SHA="${SOURCE_SHA}"' \
+        "${DECK_PUBLISH_SCRIPT}"; then
+    echo "Error: the Forgejo publisher does not stamp source provenance." >&2
     exit 1
 fi
 

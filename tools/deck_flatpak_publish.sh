@@ -142,6 +142,7 @@ download_flatpak_sources() {
 download_flatpak_sources
 
 echo "Building ${APP_ID} from ${SOURCE_SHA}..."
+MIXXX_FLATPAK_SOURCE_SHA="${SOURCE_SHA}" \
 MIXXX_FLATPAK_DISABLE_DOWNLOAD=1 \
     MIXXX_FLATPAK_BUILDER_STATE_DIR="${BUILDER_STATE_DIR}" \
     packaging/flatpak/flatpak_build.sh bundle \

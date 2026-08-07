@@ -192,6 +192,9 @@ Before changing the deck pipeline, read:
   `ostree show` output. A commit subject is not detached metadata, and
   `ostree show` has no `-s` subject option. Keep the shared helper and its
   regression test in the manifest preflight gate.
+- GitHub's Flatpak action stamps `Built from GITHUB_SHA`. The Forgejo publisher
+  must pass `MIXXX_FLATPAK_SOURCE_SHA` so `flatpak_build.sh` stamps the same
+  subject through Flatpak Builder's supported `--subject` export option.
 - Require the hard-budget preflight: numeric cgroup v2 limits, no more than
   1536 MiB combined RAM+swap, at least 512 MiB host swap, 1536 MiB currently
   free memory-plus-swap, 15 GiB free runner data disk, 1 GiB free artifact

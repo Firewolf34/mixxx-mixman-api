@@ -35,6 +35,10 @@ BUILDER_JOBS="${FLATPAK_BUILDER_JOBS:-}"
 # survive transient network failures and future builds.
 BUILDER_STATE_DIR="${MIXXX_FLATPAK_BUILDER_STATE_DIR:-}"
 
+# Candidate publishers set this so the exported OSTree commit records its
+# exact Git source. Ordinary developer builds leave the subject unchanged.
+FLATPAK_SOURCE_SHA="${MIXXX_FLATPAK_SOURCE_SHA:-}"
+
 # Prints usage information
 print_usage() {
     echo ""
@@ -218,6 +222,14 @@ if [[ -n $BUILDER_STATE_DIR ]]; then
     fi
     mkdir -p "$BUILDER_STATE_DIR"
     BUILD_OPTIONS+=("--state-dir=$BUILDER_STATE_DIR")
+fi
+
+if [[ -n $FLATPAK_SOURCE_SHA ]]; then
+    if [[ ! $FLATPAK_SOURCE_SHA =~ ^[0-9a-f]{40}$ ]]; then
+        echo "Error: MIXXX_FLATPAK_SOURCE_SHA must be exactly 40 lowercase hexadecimal characters." >&2
+        exit 1
+    fi
+    BUILD_OPTIONS+=("--subject=Built from ${FLATPAK_SOURCE_SHA}")
 fi
 
 if [[ $BUILDER == "org.flatpak.Builder" ]]; then

@@ -170,7 +170,9 @@ Flatpak ref and source SHA in its commit subject before recording it as staged.
 The shared validator parses the subject from locale-stable normal
 `ostree show` output; it does not query detached metadata or use the invalid
 `ostree show -s` spelling. Its regression test runs as part of the deck
-manifest preflight.
+manifest preflight. GitHub's Flatpak action stamps the candidate SHA in this
+subject; the Forgejo publisher supplies the same subject through
+`MIXXX_FLATPAK_SOURCE_SHA` and Flatpak Builder's `--subject` option.
 
 Activation is deliberately blocked while Mixxx runs. Stop Mixxx, then:
 
