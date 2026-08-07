@@ -163,7 +163,8 @@ keeps `github/candidate` as its only custom release pointer. A push to
 `github/candidate` triggers a GitHub-hosted `ubuntu-24.04` build. The workflow
 uses the deck-specific Release/no-debug manifest, verifies the event ref and
 SHA, checks manifest synchronization, imports and fscks the OSTree bundle,
-requires the bundle commit subject to identify `GITHUB_SHA`, runs the same
+reads the locale-stable subject field from normal `ostree show` output and
+requires it to identify `GITHUB_SHA`, runs the same
 headless Mixxx version smoke test, and uploads `Mixxx.flatpak` beside a
 schema-1 GitHub candidate manifest.
 
@@ -400,7 +401,9 @@ The fixed storage budget is made workable by:
 9. Import the bundle into a temporary OSTree repository.
 10. Run `ostree fsck`.
 11. Require `app/org.mixxx.Mixxx/x86_64/master`.
-12. Require the bundle commit subject to identify the Git source SHA.
+12. Read the subject field from locale-stable normal `ostree show` output and
+    require it to identify the Git source SHA. The subject is part of the
+    commit object, not detached metadata; `ostree show` has no `-s` option.
 13. Run a 30-second headless `/app/bin/mixxx --version` smoke test.
 14. Create a `git archive` source tarball compressed with Zstandard.
 15. Calculate bundle/source SHA-256 values and bundle byte length.
@@ -494,6 +497,7 @@ Installed path:
 
 ```text
 ~/.local/bin/mixxx-deck
+~/.local/bin/deck_ostree_validation.sh
 ```
 
 Cache:

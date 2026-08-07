@@ -29,6 +29,13 @@ GITHUB_AUTH_CONFIG=""
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+OSTREE_VALIDATION_HELPER="${SCRIPT_DIR}/deck_ostree_validation.sh"
+if [[ ! -r "${OSTREE_VALIDATION_HELPER}" ]]; then
+    echo "Error: missing ${OSTREE_VALIDATION_HELPER}. Re-run setup from the repository." >&2
+    exit 1
+fi
+# shellcheck source=tools/deck_ostree_validation.sh
+source "${OSTREE_VALIDATION_HELPER}"
 
 usage() {
     cat <<'EOF'
@@ -414,7 +421,7 @@ descriptors_for_target() {
 verify_bundle_provenance() (
     local bundle_path="$1"
     local source_sha="$2"
-    local validation_repo commit_subject flatpak_commit
+    local validation_repo flatpak_commit
     require_sha "${source_sha}"
     validation_repo="$(mktemp -d)"
     trap 'rm -rf -- "${validation_repo}"' EXIT
@@ -425,14 +432,8 @@ verify_bundle_provenance() (
     ostree --repo="${validation_repo}" refs | grep -Fxq "${EXPECTED_REF}" ||
         die "Bundle does not contain ${EXPECTED_REF}."
     flatpak_commit="$(ostree --repo="${validation_repo}" rev-parse "${EXPECTED_REF}")"
-    commit_subject="$(ostree --repo="${validation_repo}" show \
-        --print-detached-metadata-key=ostree.commit.subject \
-        "${flatpak_commit}" 2>/dev/null || true)"
-    if [[ -z "${commit_subject}" ]]; then
-        commit_subject="$(ostree --repo="${validation_repo}" show -s "${flatpak_commit}")"
-    fi
-    [[ "${commit_subject}" == *"${source_sha}"* ]] ||
-        die "Bundle commit subject does not identify source SHA ${source_sha}."
+    deck_ostree_commit_subject_contains_source \
+        "${validation_repo}" "${flatpak_commit}" "${source_sha}"
 )
 
 write_staged_state() {
@@ -812,6 +813,7 @@ print_status() {
 }
 
 setup_client() {
+    local installed_helper="${HOME}/.local/bin/deck_ostree_validation.sh"
     ensure_flatpak
     require_command curl
     require_command jq
@@ -821,8 +823,11 @@ setup_client() {
     ensure_directories
     install_udev_rules
     mkdir -p "${HOME}/.local/bin"
+    if [[ ! "${OSTREE_VALIDATION_HELPER}" -ef "${installed_helper}" ]]; then
+        install -m 0644 "${OSTREE_VALIDATION_HELPER}" "${installed_helper}"
+    fi
     install -m 0755 "${BASH_SOURCE[0]}" "${HOME}/.local/bin/mixxx-deck"
-    echo "Installed ${HOME}/.local/bin/mixxx-deck"
+    echo "Installed ${HOME}/.local/bin/mixxx-deck and its OSTree validator"
 }
 
 [[ "${MANIFEST_URL}" =~ ^https://[^/]+/.+/latest\.json$ ]] ||

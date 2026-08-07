@@ -188,6 +188,10 @@ Before changing the deck pipeline, read:
   and `CCACHE_NOHASHDIR=true`) in both synchronized manifests. The publisher
   must reset and report per-attempt ccache statistics without increasing the
   512 MiB cache cap or retaining resumable build trees.
+- Validate bundle provenance through the subject field in locale-stable normal
+  `ostree show` output. A commit subject is not detached metadata, and
+  `ostree show` has no `-s` subject option. Keep the shared helper and its
+  regression test in the manifest preflight gate.
 - Require the hard-budget preflight: numeric cgroup v2 limits, no more than
   1536 MiB combined RAM+swap, at least 512 MiB host swap, 1536 MiB currently
   free memory-plus-swap, 15 GiB free runner data disk, 1 GiB free artifact
@@ -253,6 +257,7 @@ Before changing the deck pipeline, read:
 
    ```bash
    bash -n tools/check_deck_flatpak_manifest.sh \
+     tools/deck_ostree_validation.sh tools/deck_ostree_validation_test.sh \
      tools/deck_build_preflight.sh tools/deck_pressure_guard.sh \
      tools/deck_flatpak_publish.sh tools/deck_flatpak_deploy.sh \
      tools/deck_forgejo_actions.sh

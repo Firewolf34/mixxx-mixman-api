@@ -125,7 +125,8 @@ From a current Mixxx checkout, install the lightweight client and USB rules:
 tools/deck_flatpak_deploy.sh setup
 ```
 
-This installs `~/.local/bin/mixxx-deck`. Reconnect controllers after the first
+This installs `~/.local/bin/mixxx-deck` and its companion
+`~/.local/bin/deck_ostree_validation.sh`. Reconnect controllers after the first
 udev setup.
 
 Forgejo is always available through its public manifest. To let the laptop use
@@ -166,6 +167,10 @@ successful candidate run, unexpired artifact, Actions API archive digest,
 artifact metadata, bundle checksum and size. It then imports the bundle into a
 temporary local OSTree repository, runs `fsck`, and requires the expected
 Flatpak ref and source SHA in its commit subject before recording it as staged.
+The shared validator parses the subject from locale-stable normal
+`ostree show` output; it does not query detached metadata or use the invalid
+`ostree show -s` spelling. Its regression test runs as part of the deck
+manifest preflight.
 
 Activation is deliberately blocked while Mixxx runs. Stop Mixxx, then:
 

@@ -76,14 +76,9 @@ jobs:
 
           flatpak_commit="$(ostree --repo="${validation_repo}" rev-parse \
             app/org.mixxx.Mixxx/x86_64/master)"
-          commit_subject="$(ostree --repo="${validation_repo}" show \
-            --print-detached-metadata-key=ostree.commit.subject \
-            "${flatpak_commit}" 2>/dev/null || true)"
-          if [ -z "${commit_subject}" ]; then
-            commit_subject="$(ostree --repo="${validation_repo}" show -s \
-              "${flatpak_commit}")"
-          fi
-          [[ "${commit_subject}" == *"${GITHUB_SHA}"* ]]
+          source tools/deck_ostree_validation.sh
+          deck_ostree_commit_subject_contains_source \
+            "${validation_repo}" "${flatpak_commit}" "${GITHUB_SHA}"
 
           timeout 30 flatpak build \
             --env=QT_QPA_PLATFORM=offscreen \

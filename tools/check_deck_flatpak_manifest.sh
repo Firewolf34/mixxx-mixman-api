@@ -9,6 +9,7 @@ NORMAL_MANIFEST="${REPO_ROOT}/packaging/flatpak/org.mixxx.Mixxx.yaml"
 DECK_MANIFEST="${REPO_ROOT}/packaging/flatpak/org.mixxx.Mixxx.deck.yaml"
 CMAKE_FILE="${REPO_ROOT}/CMakeLists.txt"
 QML_CONTROLS_REGISTRATION_SOURCE="${REPO_ROOT}/src/qml/qmlcontrolsregistration.cpp"
+DECK_DEPLOY_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_deploy.sh"
 NORMALIZED_NORMAL_MANIFEST="$(mktemp)"
 NORMALIZED_MANIFEST="$(mktemp)"
 
@@ -118,6 +119,14 @@ if ! grep -Fq 'qml_register_types_Mixxx_Controls()' "${QML_CONTROLS_REGISTRATION
     echo "Error: the Mixxx.Controls static-plugin registration contract is missing." >&2
     exit 1
 fi
+
+if ! grep -Fq 'install -m 0644 "${OSTREE_VALIDATION_HELPER}" "${installed_helper}"' \
+        "${DECK_DEPLOY_SCRIPT}"; then
+    echo "Error: mixxx-deck setup does not install its OSTree validator." >&2
+    exit 1
+fi
+
+bash "${SCRIPT_DIR}/deck_ostree_validation_test.sh"
 
 echo "Deck Flatpak manifest is synchronized with the normal manifest."
 echo "Flatpak Mixxx.Controls runtime registration is present."

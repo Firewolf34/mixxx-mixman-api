@@ -20,6 +20,8 @@ SOURCE_RETRY_DELAY_SECONDS="${MIXXX_DECK_SOURCE_RETRY_DELAY_SECONDS:-20}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=tools/deck_ostree_validation.sh
+source "${SCRIPT_DIR}/deck_ostree_validation.sh"
 
 die() {
     echo "Error: $*" >&2
@@ -168,13 +170,8 @@ if ! ostree --repo="${VALIDATION_REPO}" refs | grep -Fxq "${EXPECTED_REF}"; then
 fi
 
 FLATPAK_COMMIT="$(ostree --repo="${VALIDATION_REPO}" rev-parse "${EXPECTED_REF}")"
-COMMIT_SUBJECT="$(ostree --repo="${VALIDATION_REPO}" show --print-detached-metadata-key=ostree.commit.subject "${FLATPAK_COMMIT}" 2>/dev/null || true)"
-if [[ -z "${COMMIT_SUBJECT}" ]]; then
-    COMMIT_SUBJECT="$(ostree --repo="${VALIDATION_REPO}" show -s "${FLATPAK_COMMIT}")"
-fi
-if [[ "${COMMIT_SUBJECT}" != *"${SOURCE_SHA}"* ]]; then
-    die "Bundle commit subject does not identify source SHA ${SOURCE_SHA}."
-fi
+deck_ostree_commit_subject_contains_source \
+    "${VALIDATION_REPO}" "${FLATPAK_COMMIT}" "${SOURCE_SHA}"
 
 echo "Running headless Mixxx version smoke test..."
 timeout 30 flatpak build \
