@@ -83,9 +83,14 @@ replaced with exact Git commit-plus-tag pins. This keeps the source immutable
 without compiling or investigating on the deck laptop.
 
 The pure-QML `Mixxx.Controls` module intentionally does not generate C++ type
-metadata or a QML cache loader. This avoids Qt 6.10 registrar/cache-generator
-failures while retaining embedded QML resources, generated `qmldir`, and the
-static plugin; it does not change deck runtime behavior or acceptance steps.
+metadata or a QML cache loader in this Flatpak environment. This avoids Qt 6.10
+registrar/cache-generator failures while retaining embedded QML resources,
+generated `qmldir`, and the static plugin. Because Qt's static plugin still
+references `qml_register_types_Mixxx_Controls()`, the module supplies the
+minimal equivalent runtime registration source whenever the suppression is
+active. Normal builds continue to use Qt's generated registration and cache
+loader; the workaround does not change deck runtime behavior or acceptance
+steps.
 The C++-backed `Mixxx` module keeps automatic type registration, but also uses
 its embedded original QML sources instead of cache generation after Qt 6.10
 fails while building its cache loader. The Flatpak manifests enable a no-FUSE

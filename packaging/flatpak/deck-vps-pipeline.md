@@ -336,10 +336,15 @@ and publisher refuse to build if any other manifest content drifts.
 
 `Mixxx.Controls` is a pure-QML module with no C++ types. Qt 6.10's
 `qmltyperegistrar` rejects generation of its empty C++ type metadata and its
-`qmlcachegen` fails while creating the cache loader, so the module uses
-`NO_GENERATE_QMLTYPES` and `NO_CACHEGEN`. Its original QML sources remain
-embedded; generated `qmldir` and the static plugin remain enabled. This is
-limited to the small Controls module and does not alter deployment contracts.
+`qmlcachegen` fails while creating the cache loader in the constrained no-FUSE
+Flatpak build, so that environment uses `NO_GENERATE_QMLTYPES` and
+`NO_CACHEGEN`. Suppressing generated type registration also removes
+`qml_register_types_Mixxx_Controls()`, although Qt's generated static plugin
+still references it. The module therefore compiles a minimal equivalent
+registration source that calls `qmlRegisterModule`; its original QML sources,
+generated `qmldir`, and static plugin remain enabled. The two suppression flags
+are Flatpak-workaround-only, so normal builds retain Qt's generated registration
+and cache loader.
 
 The C++-backed `Mixxx` module retains its normal C++ runtime registration, but
 uses the original embedded QML sources instead of Qt cache generation. Qt 6.10

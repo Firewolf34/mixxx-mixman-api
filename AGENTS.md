@@ -178,6 +178,12 @@ Before changing the deck pipeline, read:
 - Keep Qt QML cache generation disabled for the `Mixxx` and `Mixxx.Controls`
   modules in that environment. Their original embedded QML sources remain the
   runtime fallback; do not disable C++ type registration for `Mixxx`.
+- Limit `Mixxx.Controls` registration/cache suppression to the synchronized
+  Flatpak workaround. `NO_GENERATE_QMLTYPES` also removes Qt's definition of
+  `qml_register_types_Mixxx_Controls()`, while its generated static plugin still
+  references that symbol. Keep `src/qml/qmlcontrolsregistration.cpp` attached
+  to the module whenever that option is active; normal builds must retain Qt's
+  generated registration and cache loader.
 - Keep the shared Flatpak ccache key normalization (`CCACHE_BASEDIR=/run/build`
   and `CCACHE_NOHASHDIR=true`) in both synchronized manifests. The publisher
   must reset and report per-attempt ccache statistics without increasing the

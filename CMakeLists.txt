@@ -3985,18 +3985,25 @@ if(QML)
 
   qt_add_library(mixxx-qml-mixxxcontrols STATIC)
   set_target_properties(mixxx-qml-mixxxcontrols PROPERTIES AUTOMOC ON)
-  # This module contains QML files only. Qt 6.10's qmltyperegistrar rejects
-  # its empty C++ metadata, so do not generate a qmltypes file or registration
-  # source. Qt 6.10's qmlcachegen also fails while producing this module's
-  # cache loader, so retain the embedded QML sources instead of cache output.
-  # The generated qmldir and static plugin remain enabled.
+  set(MIXXX_QML_CONTROLS_OPTIONS)
+  if(MIXXX_FLATPAK_QMLTYPEINFO_WORKAROUND)
+    # This module contains QML files only. Qt 6.10's qmltyperegistrar rejects
+    # its empty C++ metadata in the constrained no-FUSE Flatpak Builder
+    # environment, and qmlcachegen also fails while producing its cache
+    # loader. Retain the embedded QML sources instead of cache output and
+    # provide the minimal runtime registration source below. Normal builds
+    # continue to use Qt's generated registration and cache loader.
+    list(APPEND MIXXX_QML_CONTROLS_OPTIONS
+      NO_GENERATE_QMLTYPES
+      NO_CACHEGEN
+    )
+  endif()
   qt_add_qml_module(mixxx-qml-mixxxcontrols
     URI Mixxx.Controls
     VERSION 1.0
     RESOURCE_PREFIX /mixxx.org/imports
     OPTIONAL_IMPORTS Mixxx
-    NO_GENERATE_QMLTYPES
-    NO_CACHEGEN
+    ${MIXXX_QML_CONTROLS_OPTIONS}
     QML_FILES
       res/qml/Mixxx/Controls/Knob.qml
       res/qml/Mixxx/Controls/Fader.qml
@@ -4006,6 +4013,14 @@ if(QML)
       res/qml/Mixxx/Controls/WaveformOverview.qml
       res/qml/Mixxx/Controls/WaveformDisplay.qml
   )
+  if(MIXXX_FLATPAK_QMLTYPEINFO_WORKAROUND)
+    # Qt still generates a static plugin that references this registration
+    # symbol when NO_GENERATE_QMLTYPES suppresses its usual definition.
+    target_sources(
+      mixxx-qml-mixxxcontrols
+      PRIVATE src/qml/qmlcontrolsregistration.cpp
+    )
+  endif()
   target_link_libraries(mixxx-qml-lib PRIVATE mixxx-qml-mixxxcontrolsplugin)
 
   target_sources(

@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 NORMAL_MANIFEST="${REPO_ROOT}/packaging/flatpak/org.mixxx.Mixxx.yaml"
 DECK_MANIFEST="${REPO_ROOT}/packaging/flatpak/org.mixxx.Mixxx.deck.yaml"
+CMAKE_FILE="${REPO_ROOT}/CMakeLists.txt"
+QML_CONTROLS_REGISTRATION_SOURCE="${REPO_ROOT}/src/qml/qmlcontrolsregistration.cpp"
 NORMALIZED_NORMAL_MANIFEST="$(mktemp)"
 NORMALIZED_MANIFEST="$(mktemp)"
 
@@ -104,4 +106,18 @@ if ! diff -u "${NORMALIZED_NORMAL_MANIFEST}" "${NORMALIZED_MANIFEST}"; then
     exit 1
 fi
 
+if ! grep -Fq 'set(MIXXX_QML_CONTROLS_OPTIONS)' "${CMAKE_FILE}" ||
+    ! grep -Fq '${MIXXX_QML_CONTROLS_OPTIONS}' "${CMAKE_FILE}" ||
+    ! grep -Fq 'src/qml/qmlcontrolsregistration.cpp' "${CMAKE_FILE}"; then
+    echo "Error: the Flatpak Mixxx.Controls registration workaround is incomplete." >&2
+    exit 1
+fi
+
+if ! grep -Fq 'qml_register_types_Mixxx_Controls()' "${QML_CONTROLS_REGISTRATION_SOURCE}" ||
+    ! grep -Fq 'qmlRegisterModule("Mixxx.Controls", 1, 0)' "${QML_CONTROLS_REGISTRATION_SOURCE}"; then
+    echo "Error: the Mixxx.Controls static-plugin registration contract is missing." >&2
+    exit 1
+fi
+
 echo "Deck Flatpak manifest is synchronized with the normal manifest."
+echo "Flatpak Mixxx.Controls runtime registration is present."
