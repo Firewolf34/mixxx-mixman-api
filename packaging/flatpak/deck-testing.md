@@ -173,6 +173,8 @@ The shared validator parses the subject from locale-stable normal
 manifest preflight. GitHub's Flatpak action stamps the candidate SHA in this
 subject; the Forgejo publisher supplies the same subject through
 `MIXXX_FLATPAK_SOURCE_SHA` and Flatpak Builder's `--subject` option.
+The GitHub action explicitly uses `repo` and `build_flatpak`, which are the
+paths consumed by its bundle creation and headless smoke test.
 
 Activation is deliberately blocked while Mixxx runs. Stop Mixxx, then:
 

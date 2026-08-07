@@ -52,6 +52,8 @@ jobs:
         with:
           manifest-path: packaging/flatpak/org.mixxx.Mixxx.deck.yaml
           arch: x86_64
+          build-dir: build_flatpak
+          repo-dir: repo
           build-bundle: false
           upload-artifact: false
 

@@ -169,6 +169,10 @@ requires it to identify `GITHUB_SHA`, runs the same
 headless Mixxx version smoke test, and uploads `Mixxx.flatpak` beside a
 schema-1 GitHub candidate manifest.
 
+The action inputs pin the exported repository to `repo` and the initialized
+build directory to `build_flatpak`. The later bundle and smoke-test commands
+consume those exact paths; do not rely on the action's provider defaults.
+
 GitHub artifacts do not produce the Forgejo source archive or public
 publication manifest, and do not update `latest.json`. They are a temporary
 fallback selected only by the deck client with a configured GitHub token. The

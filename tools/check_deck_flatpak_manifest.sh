@@ -12,6 +12,7 @@ QML_CONTROLS_REGISTRATION_SOURCE="${REPO_ROOT}/src/qml/qmlcontrolsregistration.c
 DECK_DEPLOY_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_deploy.sh"
 FLATPAK_BUILD_SCRIPT="${REPO_ROOT}/packaging/flatpak/flatpak_build.sh"
 DECK_PUBLISH_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_publish.sh"
+GITHUB_DECK_WORKFLOW="${REPO_ROOT}/.github/workflows/github-deck-candidate.yml"
 NORMALIZED_NORMAL_MANIFEST="$(mktemp)"
 NORMALIZED_MANIFEST="$(mktemp)"
 
@@ -133,6 +134,12 @@ if ! grep -Fq 'BUILD_OPTIONS+=("--subject=Built from ${FLATPAK_SOURCE_SHA}")' \
     ! grep -Fq 'MIXXX_FLATPAK_SOURCE_SHA="${SOURCE_SHA}"' \
         "${DECK_PUBLISH_SCRIPT}"; then
     echo "Error: the Forgejo publisher does not stamp source provenance." >&2
+    exit 1
+fi
+
+if ! grep -Fq '          build-dir: build_flatpak' "${GITHUB_DECK_WORKFLOW}" ||
+    ! grep -Fq '          repo-dir: repo' "${GITHUB_DECK_WORKFLOW}"; then
+    echo "Error: the GitHub workflow does not pin its validated Flatpak directories." >&2
     exit 1
 fi
 
