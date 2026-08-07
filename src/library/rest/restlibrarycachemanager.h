@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QHash>
 #include <QList>
 #include <QNetworkReply>
@@ -8,8 +9,8 @@
 #include <QQueue>
 #include <QString>
 
-#include "library/rest/restlibrarysettings.h"
 #include "library/rest/restlibrarymixman.h"
+#include "library/rest/restlibrarysettings.h"
 #include "library/rest/restlibrarytrack.h"
 
 class QFile;
@@ -69,13 +70,19 @@ class RestLibraryCacheManager final : public QObject {
         QFile* pFile = nullptr;
         QString tempFilePath;
         qint64 bytesWritten = 0;
+        QByteArray responsePrefix;
+        QString fileError;
+        bool writeFailed = false;
+        bool sizeLimitExceeded = false;
     };
 
     QNetworkRequest newDownloadRequest(const RestLibraryTrack& track) const;
     void startNextDownloads();
     void startDownload(const RestLibraryTrack& track);
+    void consumeReplyBytes(QNetworkReply* pReply);
     void finishDownload(QNetworkReply* pReply);
     ActiveDownload* activeDownloadForReply(QNetworkReply* pReply);
+    void rememberTrackCacheStems(const QList<RestLibraryTrack>& tracks);
     void pruneExpiredCachedFiles(const QList<RestLibraryTrack>& tracks);
     void pruneCacheSize(const QString& preservedFilePath = {});
     QList<QFileInfo> cachedFileInfos() const;
@@ -109,6 +116,7 @@ class RestLibraryCacheManager final : public QObject {
     QQueue<RestLibraryTrack> m_downloadQueue;
     QList<ActiveDownload> m_activeDownloads;
     QHash<QString, bool> m_knownPendingRemoteIds;
+    QHash<QString, QString> m_remoteIdByCacheStem;
 };
 
 } // namespace mixxx::library::rest

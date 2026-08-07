@@ -263,11 +263,13 @@ void RestLibraryFeature::slotCurrentPlayingTrackChanged(TrackPointer pTrack) {
     if (!m_followCurrentTrack) {
         return;
     }
-    refreshForTrack(pTrack, false);
+    refreshForTrack(pTrack, false, false);
 }
 
-void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force) {
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+void RestLibraryFeature::refreshForTrack(
+        const TrackPointer& pTrack, bool force, bool publishPlayback) {
+    const RestLibrarySettings settings =
+            RestLibrarySettings::fromConfig(m_pConfig);
     refreshMixManControls(settings);
     if (!settings.isConfigured()) {
         resetMixManSessionState();
@@ -282,7 +284,8 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
     }
 
     m_cacheManager.abortAll();
-    m_pTableModel->setCacheLoadCapabilitiesEnabled(settings.hasAudioDownloadConfigured());
+    m_pTableModel->setCacheLoadCapabilitiesEnabled(
+            settings.hasAudioDownloadConfigured());
     if (settings.useMixManDefaults) {
         const QString sessionConfigKey = mixManSessionConfigKey(settings);
         if (m_mixManSessionConfigKey != sessionConfigKey) {
@@ -296,7 +299,8 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
         resetMixManSessionState();
     }
 
-    const QString trackLocation = pTrack ? normalizedTrackLocation(pTrack->getLocation()) : QString();
+    const QString trackLocation =
+            pTrack ? normalizedTrackLocation(pTrack->getLocation()) : QString();
     if (!force && trackLocation == m_lastRequestedTrackLocation) {
         return;
     }
@@ -305,14 +309,17 @@ void RestLibraryFeature::refreshForTrack(const TrackPointer& pTrack, bool force)
     if (!pTrack) {
         m_currentRemoteId.clear();
         clearRecommendations();
-        setStatusText(tr("No current track. Play or select a track to load recommendations."));
+        setStatusText(tr(
+                "No current track. Play or select a track to load recommendations."));
         return;
     }
 
     const QString remoteId = remoteIdForTrack(pTrack);
     if (!remoteId.isEmpty()) {
         rememberRemoteId(remoteId);
-        publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("playing"));
+        if (publishPlayback) {
+            publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("playing"));
+        }
         if (settings.useMixManDefaults && !m_mixManSession.id.isEmpty()) {
             setStatusText(tr("Loading MixMan authoritative recommendations."));
             m_client.fetchMixManSession(settings, m_mixManSession.id);
@@ -590,7 +597,11 @@ void RestLibraryFeature::slotLoadTrackToPlayerRequested(
                 remoteId,
                 play ? QStringLiteral("playing") : QStringLiteral("loaded"));
     }
+#ifdef __STEM__
+    emit loadTrackToPlayer(pTrack, group, mixxx::StemChannelSelection(), play);
+#else
     emit loadTrackToPlayer(pTrack, group, play);
+#endif
 }
 
 void RestLibraryFeature::requestRecommendationsForRemoteId(

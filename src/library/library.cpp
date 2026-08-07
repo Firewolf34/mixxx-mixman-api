@@ -98,7 +98,6 @@ Library::Library(
 
     m_pRestLibraryFeature = make_parented<mixxx::library::rest::RestLibraryFeature>(
             this,
-            this,
             m_pConfig);
     addFeature(m_pRestLibraryFeature);
 

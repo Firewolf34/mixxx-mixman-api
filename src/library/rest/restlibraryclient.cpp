@@ -36,6 +36,7 @@ const char* kRequestGenerationProperty = "requestGeneration";
 const char* kRequestStartedAtProperty = "requestStartedAt";
 const char* kRequestStageProperty = "requestStage";
 const char* kAuthoritativeGenerationProperty = "authoritativeGeneration";
+const char* kRequestMethodProperty = "requestMethod";
 
 bool isSuccessStatus(int statusCode) {
     return statusCode >= 200 && statusCode < 300;
@@ -577,6 +578,7 @@ void RestLibraryClient::publishMixManSessionPlayback(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionPlaybackOperation);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("POST"));
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
@@ -615,6 +617,7 @@ void RestLibraryClient::publishMixManSessionSnapshot(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionSnapshotOperation);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("PUT"));
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
@@ -656,6 +659,7 @@ void RestLibraryClient::updateMixManSessionIntent(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionIntentOperation);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("PUT"));
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
@@ -681,6 +685,7 @@ void RestLibraryClient::sendMixManSessionHeartbeat(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionHeartbeatOperation);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("POST"));
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
@@ -708,6 +713,7 @@ void RestLibraryClient::claimMixManSessionControl(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionControlClaimOperation);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("POST"));
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
@@ -752,6 +758,7 @@ void RestLibraryClient::selectMixManSessionCandidate(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionCandidateSelectOperation);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("POST"));
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
@@ -800,6 +807,7 @@ void RestLibraryClient::publishMixManPolicyRefreshAction(
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionPolicyRefreshOperation);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("POST"));
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
@@ -1850,25 +1858,26 @@ void RestLibraryClient::slotSessionWriteFinished() {
     const QByteArray responseBody = pReply->readAll();
     RestLibrarySessionWriteStatus status;
     status.operation = pReply->property("operation").toString();
+    const QString requestMethod =
+            pReply->property(kRequestMethodProperty).toString();
     status.statusCode = statusCodeFromReply(*pReply);
     status.success =
             pReply->error() == QNetworkReply::NoError &&
             isSuccessStatus(status.statusCode);
     if (!status.success) {
-        const auto diagnostic = diagnosticForReply(
-                *pReply,
+        const auto diagnostic = diagnosticForReply(*pReply,
                 responseBody,
                 tr("Session write"),
-                QStringLiteral("POST"),
+                requestMethod.isEmpty() ? QStringLiteral("POST")
+                                        : requestMethod,
                 tr("MixMan session write failed."),
                 false);
         status.errorText = diagnostic.summary;
-        kLogger.warning()
-                << "MixMan session write failed"
-                << status.operation
-                << pReply->request().url().toString(QUrl::RemoveUserInfo)
-                << "status" << status.statusCode
-                << "body" << responseSnippet(responseBody);
+        kLogger.warning() << "MixMan session write failed" << status.operation
+                          << pReply->request().url().toString(
+                                     QUrl::RemoveUserInfo)
+                          << "status" << status.statusCode << "body"
+                          << responseSnippet(responseBody);
         emit requestDiagnosticUpdated(diagnostic);
     } else if (status.operation == kSessionPlaybackOperation ||
             status.operation == kSessionControlClaimOperation ||

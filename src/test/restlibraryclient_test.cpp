@@ -561,6 +561,9 @@ TEST(RestLibraryClientTest, IgnoresStaleMixManConnectionTestReply) {
             {},
             500,
             R"json({"detail":"old"})json");
+
+    client.testMixManConnection(newMixManSettings(), {}, true);
+
     MockNetworkReply* pCurrentHealthReply = network.ExpectGet(
             QStringLiteral("/health"),
             {},
@@ -583,7 +586,6 @@ TEST(RestLibraryClientTest, IgnoresStaleMixManConnectionTestReply) {
             201,
             R"json({"session":{"id":"session-1"},"clients":[],"recent_events":[]})json");
 
-    client.testMixManConnection(newMixManSettings(), {}, true);
     client.testMixManConnection(newMixManSettings(), {}, true);
     pCurrentHealthReply->Done();
     pCurrentIndexReply->Done();
@@ -1053,6 +1055,31 @@ TEST(RestLibraryClientTest, PublishesMixManSessionSnapshot) {
     EXPECT_EQ(status.operation, QStringLiteral("session_snapshot"));
 }
 
+TEST(RestLibraryClientTest, ReportsPutForFailedMixManSessionSnapshot) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client,
+            &RestLibraryClient::requestDiagnosticUpdated);
+    MockNetworkReply* pReply =
+            network.ExpectPut(QStringLiteral("/sessions/session-1/snapshot"),
+                    {},
+                    {QStringLiteral("\"client_id\":\"client-1\"")},
+                    422,
+                    R"json({"detail":"invalid snapshot"})json");
+    mixxx::library::rest::RestLibrarySessionSnapshot snapshot;
+    snapshot.clientId = QStringLiteral("client-1");
+
+    client.publishMixManSessionSnapshot(newMixManSettings(),
+            QStringLiteral("session-1"),
+            snapshot);
+    pReply->Done();
+
+    ASSERT_EQ(diagnosticsSpy.count(), 1);
+    const auto diagnostic = qvariant_cast<RestLibraryRequestDiagnostic>(
+            diagnosticsSpy.takeFirst().at(0));
+    EXPECT_EQ(diagnostic.method, QStringLiteral("PUT"));
+}
+
 TEST(RestLibraryClientTest, UpdatesMixManSessionIntent) {
     MockNetworkAccessManager network;
     RestLibraryClient client(&network);
@@ -1093,6 +1120,31 @@ TEST(RestLibraryClientTest, UpdatesMixManSessionIntent) {
                     statusSpy.takeFirst().at(0));
     EXPECT_TRUE(status.success);
     EXPECT_EQ(status.operation, QStringLiteral("session_intent"));
+}
+
+TEST(RestLibraryClientTest, ReportsPutForFailedMixManSessionIntent) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client,
+            &RestLibraryClient::requestDiagnosticUpdated);
+    MockNetworkReply* pReply =
+            network.ExpectPut(QStringLiteral("/sessions/session-1/intent"),
+                    {},
+                    {QStringLiteral("\"client_id\":\"client-1\"")},
+                    422,
+                    R"json({"detail":"invalid intent"})json");
+    mixxx::library::rest::RestLibrarySessionIntent intent;
+    intent.clientId = QStringLiteral("client-1");
+
+    client.updateMixManSessionIntent(newMixManSettings(),
+            QStringLiteral("session-1"),
+            intent);
+    pReply->Done();
+
+    ASSERT_EQ(diagnosticsSpy.count(), 1);
+    const auto diagnostic = qvariant_cast<RestLibraryRequestDiagnostic>(
+            diagnosticsSpy.takeFirst().at(0));
+    EXPECT_EQ(diagnostic.method, QStringLiteral("PUT"));
 }
 
 TEST(RestLibraryClientTest, SendsMixManSessionHeartbeat) {

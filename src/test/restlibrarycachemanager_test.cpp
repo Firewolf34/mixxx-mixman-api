@@ -185,7 +185,7 @@ TEST(RestLibraryCacheManagerTest, DownloadsAudioToFinalCacheFile) {
             QByteArrayLiteral("audio bytes"));
 
     manager.cacheTracks({newTrack(QStringLiteral("42"))}, newSettings(tempDir.path()));
-    pReply->Done();
+    pReply->Done(true);
 
     ASSERT_GE(spy.count(), 3);
     const RestLibraryCacheResult result = lastResult(spy);
@@ -210,7 +210,7 @@ TEST(RestLibraryCacheManagerTest, DownloadPreservesBaseUrlPath) {
     settings.baseUrl = QUrl(QStringLiteral("http://example.invalid/api"));
 
     manager.cacheTracks({newTrack(QStringLiteral("42"))}, settings);
-    pReply->Done();
+    pReply->Done(true);
 }
 
 TEST(RestLibraryCacheManagerTest, DownloadPrunesOlderFilesButKeepsNewFile) {
@@ -235,13 +235,26 @@ TEST(RestLibraryCacheManagerTest, DownloadPrunesOlderFilesButKeepsNewFile) {
     RestLibrarySettings settings = newSettings(tempDir.path());
     settings.cacheMaxMegabytes = 1;
 
-    manager.cacheTracks({newTrack(QStringLiteral("2"))}, settings);
-    pReply->Done();
+    manager.cacheTracks(
+            {newTrack(QStringLiteral("1")), newTrack(QStringLiteral("2"))},
+            settings);
+    pReply->Done(true);
 
     const RestLibraryCacheResult result = lastResult(spy);
     EXPECT_EQ(result.cacheState, RestLibraryCacheState::Ready);
     EXPECT_TRUE(QFile::exists(result.cachedFilePath));
     EXPECT_FALSE(QFile::exists(cacheFilePath(tempDir.path(), QStringLiteral("1"))));
+    bool evictionReported = false;
+    for (const auto& arguments : spy) {
+        const auto cacheResult =
+                qvariant_cast<RestLibraryCacheResult>(arguments.at(0));
+        if (cacheResult.remoteId == QStringLiteral("1") &&
+                cacheResult.cacheState == RestLibraryCacheState::Stale) {
+            evictionReported = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(evictionReported);
 }
 
 TEST(RestLibraryCacheManagerTest, OversizedDownloadFailsAndIsNotFinalized) {
@@ -262,9 +275,10 @@ TEST(RestLibraryCacheManagerTest, OversizedDownloadFailsAndIsNotFinalized) {
     settings.cacheMaxMegabytes = 1;
 
     manager.cacheTracks({newTrack(QStringLiteral("42"))}, settings);
-    pReply->Done();
+    pReply->Done(true);
 
     ASSERT_GE(spy.count(), 3);
+    EXPECT_TRUE(pReply->WasAborted());
     const RestLibraryCacheResult result = lastResult(spy);
     EXPECT_EQ(result.cacheState, RestLibraryCacheState::Failed);
     EXPECT_TRUE(QDir(tempDir.path()).entryList(QStringList{QStringLiteral("*.mp3")}).isEmpty());
@@ -313,7 +327,7 @@ TEST(RestLibraryCacheManagerTest, ReportsFailedForHttpError) {
             R"json({"detail":"bad token"})json");
 
     manager.cacheTracks({newTrack(QStringLiteral("42"))}, newSettings(tempDir.path()));
-    pReply->Done();
+    pReply->Done(true);
 
     ASSERT_GE(spy.count(), 3);
     const RestLibraryCacheResult result = lastResult(spy);
@@ -345,7 +359,7 @@ TEST(RestLibraryCacheManagerTest, ReportsFailedForEmptyBody) {
             QByteArray());
 
     manager.cacheTracks({newTrack(QStringLiteral("42"))}, newSettings(tempDir.path()));
-    pReply->Done();
+    pReply->Done(true);
 
     ASSERT_GE(spy.count(), 3);
     EXPECT_EQ(lastResult(spy).cacheState, RestLibraryCacheState::Failed);
@@ -369,7 +383,7 @@ TEST(RestLibraryCacheManagerTest, ReportsFailedForUnknownAudioType) {
     manager.cacheTracks(
             {newTrack(QStringLiteral("42"), QString())},
             newSettings(tempDir.path()));
-    pReply->Done();
+    pReply->Done(true);
 
     ASSERT_GE(spy.count(), 3);
     EXPECT_EQ(lastResult(spy).cacheState, RestLibraryCacheState::Failed);

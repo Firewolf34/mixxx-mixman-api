@@ -74,7 +74,7 @@ class RestLibraryFeature final : public LibraryFeature {
             const mixxx::library::rest::RestLibraryCacheResult& result);
 
   private:
-    void refreshForTrack(const TrackPointer& pTrack, bool force);
+    void refreshForTrack(const TrackPointer& pTrack, bool force, bool publishPlayback = true);
     void requestRecommendationsForRemoteId(
             const RestLibrarySettings& settings,
             const QString& remoteId);

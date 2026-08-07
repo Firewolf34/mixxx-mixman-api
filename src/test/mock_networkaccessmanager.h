@@ -43,8 +43,11 @@ class MockNetworkReply : public QNetworkReply {
     void SetRequest(const QNetworkRequest& request);
     virtual void setAttribute(QNetworkRequest::Attribute code, const QVariant& value);
 
-    // Call this when you are ready for the finished() signal.
-    void Done();
+    // Call this when you are ready for the reply signals.
+    void Done(bool emitReadyRead = false);
+    bool WasAborted() const {
+        return m_aborted;
+    }
 
   protected:
     void abort() override;
@@ -53,6 +56,7 @@ class MockNetworkReply : public QNetworkReply {
 
     QByteArray m_data;
     qint64 m_pos;
+    bool m_aborted = false;
 };
 
 class MockNetworkAccessManager : public QNetworkAccessManager {

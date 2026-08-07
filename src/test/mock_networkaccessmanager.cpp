@@ -222,6 +222,7 @@ void MockNetworkReply::SetRequest(const QNetworkRequest& request) {
 }
 
 void MockNetworkReply::abort() {
+    m_aborted = true;
     setAttribute(QNetworkRequest::HttpStatusCodeAttribute, {});
     setError(OperationCanceledError, tr("Operation canceled"));
 #if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
@@ -249,8 +250,14 @@ qint64 MockNetworkReply::writeData(const char* data, qint64 len) {
     return -1;
 }
 
-void MockNetworkReply::Done() {
+void MockNetworkReply::Done(bool emitReadyReadSignal) {
     setOpenMode(QIODevice::ReadOnly);
+    if (emitReadyReadSignal) {
+        emit readyRead();
+    }
+    if (m_aborted) {
+        return;
+    }
     emit finished();
 }
 
