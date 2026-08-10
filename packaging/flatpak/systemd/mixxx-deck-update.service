@@ -1,0 +1,18 @@
+[Unit]
+Description=Check and install a signed idle Mixxx deck update
+StartLimitIntervalSec=30min
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/nm-online -q --timeout=180
+ExecStart=%h/.local/bin/mixxx-deck auto-update
+TimeoutStartSec=15min
+Restart=on-failure
+RestartSec=2min
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=default.target

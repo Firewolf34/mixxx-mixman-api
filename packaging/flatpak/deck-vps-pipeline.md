@@ -10,11 +10,11 @@ performance-critical. The laptop must not compile Mixxx. Forgejo is the source
 authority, a dedicated VPS runner does build work, Caddy distributes immutable
 artifacts, and a small client stages/activates/rolls back user Flatpaks.
 
-GitHub is not required by the authoritative publication pipeline. The GitHub
-fork provides an optional faster artifact-only build from `github/candidate`;
-it never updates Forgejo publication state or replaces Forgejo as source
-authority. A configured deck client may select its verified, short-lived
-Actions artifact when it is newer than the Forgejo candidate.
+GitHub is not required by the authoritative source pipeline. The GitHub fork
+provides an optional faster build from `github/candidate`. A dedicated
+Polinaria promoter validates that Actions artifact and may import it into the
+same durable, GPG-signed Flatpak repository used by Coal. This does not replace
+Forgejo as source authority.
 
 ## Goals
 
@@ -28,9 +28,13 @@ Actions artifact when it is newer than the Forgejo candidate.
 - Preserve the Mixxx profile and Flatpak application data.
 - Snapshot the installed app before first replacement so rollback works on the
   first candidate.
-- Keep the GitHub build optional, independently triggered, and artifact-only.
-- Let a configured deck choose the newest fully verified candidate without
-  weakening Forgejo publication authority.
+- Keep the GitHub build optional and independently triggered.
+- Promote either provider through one durable signed Flatpak repository without
+  placing a GitHub credential on the deck.
+- Check for updates immediately after Coal networking is ready at boot and
+  every four hours thereafter.
+- Automatically activate only when Mixxx is stopped, the shared launch lock is
+  free, and the laptop is on AC power.
 
 ## Non-Goals
 
@@ -38,7 +42,7 @@ Actions artifact when it is newer than the Forgejo candidate.
 - This does not publish to Flathub.
 - This does not support architectures other than `x86_64`.
 - This does not automatically stop or restart Mixxx.
-- This does not automatically activate new builds on any deck.
+- This never automatically activates beneath a running Mixxx process.
 - This does not turn a deck laptop into a build or CI worker.
 - This does not replace source review, hardware acceptance, or operator
   judgment.
@@ -86,6 +90,8 @@ tools/deck_flatpak_deploy.sh on the DJ laptop
 | VPS orchestration | `total-infra/total-infra`, branch `dev` |
 | Latest candidate | `https://forge.polinaria.world/artifacts/latest.json` |
 | Immutable artifacts | `/artifacts/builds/<source-sha>/` |
+| Signed Flatpak descriptor | `/artifacts/flatpak/mixxx.flatpakrepo` |
+| Signed Flatpak repository | `/artifacts/flatpak/repo` |
 | Flatpak app/ref | `app/org.mixxx.Mixxx/x86_64/master` |
 
 Port 900 is Forgejo Git SSH. Git access over that port does not imply an
@@ -124,7 +130,7 @@ git push github <candidate-sha>:refs/heads/github/candidate
 The Forgejo push runs `.forgejo/workflows/deck-flatpak.yml` on the VPS and may
 publish `latest.json`. The GitHub push runs
 `.github/workflows/github-deck-candidate.yml` on a GitHub-hosted runner and
-uploads a three-day `Mixxx-flatpak-x86_64` artifact containing `Mixxx.flatpak`
+uploads a 14-day `Mixxx-flatpak-x86_64` artifact containing `Mixxx.flatpak`
 and its GitHub candidate manifest. The same commit may be promoted to either or
 both refs. Historical refs such as `github-main-deck-workflow` must not be
 recreated.
@@ -173,15 +179,14 @@ The action inputs pin the exported repository to `repo` and the initialized
 build directory to `build_flatpak`. The later bundle and smoke-test commands
 consume those exact paths; do not rely on the action's provider defaults.
 
-GitHub artifacts do not produce the Forgejo source archive or public
-publication manifest, and do not update `latest.json`. They are a temporary
-fallback selected only by the deck client with a configured GitHub token. The
-client lists only successful `github/candidate` workflow runs, requires an
+GitHub artifacts do not produce the Forgejo source archive. The Polinaria
+promoter lists only successful `github/candidate` workflow runs, requires an
 unexpired exact artifact, verifies the API SHA-256 digest of its ZIP archive,
 requires exactly the bundle and metadata files, verifies the metadata/run/SHA
 contract and bundle checksum/size, then imports and fscks the bundle and checks
-its OSTree commit subject. These checks make GitHub a verified build provider,
-not a source or publication authority.
+its OSTree commit subject. It finally signs the OSTree commit and repository
+summary. These checks make GitHub a verified build provider, not source
+authority.
 
 ## Forgejo Workflow
 
@@ -431,6 +436,9 @@ A failure before step 20 leaves the previous `latest.json` unchanged.
 ```text
 /srv/artifacts/
 ├── latest.json
+├── flatpak/
+│   ├── mixxx.flatpakrepo
+│   └── repo/
 └── builds/
     └── <source-sha>/
         ├── Mixxx.flatpak
@@ -448,7 +456,8 @@ https://forge.polinaria.world/artifacts/builds/<sha>/source.tar.zst
 ```
 
 Caddy serves `latest.json` with `Cache-Control: no-store`. Build paths receive
-a long-lived immutable cache policy.
+a long-lived immutable cache policy. The Flatpak descriptor and repository
+summaries are never cached; repository objects and static deltas are immutable.
 
 `/data/logs/latest.log` is not part of this layout and must never be added to
 it or served by Caddy.
@@ -536,6 +545,7 @@ mixxx-deck stage [auto|forgejo|github|forgejo:<source-sha>|github:<source-sha>]
 mixxx-deck activate [auto|forgejo|github|forgejo:<source-sha>|github:<source-sha>]
 mixxx-deck deploy [auto|forgejo|github|forgejo:<source-sha>|github:<source-sha>]
 mixxx-deck rollback
+mixxx-deck auto-update
 mixxx-deck run [mixxx-args...]
 ```
 
@@ -595,7 +605,29 @@ Activates the cached previous bundle. Mixxx must be stopped.
 
 ### Run
 
-Launches the user Flatpak. It does not select or install a candidate.
+Launches the user Flatpak while holding a shared deployment lock for the
+process lifetime. The local desktop entry routes normal graphical launches
+through this command and preserves Flatpak file forwarding.
+
+### Automatic update
+
+The user systemd service starts immediately with the lingering user manager at
+boot, waits up to three minutes for NetworkManager, and is also triggered every
+four hours. It reads signed repository metadata on any power source. If a new
+commit exists, it downloads and deploys only on AC power.
+
+Before downloading, it exits successfully when Mixxx is running. After a
+download-only Flatpak pull it attempts the nonblocking exclusive deployment
+lock and checks `flatpak ps` again. A launch during download therefore leaves a
+verified pending update without changing the installed deployment. Activation
+exports the current build for rollback, deploys from the local Flatpak object
+cache, verifies the installed commit and source SHA, and runs `mixxx --version`
+offscreen with an isolated temporary home. Failure restores the previous
+commit. It never stops or restarts Mixxx.
+
+`loginctl enable-linger <deck-user>` is required once so the user service starts
+without a graphical login. Status is written atomically under
+`~/.local/state/mixxx-deck/` and is also available in the user journal.
 
 ## Profile Preservation
 
@@ -710,6 +742,9 @@ The infrastructure agent must:
 12. manually dispatch the first build off-hours on `deck/candidate` if its push predates
    Actions enablement;
 13. watch host pressure and verify `latest.json` plus all immutable files.
+14. provision the non-login `mixxx-promoter`, its repository-scoped GitHub
+    Actions-read credential, and a dedicated Flatpak repository signing key;
+15. verify the signed descriptor and repository with a clean Flatpak remote.
 
 See `docs/OPERATIONS.md` in the `andrew/total-infra` repository for exact
 server commands.
@@ -826,6 +861,8 @@ When changing workflow, publisher, client, manifest, or infrastructure:
 - update deck-local `AGENTS.md` and operator docs for changed safety behavior;
 - run `bash -n` on shell scripts;
 - run `tools/check_deck_flatpak_manifest.sh`;
+- run `tools/deck_flatpak_auto_update_test.sh`;
+- validate the systemd user units with `systemd-analyze verify`;
 - validate the Forgejo workflow schema;
 - run `git diff --check`;
 - perform the actual build only on the VPS runner;

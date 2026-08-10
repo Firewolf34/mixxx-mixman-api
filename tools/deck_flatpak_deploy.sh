@@ -26,6 +26,10 @@ FLATHUB_REPO_URL="https://flathub.org/repo/flathub.flatpakrepo"
 UDEV_RULE_SOURCE="res/linux/mixxx-usb-uaccess.rules"
 UDEV_RULE_TARGET="/etc/udev/rules.d/69-mixxx-usb-uaccess.rules"
 GITHUB_AUTH_CONFIG=""
+AUTO_UPDATE_CLIENT="${HOME}/.local/bin/deck_flatpak_auto_update.sh"
+SYSTEMD_USER_ROOT="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
+DESKTOP_USER_ROOT="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
+EXPORTED_DESKTOP="${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/exports/share/applications/${APP_ID}.desktop"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -48,6 +52,7 @@ Usage:
   mixxx-deck deploy [auto|forgejo|github|forgejo:<sha>|github:<sha>]
   mixxx-deck rollback
   mixxx-deck status
+  mixxx-deck auto-update
   mixxx-deck run [mixxx-args...]
 
 auto (also accepted as latest) compares verified Forgejo and GitHub candidates by
@@ -258,19 +263,35 @@ validate_forgejo_manifest() {
         --arg app_id "${APP_ID}" \
         --arg arch "${EXPECTED_ARCH}" \
         --arg publication_root "${publication_root}" '
-        .schema_version == 1 and
-        .channel == "deck-candidate" and
         .app_id == $app_id and
         .arch == $arch and
-        .source_ref == "refs/heads/deck/candidate" and
         (.source_sha | type == "string" and test("^[0-9a-f]{40}$")) and
         (.built_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
-        (.source_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
         (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
         (.size_bytes | type == "number" and . > 0 and floor == .) and
         (.bundle_url == ($publication_root + "/builds/" + .source_sha + "/Mixxx.flatpak")) and
-        (.source_url == ($publication_root + "/builds/" + .source_sha + "/source.tar.zst"))
-        ' "${manifest}" >/dev/null || die "Forgejo manifest validation failed."
+        (
+            (
+                .schema_version == 1 and
+                .channel == "deck-candidate" and
+                .source_ref == "refs/heads/deck/candidate" and
+                (.source_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+                (.source_url == ($publication_root + "/builds/" + .source_sha + "/source.tar.zst"))
+            ) or (
+                .schema_version == 2 and
+                (.provider == "github-actions" or .provider == "forgejo-actions") and
+                (
+                    (.channel == "github-candidate" and
+                     .source_ref == "refs/heads/github/candidate" and
+                     .provider == "github-actions") or
+                    (.channel == "deck-candidate" and
+                     .source_ref == "refs/heads/deck/candidate" and
+                     .provider == "forgejo-actions")
+                ) and
+                (.ostree_commit | type == "string" and test("^[0-9a-f]{64}$"))
+            )
+        )
+        ' "${manifest}" >/dev/null || die "Polinaria manifest validation failed."
 
     if [[ "${requested_sha}" != latest ]]; then
         [[ "$(jq -r '.source_sha' "${manifest}")" == "${requested_sha}" ]] ||
@@ -810,6 +831,9 @@ print_status() {
     echo "GitHub fallback: $(github_token_configured && echo configured || echo not-configured)"
     echo "Mixxx running: $(is_mixxx_running && echo yes || echo no)"
     flatpak info --user "${APP_ID}" 2>/dev/null | sed -n '1,12p' || true
+    if [[ -r "${STATE_ROOT}/auto-update-status.json" ]]; then
+        jq . "${STATE_ROOT}/auto-update-status.json"
+    fi
 }
 
 setup_client() {
@@ -821,13 +845,44 @@ setup_client() {
     require_command unzip
     require_command ostree
     ensure_directories
+    [[ -r "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" ]] ||
+        die "Missing deck_flatpak_auto_update.sh beside the setup script."
+    [[ -r "${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.service" ]] ||
+        die "Missing Mixxx updater systemd service."
+    [[ -r "${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.timer" ]] ||
+        die "Missing Mixxx updater systemd timer."
     install_udev_rules
-    mkdir -p "${HOME}/.local/bin"
+    mkdir -p "${HOME}/.local/bin" "${SYSTEMD_USER_ROOT}" "${DESKTOP_USER_ROOT}"
     if [[ ! "${OSTREE_VALIDATION_HELPER}" -ef "${installed_helper}" ]]; then
         install -m 0644 "${OSTREE_VALIDATION_HELPER}" "${installed_helper}"
     fi
+    install -m 0755 "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" "${AUTO_UPDATE_CLIENT}"
+    install -m 0644 \
+        "${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.service" \
+        "${SYSTEMD_USER_ROOT}/mixxx-deck-update.service"
+    install -m 0644 \
+        "${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.timer" \
+        "${SYSTEMD_USER_ROOT}/mixxx-deck-update.timer"
     install -m 0755 "${BASH_SOURCE[0]}" "${HOME}/.local/bin/mixxx-deck"
-    echo "Installed ${HOME}/.local/bin/mixxx-deck and its OSTree validator"
+    "${AUTO_UPDATE_CLIENT}" configure-remote
+    if [[ -r "${EXPORTED_DESKTOP}" ]]; then
+        awk -v launcher="${HOME}/.local/bin/mixxx-deck" '
+            /^Exec=/ {
+                print "Exec=" launcher " run @@u %U @@"
+                next
+            }
+            { print }
+        ' "${EXPORTED_DESKTOP}" >"${DESKTOP_USER_ROOT}/${APP_ID}.desktop.tmp"
+        install -m 0644 "${DESKTOP_USER_ROOT}/${APP_ID}.desktop.tmp" \
+            "${DESKTOP_USER_ROOT}/${APP_ID}.desktop"
+        rm -f -- "${DESKTOP_USER_ROOT}/${APP_ID}.desktop.tmp"
+        command -v update-desktop-database >/dev/null 2>&1 &&
+            update-desktop-database "${DESKTOP_USER_ROOT}" || true
+    fi
+    systemctl --user daemon-reload
+    systemctl --user enable mixxx-deck-update.service mixxx-deck-update.timer
+    echo "Installed mixxx-deck, signed-repository updater, desktop lock, and user units."
+    echo "Run 'sudo loginctl enable-linger ${USER}' once so boot checks run while signed out."
 }
 
 [[ "${MANIFEST_URL}" =~ ^https://[^/]+/.+/latest\.json$ ]] ||
@@ -881,9 +936,20 @@ case "${command_name}" in
         [[ $# -eq 0 ]] || die "status takes no arguments."
         print_status
         ;;
+    auto-update)
+        [[ $# -eq 0 ]] || die "auto-update takes no arguments."
+        [[ -x "${AUTO_UPDATE_CLIENT}" ]] ||
+            die "Automatic updater is not installed; run setup from the repository."
+        exec "${AUTO_UPDATE_CLIENT}" auto-update
+        ;;
     run)
         ensure_flatpak
-        flatpak run "${APP_ID}" "$@"
+        require_command flock
+        ensure_directories
+        exec 8>"${LOCK_FILE}"
+        flock -s 8
+        flatpak run --branch=master --arch="${EXPECTED_ARCH}" --command=mixxx \
+            --file-forwarding "${APP_ID}" "$@"
         ;;
     -h|--help|help)
         usage

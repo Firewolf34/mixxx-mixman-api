@@ -1,0 +1,252 @@
+#!/bin/bash
+# Idle-only updater for the signed Polinaria Mixxx Flatpak repository.
+
+set -euo pipefail
+
+APP_ID="${MIXXX_DECK_APP_ID:-org.mixxx.Mixxx}"
+EXPECTED_ARCH="${MIXXX_DECK_ARCH:-x86_64}"
+REMOTE_NAME="${MIXXX_DECK_REMOTE_NAME:-polinaria-mixxx}"
+REMOTE_DESCRIPTOR_URL="${MIXXX_DECK_REMOTE_DESCRIPTOR_URL:-https://forge.polinaria.world/artifacts/flatpak/mixxx.flatpakrepo}"
+STATE_ROOT="${XDG_STATE_HOME:-${HOME}/.local/state}/mixxx-deck"
+CACHE_ROOT="${XDG_CACHE_HOME:-${HOME}/.cache}/mixxx-deck"
+STATUS_FILE="${STATE_ROOT}/auto-update-status.json"
+UPDATE_LOCK="${STATE_ROOT}/auto-update.lock"
+DEPLOY_LOCK="${STATE_ROOT}/deploy.lock"
+ROLLBACK_ROOT="${CACHE_ROOT}/repo-rollback"
+USER_REPO="${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/repo"
+
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || die "Required command '$1' is missing."
+}
+
+is_mixxx_running() {
+    flatpak ps --columns=application 2>/dev/null | grep -Fxq "${APP_ID}"
+}
+
+installed_commit() {
+    flatpak info --user --show-commit "${APP_ID}" 2>/dev/null
+}
+
+installed_source_sha() {
+    flatpak info --user "${APP_ID}" 2>/dev/null |
+        sed -nE 's/^[[:space:]]*Subject:[[:space:]]*Built from ([0-9a-f]{40}).*$/\1/p' |
+        head -n 1
+}
+
+available_commit() {
+    flatpak remote-info --user --show-commit "${REMOTE_NAME}" "${APP_ID}"
+}
+
+available_source_sha() {
+    flatpak remote-info --user "${REMOTE_NAME}" "${APP_ID}" |
+        sed -nE 's/^[[:space:]]*Subject:[[:space:]]*Built from ([0-9a-f]{40}).*$/\1/p' |
+        head -n 1
+}
+
+write_status() {
+    local result="$1"
+    local message="$2"
+    local installed="${3:-}"
+    local available="${4:-}"
+    local pending="${5:-}"
+    local temporary
+    temporary="$(mktemp "${STATE_ROOT}/status.XXXXXX")"
+    jq -n \
+        --arg checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg result "${result}" \
+        --arg message "${message}" \
+        --arg installed_commit "${installed}" \
+        --arg available_commit "${available}" \
+        --arg pending_commit "${pending}" \
+        '{
+            schema_version: 1,
+            checked_at: $checked_at,
+            result: $result,
+            message: $message,
+            installed_commit: $installed_commit,
+            available_commit: $available_commit,
+            pending_commit: $pending_commit
+        }' >"${temporary}"
+    mv -f -- "${temporary}" "${STATUS_FILE}"
+}
+
+remote_is_configured() {
+    flatpak remote-info --user --show-commit "${REMOTE_NAME}" "${APP_ID}" >/dev/null 2>&1
+}
+
+configure_remote() {
+    flatpak remote-add --user --if-not-exists --from \
+        "${REMOTE_NAME}" "${REMOTE_DESCRIPTOR_URL}"
+    remote_is_configured ||
+        die "Signed remote ${REMOTE_NAME} does not expose ${APP_ID}."
+}
+
+snapshot_installed_commit() {
+    local source_sha="$1"
+    local commit="$2"
+    local snapshot_dir bundle part checksum
+    [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] ||
+        die "Installed build has no valid source SHA for rollback."
+    [[ "${commit}" =~ ^[0-9a-f]{64}$ ]] ||
+        die "Installed build has no valid OSTree commit for rollback."
+    snapshot_dir="${ROLLBACK_ROOT}/${source_sha}"
+    bundle="${snapshot_dir}/Mixxx.flatpak"
+    part="${bundle}.part"
+    checksum="${snapshot_dir}/Mixxx.flatpak.sha256"
+    mkdir -p "${snapshot_dir}"
+    if [[ -s "${bundle}" && -s "${checksum}" ]] &&
+            [[ "$(sha256sum "${bundle}" | awk '{print $1}')" == "$(<"${checksum}")" ]]; then
+        printf '%s\n' "${snapshot_dir}"
+        return
+    fi
+    rm -f -- "${part}"
+    flatpak build-bundle --arch="${EXPECTED_ARCH}" \
+        --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+        "${USER_REPO}" "${part}" "${APP_ID}" master
+    [[ -s "${part}" ]] || die "Could not export the installed rollback build."
+    mv -f -- "${part}" "${bundle}"
+    sha256sum "${bundle}" | awk '{print $1}' >"${checksum}"
+    printf '%s\n' "${commit}" >"${snapshot_dir}/ostree-commit"
+    printf '%s\n' "${snapshot_dir}"
+}
+
+rollback_commit() {
+    local old_commit="$1"
+    local snapshot_dir="$2"
+    echo "Automatic validation failed; restoring ${old_commit}." >&2
+    if flatpak update --user --app --no-pull --commit="${old_commit}" \
+            --noninteractive -y "${APP_ID}"; then
+        return
+    fi
+    flatpak install --user --bundle --reinstall --noninteractive -y \
+        "${snapshot_dir}/Mixxx.flatpak"
+}
+
+smoke_installed_build() (
+    local smoke_home
+    smoke_home="$(mktemp -d)"
+    trap 'rm -rf -- "${smoke_home}"' EXIT
+    timeout 30 flatpak run \
+        --command=mixxx \
+        --env=QT_QPA_PLATFORM=offscreen \
+        --env="HOME=${smoke_home}" \
+        "${APP_ID}" --version
+)
+
+prune_rollback_snapshots() {
+    local path kept=0
+    while IFS= read -r path; do
+        kept=$((kept + 1))
+        ((kept <= 3)) && continue
+        [[ "${path}" == "${ROLLBACK_ROOT}/"* ]] ||
+            die "Refusing to prune unexpected rollback path ${path}."
+        rm -rf -- "${path}"
+    done < <(
+        find "${ROLLBACK_ROOT}" -mindepth 1 -maxdepth 1 -type d \
+            -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-
+    )
+}
+
+auto_update() {
+    local old_commit new_commit old_source new_source snapshot_dir
+    require_command flatpak
+    require_command flock
+    require_command jq
+    require_command on_ac_power
+    require_command sha256sum
+    require_command timeout
+    mkdir -p "${STATE_ROOT}" "${ROLLBACK_ROOT}"
+
+    exec 8>"${UPDATE_LOCK}"
+    if ! flock -n 8; then
+        echo "Another Mixxx update check is already running."
+        return 0
+    fi
+
+    remote_is_configured ||
+        die "Signed remote ${REMOTE_NAME} is not configured; run mixxx-deck setup."
+    old_commit="$(installed_commit)"
+    new_commit="$(available_commit)"
+    old_source="$(installed_source_sha || true)"
+    new_source="$(available_source_sha || true)"
+    [[ "${old_commit}" =~ ^[0-9a-f]{64}$ ]] || die "Installed OSTree commit is invalid."
+    [[ "${new_commit}" =~ ^[0-9a-f]{64}$ ]] || die "Available OSTree commit is invalid."
+    [[ "${new_source}" =~ ^[0-9a-f]{40}$ ]] || die "Available source provenance is invalid."
+
+    if [[ "${old_commit}" == "${new_commit}" ]]; then
+        write_status up-to-date "Installed build is current." \
+            "${old_commit}" "${new_commit}"
+        echo "Mixxx is up to date at ${new_source}."
+        return 0
+    fi
+    if ! on_ac_power; then
+        write_status deferred-battery "Update is pending until AC power is available." \
+            "${old_commit}" "${new_commit}" "${new_commit}"
+        echo "Mixxx update ${new_source} is pending; Coal is on battery."
+        return 0
+    fi
+    if is_mixxx_running; then
+        write_status deferred-running "Update is pending because Mixxx is running." \
+            "${old_commit}" "${new_commit}" "${new_commit}"
+        echo "Mixxx update ${new_source} is pending; Mixxx is running."
+        return 0
+    fi
+
+    echo "Downloading signed Mixxx update ${new_source} without deploying it..."
+    flatpak update --user --app --no-deploy --noninteractive -y "${APP_ID}"
+
+    exec 9>"${DEPLOY_LOCK}"
+    if ! flock -n 9; then
+        write_status deferred-running "Update was downloaded but the launch lock is active." \
+            "${old_commit}" "${new_commit}" "${new_commit}"
+        echo "Mixxx update was downloaded and will activate after Mixxx exits."
+        return 0
+    fi
+    if is_mixxx_running; then
+        write_status deferred-running "Update was downloaded but Mixxx started." \
+            "${old_commit}" "${new_commit}" "${new_commit}"
+        echo "Mixxx started during download; activation is deferred."
+        return 0
+    fi
+
+    snapshot_dir="$(snapshot_installed_commit "${old_source}" "${old_commit}")"
+    if ! flatpak update --user --app --no-pull --noninteractive -y "${APP_ID}"; then
+        rollback_commit "${old_commit}" "${snapshot_dir}"
+        write_status rolled-back "Deployment failed and the previous commit was restored." \
+            "${old_commit}" "${new_commit}" "${new_commit}"
+        return 1
+    fi
+    if [[ "$(installed_commit)" != "${new_commit}" ]] ||
+            [[ "$(installed_source_sha || true)" != "${new_source}" ]] ||
+            ! smoke_installed_build; then
+        rollback_commit "${old_commit}" "${snapshot_dir}"
+        write_status rolled-back "Validation failed and the previous commit was restored." \
+            "${old_commit}" "${new_commit}" "${new_commit}"
+        return 1
+    fi
+
+    prune_rollback_snapshots
+    write_status updated "Signed update installed and validated." \
+        "${new_commit}" "${new_commit}"
+    echo "Activated and validated Mixxx ${new_source}."
+}
+
+case "${1:-auto-update}" in
+    auto-update)
+        [[ $# -eq 1 || $# -eq 0 ]] || die "auto-update takes no arguments."
+        auto_update
+        ;;
+    configure-remote)
+        [[ $# -eq 1 ]] || die "configure-remote takes no arguments."
+        require_command flatpak
+        configure_remote
+        ;;
+    *)
+        die "Usage: $0 [auto-update|configure-remote]"
+        ;;
+esac

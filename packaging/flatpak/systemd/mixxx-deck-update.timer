@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Mixxx deck update check every four hours
+
+[Timer]
+OnUnitInactiveSec=4h
+AccuracySec=1min
+Unit=mixxx-deck-update.service
+
+[Install]
+WantedBy=timers.target

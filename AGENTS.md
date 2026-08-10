@@ -32,8 +32,10 @@ Before changing the deck pipeline, read:
   `https://github.com/Firewolf34/mixxx-mixman-api.git`
 - Official OSS upstream:
   `https://github.com/mixxxdj/mixxx.git`
-- Forgejo is the source and published-artifact authority. GitHub is an optional
-  faster fallback builder and never updates Forgejo publication state.
+- Forgejo is the source authority. GitHub is an optional faster builder; the
+  Polinaria promoter may validate and import its `github/candidate` artifact
+  into the GPG-signed public Flatpak repository without changing source
+  authority.
 - `deck/candidate` triggers the Forgejo build/publish path.
 - `github/candidate` triggers the GitHub artifact-only build path.
 - Port 900 is Forgejo Git SSH, not proof of an OS-level VPS shell.
@@ -64,7 +66,8 @@ Before changing the deck pipeline, read:
 - `deck/candidate` and `github/candidate` are release/build pointers, not
   development branches. Promote an exact reviewed commit reachable from `dev`.
   Forgejo builds and publishes `deck/candidate`; GitHub builds and retains a
-  short-lived Actions artifact for `github/candidate`.
+  14-day Actions artifact for `github/candidate`, which the Polinaria promoter
+  may import into the durable signed repository.
 - Short-lived `feature/*` and `fix/*` branches are optional implementation
   aids. Merge them into `dev`, push `dev`, then delete them only after their
   commits are reachable from `dev`.
@@ -107,7 +110,8 @@ Before changing the deck pipeline, read:
 - Never run Flatpak Builder, CMake/Ninja builds, heavy tests, CI runners, or
   sustained build workloads on a deck.
 - Never automatically stop, restart, activate, or roll back Mixxx during a DJ
-  session.
+  session. The signed-repository updater may activate only after the shared
+  launch lock and `flatpak ps` both prove Mixxx is idle.
 - `check` and `stage` may run while Mixxx is active; activation and rollback
   must refuse.
 - Preserve the Mixxx database, profile, preferences, analysis data, crates,
@@ -133,6 +137,9 @@ Before changing the deck pipeline, read:
 - SHA build directories are immutable.
 - Update `latest.json` atomically only after all validation passes.
 - Do not let a superseded job replace `latest.json`.
+- The durable client update channel is the GPG-signed Flatpak repository under
+  `/artifacts/flatpak/repo`; publish its signed summary only after bundle
+  checksum, manifest, OSTree ref, and source-subject validation.
 - Treat an existing immutable-build checksum mismatch as an incident.
 - Treat a dependency source checksum mismatch as a supply-chain check, not a
   value to copy from an error message. Compare the received tree with the
@@ -242,6 +249,12 @@ Before changing the deck pipeline, read:
   never print, log, or commit it.
 - Take an exclusive lock for activation.
 - Refuse activation and rollback while Mixxx runs.
+- Normal desktop launches must use `mixxx-deck run` and hold a shared lock for
+  the Mixxx process lifetime. Automatic activation uses a nonblocking exclusive
+  lock and rechecks `flatpak ps` after download.
+- The user service starts at boot through systemd linger, waits for
+  NetworkManager, checks every four hours, and downloads/deploys only on AC
+  power. A battery or running-session deferral is a successful no-change check.
 - Snapshot a different installed user Flatpak before replacing it.
 - Verify cached checksums before installation.
 - Verify installed source SHA after installation.
@@ -278,18 +291,18 @@ Before changing the deck pipeline, read:
 7. Push the reviewed commit to `dev`, then promote that exact commit to
    `deck/candidate`, `github/candidate`, or both depending on which build is
    wanted.
-8. Treat the newest **Deck Flatpak Build** run in Forgejo Actions as the
-   publication authority. GitHub's **GitHub Deck Candidate Flatpak** is an
-   independently verified, short-lived fallback artifact and never updates
-   Forgejo publication state.
+8. Treat provider candidate branches as build authority. Forgejo publishes
+   locally; the Polinaria promoter independently validates successful GitHub
+   artifacts before importing either provider into the signed repository.
 9. For Forgejo publication, confirm the checkout SHA, runner label, preflight,
    one-job build, absence of PSI/OOM termination, and final **Success** state.
 10. Verify the public manifest and immutable files before staging a Forgejo
     build. Before staging a GitHub build, verify the successful exact-SHA run,
     artifact digest/metadata, bundle checksum, and OSTree source subject through
     `mixxx-deck`; never manually bypass the client checks.
-11. Stage before ending the DJ session.
-12. Activate only with explicit operator approval and retain rollback.
+11. Manual releases may still stage before ending the DJ session.
+12. Automatic activation is allowed only through the idle/AC interlock; retain
+    rollback and never work around a running-session deferral.
 
 ## Incident Defaults
 

@@ -25,13 +25,13 @@ git push origin HEAD:refs/heads/deck/candidate
 git push github HEAD:refs/heads/github/candidate
 ```
 
-The first command triggers the resource-constrained Forgejo runner and its
-authoritative publication pipeline. The second triggers a GitHub-hosted build
-using the same deck-specific manifest and validation, then retains
-`Mixxx-flatpak-x86_64` as a three-day Actions artifact. It does not update
-Forgejo's `latest.json`; it contains the bundle and a workflow-produced
-metadata contract for the deck client. The release refs are pointers only and
-must never receive direct development commits.
+The first command triggers the resource-constrained Forgejo runner. The second
+triggers a GitHub-hosted build using the same deck-specific manifest and
+validation, then retains `Mixxx-flatpak-x86_64` for 14 days. The Polinaria
+promoter verifies the GitHub API digest, workflow metadata, bundle, and OSTree
+source subject before importing it into the GPG-signed public Flatpak
+repository. The release refs are pointers only and must never receive direct
+development commits.
 
 Forgejo Actions builds the `x86_64` Flatpak on the isolated VPS runner, validates
 the OSTree bundle and Mixxx binary, then publishes immutable build files and
@@ -125,13 +125,28 @@ From a current Mixxx checkout, install the lightweight client and USB rules:
 tools/deck_flatpak_deploy.sh setup
 ```
 
-This installs `~/.local/bin/mixxx-deck` and its companion
-`~/.local/bin/deck_ostree_validation.sh`. Reconnect controllers after the first
-udev setup.
+This installs `~/.local/bin/mixxx-deck`, the automatic updater and OSTree
+validator, the boot/four-hour user systemd units, and a user-local desktop entry
+that shares the deployment lock. It also adds the signed `polinaria-mixxx`
+remote. Reconnect controllers after the first udev setup.
 
-Forgejo is always available through its public manifest. To let the laptop use
-the temporary GitHub fallback too, create a fine-grained GitHub token restricted
-to `Firewolf34/mixxx-mixman-api` with **Actions: read** only, then run:
+Enable the user manager at boot once, then start the service and timer:
+
+```bash
+sudo loginctl enable-linger "$USER"
+systemctl --user enable --now mixxx-deck-update.service
+systemctl --user enable --now mixxx-deck-update.timer
+```
+
+The service checks immediately after `nm-online` reports networking ready and
+then every four hours. Metadata checks are allowed on battery; download and
+deployment require AC power. Running Mixxx or an active shared launch lock
+defers activation without changing the installed app.
+
+The signed Polinaria repository requires no provider credential on Coal. The
+legacy direct GitHub fallback remains available for manual recovery only; to
+configure it, create a fine-grained GitHub token restricted to
+`Firewolf34/mixxx-mixman-api` with **Actions: read** only, then run:
 
 ```bash
 mixxx-deck github-configure
@@ -202,12 +217,25 @@ Use `mixxx-deck status` to show installed, staged, and rollback
 provider-qualified builds. `mixxx-deck check` shows the current available
 provider and source revision.
 
+For the unattended path:
+
+```bash
+mixxx-deck auto-update
+systemctl --user status mixxx-deck-update.service
+systemctl --user list-timers mixxx-deck-update.timer
+journalctl --user -u mixxx-deck-update.service
+```
+
 ## Acceptance Checklist
 
 - Confirm the authoritative Forgejo Actions run finished **Success** for the
   exact candidate SHA.
 - Confirm the selected provider and bundle identify the requested source commit.
 - Confirm Mixxx launches from the user Flatpak.
+- Confirm a signed-out boot runs the first check after networking becomes
+  ready.
+- Confirm battery power and a running Mixxx process each defer without changing
+  the installed commit.
 - Confirm audio input and output devices appear.
 - Confirm decks and controllers are detected after reconnecting them.
 - Exercise the REST recommendation library, MixMan session steering, and

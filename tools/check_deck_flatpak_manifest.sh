@@ -10,9 +10,13 @@ DECK_MANIFEST="${REPO_ROOT}/packaging/flatpak/org.mixxx.Mixxx.deck.yaml"
 CMAKE_FILE="${REPO_ROOT}/CMakeLists.txt"
 QML_CONTROLS_REGISTRATION_SOURCE="${REPO_ROOT}/src/qml/qmlcontrolsregistration.cpp"
 DECK_DEPLOY_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_deploy.sh"
+DECK_AUTO_UPDATE_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_auto_update.sh"
+DECK_REPO_PUBLISH_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_repo_publish.sh"
 FLATPAK_BUILD_SCRIPT="${REPO_ROOT}/packaging/flatpak/flatpak_build.sh"
 DECK_PUBLISH_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_publish.sh"
 GITHUB_DECK_WORKFLOW="${REPO_ROOT}/.github/workflows/github-deck-candidate.yml"
+DECK_UPDATE_SERVICE="${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.service"
+DECK_UPDATE_TIMER="${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.timer"
 NORMALIZED_NORMAL_MANIFEST="$(mktemp)"
 NORMALIZED_MANIFEST="$(mktemp)"
 
@@ -128,6 +132,24 @@ if ! grep -Fq 'install -m 0644 "${OSTREE_VALIDATION_HELPER}" "${installed_helper
     echo "Error: mixxx-deck setup does not install its OSTree validator." >&2
     exit 1
 fi
+if ! grep -Fq 'flock -s 8' "${DECK_DEPLOY_SCRIPT}" ||
+    ! grep -Fq 'deck_flatpak_auto_update.sh' "${DECK_DEPLOY_SCRIPT}" ||
+    ! grep -Fq 'OnUnitInactiveSec=4h' "${DECK_UPDATE_TIMER}" ||
+    ! grep -Fq 'ExecStartPre=/usr/bin/nm-online -q --timeout=180' "${DECK_UPDATE_SERVICE}"; then
+    echo "Error: idle-only automatic update and boot scheduling are incomplete." >&2
+    exit 1
+fi
+if ! grep -Fq 'flatpak update --user --app --no-deploy' "${DECK_AUTO_UPDATE_SCRIPT}" ||
+    ! grep -Fq 'flock -n 9' "${DECK_AUTO_UPDATE_SCRIPT}" ||
+    ! grep -Fq 'on_ac_power' "${DECK_AUTO_UPDATE_SCRIPT}"; then
+    echo "Error: automatic update safety checks are incomplete." >&2
+    exit 1
+fi
+if ! grep -Fq -- '--gpg-sign="${GPG_KEY}"' "${DECK_REPO_PUBLISH_SCRIPT}" ||
+    ! grep -Fq 'deck_ostree_commit_subject_contains_source' "${DECK_REPO_PUBLISH_SCRIPT}"; then
+    echo "Error: signed repository publication checks are incomplete." >&2
+    exit 1
+fi
 
 if ! grep -Fq 'BUILD_OPTIONS+=("--subject=Built from ${FLATPAK_SOURCE_SHA}")' \
         "${FLATPAK_BUILD_SCRIPT}" ||
@@ -138,10 +160,14 @@ if ! grep -Fq 'BUILD_OPTIONS+=("--subject=Built from ${FLATPAK_SOURCE_SHA}")' \
 fi
 
 if ! grep -Fq '          build-dir: build_flatpak' "${GITHUB_DECK_WORKFLOW}" ||
-    ! grep -Fq '          repo-dir: repo' "${GITHUB_DECK_WORKFLOW}"; then
+    ! grep -Fq '          repo-dir: repo' "${GITHUB_DECK_WORKFLOW}" ||
+    ! grep -Fq '          retention-days: 14' "${GITHUB_DECK_WORKFLOW}"; then
     echo "Error: the GitHub workflow does not pin its validated Flatpak directories." >&2
     exit 1
 fi
+
+bash -n "${DECK_AUTO_UPDATE_SCRIPT}" "${DECK_REPO_PUBLISH_SCRIPT}"
+bash "${SCRIPT_DIR}/deck_flatpak_auto_update_test.sh"
 
 bash "${SCRIPT_DIR}/deck_ostree_validation_test.sh"
 
