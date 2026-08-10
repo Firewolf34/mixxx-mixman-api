@@ -12,6 +12,7 @@ REPOSITORY="${MIXXX_DECK_REPOSITORY:-}"
 GPG_HOME="${MIXXX_DECK_GPG_HOME:-}"
 GPG_KEY="${MIXXX_DECK_GPG_KEY:-}"
 KEEP_BUILDS="${MIXXX_DECK_KEEP_BUILDS:-3}"
+GENERATE_STATIC_DELTAS="${MIXXX_DECK_GENERATE_STATIC_DELTAS:-0}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/deck_ostree_validation.sh
@@ -36,6 +37,8 @@ MANIFEST="$2"
 [[ "${GPG_HOME}" == /* ]] || die "MIXXX_DECK_GPG_HOME must be absolute."
 [[ "${GPG_KEY}" =~ ^[0-9A-F]{40}$ ]] || die "MIXXX_DECK_GPG_KEY must be a 40-character fingerprint."
 [[ "${KEEP_BUILDS}" =~ ^[1-9][0-9]*$ ]] || die "MIXXX_DECK_KEEP_BUILDS must be positive."
+[[ "${GENERATE_STATIC_DELTAS}" == 0 || "${GENERATE_STATIC_DELTAS}" == 1 ]] ||
+    die "MIXXX_DECK_GENERATE_STATIC_DELTAS must be 0 or 1."
 
 for command_name in flatpak flock jq ostree sha256sum stat; do
     require_command "${command_name}"
@@ -86,6 +89,7 @@ esac
 mkdir -p "${ARTIFACT_ROOT}/builds" "$(dirname -- "${REPOSITORY}")"
 exec 9>"${ARTIFACT_ROOT}/.mixxx-repo-publish.lock"
 flock 9
+cd "${ARTIFACT_ROOT}"
 
 if [[ -s "${ARTIFACT_ROOT}/latest.json" ]]; then
     CURRENT_BUILT_AT="$(jq -r '.built_at // empty' "${ARTIFACT_ROOT}/latest.json")"
@@ -175,16 +179,18 @@ for expired_build in "${EXPIRED_BUILDS[@]}"; do
     rm -rf -- "${expired_build}"
 done
 
-flatpak build-update-repo \
-    --title="Polinaria Mixxx Deck" \
-    --comment="Verified Mixxx candidate builds for Coal" \
-    --default-branch=master \
-    --gpg-sign="${GPG_KEY}" \
-    --gpg-homedir="${GPG_HOME}" \
-    --generate-static-deltas \
-    --static-delta-jobs=1 \
-    --prune \
-    "${REPOSITORY}"
+BUILD_UPDATE_ARGS=(
+    --title="Polinaria Mixxx Deck"
+    --comment="Verified Mixxx candidate builds for Coal"
+    --default-branch=master
+    --gpg-sign="${GPG_KEY}"
+    --gpg-homedir="${GPG_HOME}"
+    --prune
+)
+if [[ "${GENERATE_STATIC_DELTAS}" == 1 ]]; then
+    BUILD_UPDATE_ARGS+=(--generate-static-deltas --static-delta-jobs=1)
+fi
+flatpak build-update-repo "${BUILD_UPDATE_ARGS[@]}" "${REPOSITORY}"
 ostree --repo="${REPOSITORY}" fsck
 
 mv -f -- "${LATEST_TEMP}" "${ARTIFACT_ROOT}/latest.json"

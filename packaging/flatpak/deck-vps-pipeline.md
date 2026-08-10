@@ -458,6 +458,10 @@ https://forge.polinaria.world/artifacts/builds/<sha>/source.tar.zst
 Caddy serves `latest.json` with `Cache-Control: no-store`. Build paths receive
 a long-lived immutable cache policy. The Flatpak descriptor and repository
 summaries are never cached; repository objects and static deltas are immutable.
+Static-delta generation is disabled by default on the 2 GiB VPS because its
+temporary memory use can prevent the signed summary from completing. It may be
+enabled explicitly only after a bounded resource test; Coal can update from the
+normal immutable OSTree objects without deltas.
 
 `/data/logs/latest.log` is not part of this layout and must never be added to
 it or served by Caddy.
