@@ -144,8 +144,17 @@ flatpak build-import-bundle \
 PUBLISHED_COMMIT="$(ostree --repo="${REPOSITORY}" rev-parse "${EXPECTED_REF}")"
 [[ "${PUBLISHED_COMMIT}" == "${VALIDATED_COMMIT}" ]] ||
     die "Published OSTree commit differs from the validated bundle."
-ostree refs --repo="${REPOSITORY}" \
-    --create="mixxx/history/${SOURCE_SHA}" "${PUBLISHED_COMMIT}"
+HISTORY_REF="mixxx/history/${SOURCE_SHA}"
+EXISTING_HISTORY_COMMIT="$(
+    ostree --repo="${REPOSITORY}" rev-parse "${HISTORY_REF}" 2>/dev/null || true
+)"
+if [[ -n "${EXISTING_HISTORY_COMMIT}" ]]; then
+    [[ "${EXISTING_HISTORY_COMMIT}" == "${PUBLISHED_COMMIT}" ]] ||
+        die "Existing history ref differs for ${SOURCE_SHA}."
+else
+    ostree refs --repo="${REPOSITORY}" \
+        --create="${HISTORY_REF}" "${PUBLISHED_COMMIT}"
+fi
 
 jq \
     --arg provider "${PROVIDER}" \
