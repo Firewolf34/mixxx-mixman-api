@@ -127,7 +127,10 @@ if [[ -e "${FINAL_DIR}" ]]; then
     [[ "$(sha256sum "${FINAL_DIR}/Mixxx.flatpak" | awk '{print $1}')" == "${BUNDLE_SHA}" ]] ||
         die "Existing immutable build checksum differs for ${SOURCE_SHA}."
 else
-    mkdir -m 2775 "${STAGING_DIR}"
+    # The systemd promoter deliberately enables RestrictSUIDSGID. The
+    # artifact root is already setgid, so request only ordinary group-write
+    # permissions and let the filesystem inherit the shared artifact group.
+    mkdir -m 0775 "${STAGING_DIR}"
     install -m 0644 "${BUNDLE}" "${STAGING_DIR}/Mixxx.flatpak"
     install -m 0644 "${MANIFEST}" "${STAGING_DIR}/provider-manifest.json"
     mv -- "${STAGING_DIR}" "${FINAL_DIR}"

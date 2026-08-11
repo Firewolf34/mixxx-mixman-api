@@ -188,6 +188,12 @@ its OSTree commit subject. It finally signs the OSTree commit and repository
 summary. These checks make GitHub a verified build provider, not source
 authority.
 
+The promoter retains systemd's `RestrictSUIDSGID=yes` hardening. Its atomic
+staging directories request mode `0775`; the setgid artifact root supplies the
+shared `mixxx-artifacts` group by inheritance. The publisher must not request
+mode `2775` directly, because the service sandbox correctly rejects an
+explicit setgid bit before publication.
+
 ## Forgejo Workflow
 
 The workflow selects the custom runner label:
@@ -773,6 +779,7 @@ After bootstrap, routine builds require no server login.
 | OSTree check fails | bundle is not publishable |
 | Smoke test fails | binary is not publishable |
 | Existing SHA checksum differs | artifact integrity incident; do not overwrite |
+| Promoter staging `mkdir` returns `Operation not permitted` | keep `RestrictSUIDSGID=yes`; ensure the publisher requests mode `0775` and inherits the setgid artifact group |
 | Newer candidate message | expected stale-build protection; latest remains newer |
 | Manifest validation fails | do not download or install |
 | Bundle size/checksum fails | discard partial file and retry; investigate repeated failures |

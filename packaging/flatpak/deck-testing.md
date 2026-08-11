@@ -33,6 +33,10 @@ source subject before importing it into the GPG-signed public Flatpak
 repository. The release refs are pointers only and must never receive direct
 development commits.
 
+The hardened promoter creates atomic staging directories with mode `0775` and
+inherits the shared group from the setgid artifact root. Do not request an
+explicit setgid bit from inside its `RestrictSUIDSGID=yes` systemd sandbox.
+
 Forgejo Actions builds the `x86_64` Flatpak on the isolated VPS runner, validates
 the OSTree bundle and Mixxx binary, then publishes immutable build files and
 corresponding source at:

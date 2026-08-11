@@ -134,6 +134,9 @@ Before changing the deck pipeline, read:
 - Tracked working-tree changes are forbidden during publication.
 - Validate the bundle with OSTree import/fsck and a headless Mixxx smoke test.
 - Publish the Flatpak, schema-1 manifest, and corresponding source archive.
+- Keep the promoter's `RestrictSUIDSGID=yes` hardening compatible with atomic
+  publication: staging directories request mode `0775` and inherit the shared
+  group from the setgid artifact root; never request mode `2775` directly.
 - SHA build directories are immutable.
 - Update `latest.json` atomically only after all validation passes.
 - Do not let a superseded job replace `latest.json`.

@@ -150,6 +150,11 @@ if ! grep -Fq -- '--gpg-sign="${GPG_KEY}"' "${DECK_REPO_PUBLISH_SCRIPT}" ||
     echo "Error: signed repository publication checks are incomplete." >&2
     exit 1
 fi
+if ! grep -Fq 'mkdir -m 0775 "${STAGING_DIR}"' "${DECK_REPO_PUBLISH_SCRIPT}" ||
+    grep -Fq 'mkdir -m 2775 "${STAGING_DIR}"' "${DECK_REPO_PUBLISH_SCRIPT}"; then
+    echo "Error: repository staging must inherit setgid instead of requesting it." >&2
+    exit 1
+fi
 
 if ! grep -Fq 'BUILD_OPTIONS+=("--subject=Built from ${FLATPAK_SOURCE_SHA}")' \
         "${FLATPAK_BUILD_SCRIPT}" ||
