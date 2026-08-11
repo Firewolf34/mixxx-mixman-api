@@ -45,6 +45,15 @@ struct RestLibrarySessionWriteStatus {
     QString errorText;
 };
 
+struct RestLibrarySessionContract {
+    bool valid = false;
+    int version = 0;
+    int leaseTtlSeconds = 30;
+    int leaseRenewIntervalSeconds = 10;
+    int pauseGraceSeconds = 15;
+    QString errorText;
+};
+
 struct RestLibrarySessionSnapshot {
     QString clientId;
     QString surface;
@@ -61,7 +70,6 @@ struct RestLibrarySessionPlayback {
     QString surface;
     QString source;
     QString currentTrackId;
-    QString previousTrackId;
     QString cue;
     QString playbackState;
     QJsonObject currentTrack;
@@ -76,9 +84,7 @@ struct RestLibrarySessionIntent {
     QString targetColor;
     bool targetColorEnabled = false;
     bool targetEnergyEnabled = false;
-    bool targetBpmEnabled = false;
     double targetEnergy = 0.0;
-    int targetBpm = 0;
     QJsonObject metadata;
 };
 
@@ -117,7 +123,7 @@ struct RestLibraryAuthoritativeState {
     QJsonObject playback;
     QJsonObject pressureState;
     QJsonObject selectedCandidate;
-    QJsonObject controller;
+    QJsonObject playbackController;
     QJsonObject blocked;
     QJsonArray queue;
     QJsonArray intents;
@@ -142,6 +148,7 @@ Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryDiagnostics)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryRequestDiagnostic)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySession)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySessionWriteStatus)
+Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySessionContract)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryAuthoritativeState)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryPolicyPreset)
 Q_DECLARE_METATYPE(QList<mixxx::library::rest::RestLibraryPolicyPreset>)

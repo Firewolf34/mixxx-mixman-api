@@ -111,8 +111,16 @@ QString mixManSessionPlaybackPath(const QString& sessionId) {
     return QStringLiteral("/sessions/%1/playback").arg(sessionId);
 }
 
-QString mixManSessionControlClaimPath(const QString& sessionId) {
-    return QStringLiteral("/sessions/%1/control/claim").arg(sessionId);
+QString mixManSessionPlaybackControlClaimPath(const QString& sessionId) {
+    return QStringLiteral("/sessions/%1/playback-control/claim").arg(sessionId);
+}
+
+QString mixManSessionPlaybackControlRenewPath(const QString& sessionId) {
+    return QStringLiteral("/sessions/%1/playback-control/renew").arg(sessionId);
+}
+
+QString mixManSessionPlaybackControlReleasePath(const QString& sessionId) {
+    return QStringLiteral("/sessions/%1/playback-control/release").arg(sessionId);
 }
 
 QString mixManSessionCandidateSelectPath(const QString& sessionId, const QString& trackId) {

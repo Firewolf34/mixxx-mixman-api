@@ -65,7 +65,17 @@ class RestLibraryClient final : public QObject {
             const QString& sessionId,
             const QString& clientId,
             const QJsonObject& metadata = {});
-    void claimMixManSessionControl(
+    void claimMixManPlaybackControl(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const QString& clientId,
+            const QJsonObject& metadata = {});
+    void renewMixManPlaybackControl(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const QString& clientId,
+            const QJsonObject& metadata = {});
+    void releaseMixManPlaybackControl(
             const RestLibrarySettings& settings,
             const QString& sessionId,
             const QString& clientId,
@@ -104,6 +114,8 @@ class RestLibraryClient final : public QObject {
             const QJsonDocument& document);
     static RestLibraryAuthoritativeState parseAuthoritativeDocumentForTesting(
             const QJsonDocument& document);
+    static RestLibrarySessionContract parseSessionContractDocumentForTesting(
+            const QJsonDocument& document);
 
   signals:
     void tracksFetched(const QList<mixxx::library::rest::RestLibraryTrack>& tracks);
@@ -123,6 +135,8 @@ class RestLibraryClient final : public QObject {
             const mixxx::library::rest::RestLibrarySession& session);
     void mixManSessionWriteStatusUpdated(
             const mixxx::library::rest::RestLibrarySessionWriteStatus& status);
+    void mixManSessionContractVerified(
+            const mixxx::library::rest::RestLibrarySessionContract& contract);
     void requestDiagnosticUpdated(
             const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic);
     void connectionTestFinished(bool success);
@@ -135,10 +149,12 @@ class RestLibraryClient final : public QObject {
     void slotIndexStatusFinished();
     void slotPolicyPresetsFinished();
     void slotPolicyPathFinished();
+    void slotSessionContractFinished();
     void slotSessionCreateFinished();
     void slotSessionFetchFinished();
     void slotSessionWriteFinished();
     void slotConnectionTestHealthFinished();
+    void slotConnectionTestConfigFinished();
     void slotConnectionTestIndexFinished();
     void slotConnectionTestTracksFinished();
     void slotConnectionTestSessionFinished();
@@ -220,6 +236,13 @@ class RestLibraryClient final : public QObject {
             RequestPurpose purpose,
             const QList<RestLibraryTrack>& tracks);
     void emitFailureForPurpose(RequestPurpose purpose, const QString& message);
+    void requestMixManPlaybackControl(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const QString& clientId,
+            const QString& action,
+            const QString& operation,
+            const QJsonObject& metadata);
 
     static QList<RestLibraryTrack> parseTrackListDocument(
             const QJsonDocument& document,
@@ -229,6 +252,8 @@ class RestLibraryClient final : public QObject {
     static QList<RestLibraryPolicyPreset> parsePolicyPresetsDocument(
             const QJsonDocument& document);
     static RestLibraryDiagnostics parseIndexStatusDocument(const QJsonDocument& document);
+    static RestLibrarySessionContract parseSessionContractDocument(
+            const QJsonDocument& document);
     static RestLibrarySession parseSessionDocument(const QJsonDocument& document);
     static RestLibraryAuthoritativeState parseAuthoritativeDocument(
             const QJsonDocument& document);

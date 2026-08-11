@@ -1,75 +1,65 @@
-# MixMan Authoritative Session Integration Notes
+# MixMan Session Contract v2 Integration
 
-## Mixxx Authority Model
+Mixxx is the highest-priority playback client. Every session request identifies
+the product with `client_kind: "mixxx"`, `source: "mixxx"`, and
+`surface: "rest_library"`. This identity is separate from authorization: the
+configured bearer token must still have the MixMan user scope and controller
+role.
 
-Mixxx is the DJ console and final playback authority. MixMan should treat Mixxx playback updates as the source of truth for what is loaded or playing, then rebuild candidates, path, and queue guidance from that state.
+## Compatibility Handshake
 
-Mixxx identifies session mutations as role `dj`, source `mixxx`, and surface `rest_library`.
+Before creating a session, Mixxx reads `GET /config` and requires:
 
-## Implemented Mixxx Behavior
+- `session_contract.version == 2`;
+- `mixxx` in `client_kinds`;
+- `mixxx` in `playback_capable_client_kinds`.
 
-- Mixxx publishes playback to `POST /sessions/{id}/playback`.
-- Mixxx keeps publishing the legacy snapshot as compatibility telemetry.
-- Mixxx reads authoritative candidates and path from `GET /sessions/{id}` and mutation responses.
-- Mixxx treats `authoritative.queue` as MixMan-owned and does not locally manage it.
-- Mixxx claims control in the background before DJ-sensitive mutations and reports conflicts as diagnostics.
-- Mixxx posts `POST /sessions/{id}/candidates/{track_id}/select` when the DJ loads a candidate or reroll result.
-- Mixxx posts `POST /sessions/{id}/actions` with `action_type: policy_refresh` for policy, energy, color, BPM, and reroll steering.
+The Connection Test runs the same check between health and index probes. A
+missing, legacy, or incompatible contract fails before Mixxx posts `/sessions`,
+which prevents the old `role: "dj"` payload from reaching a v2 server.
 
-## Candidate Selection
+## Playback Lease Sequence
 
-For tracks in the current authoritative candidate set, Mixxx sends:
+Playback and candidate selection never race the lease claim:
 
-```json
-{
-  "selection_origin": "authoritative_candidate"
-}
-```
+1. Mixxx queues the latest playback/candidate mutation.
+2. It posts `POST /sessions/{id}/playback-control/claim`.
+3. It flushes queued mutations only after a successful response.
+4. While a deck is playing, it renews through
+   `POST /sessions/{id}/playback-control/renew` at the interval advertised by
+   `/config`.
+5. When playback becomes paused or loaded, it publishes that state and releases
+   through `POST /sessions/{id}/playback-control/release` after the advertised
+   pause grace period.
 
-For DJ reroll/search tracks that came from MixMan recommendation results but are not in `authoritative.candidates`, Mixxx sends:
+A release already in flight is allowed to finish before a new claim, avoiding a
+release/play race. A `409` stops lease-backed writes and is surfaced in REST
+Library diagnostics. Mixxx does not stop local deck audio merely because the
+remote session lease was lost.
 
-```json
-{
-  "selection_origin": "recommendation_reroll",
-  "allow_external_candidate": true,
-  "metadata": {
-    "reason": "DJ loaded reroll result"
-  }
-}
-```
+## Authoritative State
 
-MixMan validates the production track ID, commits it as the intended next track, and rebuilds authoritative queue, path, and candidates from that selected anchor. Controller conflicts may still return `409`; Mixxx reports those as diagnostics/backoff.
+Mixxx publishes playback to `POST /sessions/{id}/playback` and keeps publishing
+snapshots as non-authoritative compatibility telemetry. It reads candidates,
+path, pressure, intents, queue, blocked state, revision, and
+`playback_controller` from `GET /sessions/{id}.authoritative` and mutation
+responses. MixMan owns the authoritative queue.
 
-## Fuzzy Steering Payloads
+For a current authoritative candidate, Mixxx selects with
+`selection_origin: "authoritative_candidate"`. A MixMan-backed reroll/search
+track uses `selection_origin: "recommendation_reroll"` and
+`allow_external_candidate: true`.
 
-Mixxx uses `POST /sessions/{id}/actions` for current path future targets:
+Policy, energy, color, BPM, and reroll steering use
+`POST /sessions/{id}/actions` with `action_type: "policy_refresh"`. Policy
+actions do not claim playback control.
 
-```json
-{
-  "action_type": "policy_refresh",
-  "policy_preset": "explore",
-  "target_color": "#33AAFF",
-  "target_energy": 0.72,
-  "target_bpm": 128,
-  "reroll_constraints": {
-    "mode": "fuzzy",
-    "limit": 8
-  }
-}
-```
+## Playback States
 
-Mixxx only includes enabled target fields. Policy refresh responses are parsed as authoritative session state and can update candidates, path, queue diagnostics, controller diagnostics, pressure, intents, blocked state, and revision.
+- `playing`: a deck is actively playing;
+- `paused`: active playback stopped while a current MixMan track is known;
+- `loaded`: the DJ loaded a track without active playback;
+- `idle`: no current MixMan track is known.
 
-## Playback State Semantics
-
-Mixxx publishes:
-
-- `playing` when a deck is actively playing
-- `loaded` when the DJ loads a deck without playback
-- `idle` when no current track is known
-
-MixMan should rebuild guidance from `playing` and `loaded` state. Table selection or reroll browsing alone is not playback state.
-
-## UI Expectations
-
-Mixxx surfaces authoritative diagnostics for controller, pressure, intents, beacons, blocked state, and revision. These are informational for the DJ; they are not queue-management controls.
+Native OAuth/PKCE remains separate follow-up work. Until implemented, bearer
+token provisioning is operational configuration and must not be committed.

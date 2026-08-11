@@ -52,6 +52,20 @@ RestLibrarySettings newMixManSettings() {
     return settings;
 }
 
+QByteArray mixManSessionContractV2() {
+    return QByteArrayLiteral(R"json({
+      "session_contract": {
+        "version": 2,
+        "client_kinds": ["mixxx", "player"],
+        "playback_capable_client_kinds": ["mixxx", "player"],
+        "playback_priority": ["mixxx", "player"],
+        "lease_ttl_seconds": 30,
+        "renew_interval_seconds": 10,
+        "pause_grace_seconds": 15
+      }
+    })json");
+}
+
 } // namespace
 
 TEST(RestLibraryClientTest, ParsesObjectWrappedTrackList) {
@@ -110,6 +124,31 @@ TEST(RestLibraryClientTest, ParsesMixManIndexStatus) {
     EXPECT_TRUE(diagnostics.indexReady);
     EXPECT_EQ(diagnostics.indexCount, 123);
     EXPECT_EQ(diagnostics.indexDimension, 512);
+}
+
+TEST(RestLibraryClientTest, ParsesMixManSessionContractV2) {
+    const auto contract = RestLibraryClient::parseSessionContractDocumentForTesting(
+            QJsonDocument::fromJson(mixManSessionContractV2()));
+
+    EXPECT_TRUE(contract.valid);
+    EXPECT_EQ(contract.version, 2);
+    EXPECT_EQ(contract.leaseTtlSeconds, 30);
+    EXPECT_EQ(contract.leaseRenewIntervalSeconds, 10);
+    EXPECT_EQ(contract.pauseGraceSeconds, 15);
+}
+
+TEST(RestLibraryClientTest, RejectsLegacyMixManSessionContract) {
+    const auto contract = RestLibraryClient::parseSessionContractDocumentForTesting(
+            QJsonDocument::fromJson(R"json({
+              "session_contract": {
+                "version": 1,
+                "client_kinds": ["mixxx"],
+                "playback_capable_client_kinds": ["mixxx"]
+              }
+            })json"));
+
+    EXPECT_FALSE(contract.valid);
+    EXPECT_TRUE(contract.errorText.contains(QStringLiteral("v2")));
 }
 
 TEST(RestLibraryClientTest, ParsesMixManPolicyPresets) {
@@ -248,7 +287,7 @@ TEST(RestLibraryClientTest, ParsesMixManAuthoritativeSessionState) {
             "playback": {"revision": 7, "current_track_id": 8},
             "pressure_revision": 3,
             "pressure_state": {"explore": 0.25},
-            "controller": {"client_id": "mixxx-1", "role": "dj"},
+            "playback_controller": {"client_id": "mixxx-1", "client_kind": "mixxx"},
             "blocked": {"sector_change": {"reason": "beacon"}},
             "intents": [{"intent_type": "beacon"}],
             "queue": [{"track_id": 10}],
@@ -279,6 +318,10 @@ TEST(RestLibraryClientTest, ParsesMixManAuthoritativeSessionState) {
     EXPECT_EQ(session.authoritative.intents.size(), 1);
     EXPECT_EQ(session.authoritative.queue.size(), 1);
     EXPECT_FALSE(session.authoritative.blocked.isEmpty());
+    EXPECT_EQ(session.authoritative.playbackController
+                      .value(QStringLiteral("client_kind"))
+                      .toString(),
+            QStringLiteral("mixxx"));
     ASSERT_EQ(session.authoritative.policyPath.candidates.size(), 1);
     EXPECT_EQ(session.authoritative.policyPath.candidates.at(0).remoteId, QStringLiteral("9"));
     EXPECT_EQ(session.authoritative.policyPath.candidates.at(0).sourceLabel,
@@ -422,6 +465,8 @@ TEST(RestLibraryClientTest, TestsMixManConnectionSuccessfully) {
             {},
             200,
             R"json({"ok":true})json");
+    MockNetworkReply* pConfigReply = network.ExpectGet(
+            QStringLiteral("/config"), {}, 200, mixManSessionContractV2());
     MockNetworkReply* pIndexReply = network.ExpectGet(
             QStringLiteral("/recommendations/index_status"),
             {},
@@ -442,11 +487,12 @@ TEST(RestLibraryClientTest, TestsMixManConnectionSuccessfully) {
 
     client.testMixManConnection(newMixManSettings(), {}, true);
     pHealthReply->Done();
+    pConfigReply->Done();
     pIndexReply->Done();
     pTracksReply->Done();
     pSessionReply->Done();
 
-    EXPECT_EQ(diagnosticsSpy.count(), 4);
+    EXPECT_EQ(diagnosticsSpy.count(), 5);
     ASSERT_EQ(finishedSpy.count(), 1);
     EXPECT_TRUE(finishedSpy.takeFirst().at(0).toBool());
 }
@@ -461,6 +507,8 @@ TEST(RestLibraryClientTest, TestMixManConnectionReportsInvalidJson) {
             {},
             200,
             R"json({"ok":true})json");
+    MockNetworkReply* pConfigReply = network.ExpectGet(
+            QStringLiteral("/config"), {}, 200, mixManSessionContractV2());
     MockNetworkReply* pIndexReply = network.ExpectGet(
             QStringLiteral("/recommendations/index_status"),
             {},
@@ -469,9 +517,10 @@ TEST(RestLibraryClientTest, TestMixManConnectionReportsInvalidJson) {
 
     client.testMixManConnection(newMixManSettings());
     pHealthReply->Done();
+    pConfigReply->Done();
     pIndexReply->Done();
 
-    ASSERT_EQ(diagnosticsSpy.count(), 2);
+    ASSERT_EQ(diagnosticsSpy.count(), 3);
     const auto diagnostic =
             qvariant_cast<RestLibraryRequestDiagnostic>(diagnosticsSpy.takeLast().at(0));
     EXPECT_FALSE(diagnostic.success);
@@ -490,6 +539,8 @@ TEST(RestLibraryClientTest, TestMixManConnectionReportsIndexNotReady) {
             {},
             200,
             R"json({"ok":true})json");
+    MockNetworkReply* pConfigReply = network.ExpectGet(
+            QStringLiteral("/config"), {}, 200, mixManSessionContractV2());
     MockNetworkReply* pIndexReply = network.ExpectGet(
             QStringLiteral("/recommendations/index_status"),
             {},
@@ -498,13 +549,40 @@ TEST(RestLibraryClientTest, TestMixManConnectionReportsIndexNotReady) {
 
     client.testMixManConnection(newMixManSettings());
     pHealthReply->Done();
+    pConfigReply->Done();
     pIndexReply->Done();
+
+    ASSERT_EQ(diagnosticsSpy.count(), 3);
+    const auto diagnostic =
+            qvariant_cast<RestLibraryRequestDiagnostic>(diagnosticsSpy.takeLast().at(0));
+    EXPECT_FALSE(diagnostic.success);
+    EXPECT_TRUE(diagnostic.summary.contains(QStringLiteral("not ready")));
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_FALSE(finishedSpy.takeFirst().at(0).toBool());
+}
+
+TEST(RestLibraryClientTest, TestMixManConnectionRejectsLegacySessionContract) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy diagnosticsSpy(&client, &RestLibraryClient::requestDiagnosticUpdated);
+    QSignalSpy finishedSpy(&client, &RestLibraryClient::connectionTestFinished);
+    MockNetworkReply* pHealthReply = network.ExpectGet(
+            QStringLiteral("/health"), {}, 200, R"json({"ok":true})json");
+    MockNetworkReply* pConfigReply = network.ExpectGet(
+            QStringLiteral("/config"),
+            {},
+            200,
+            R"json({"session_contract":{"version":1,"client_kinds":["mixxx"]}})json");
+
+    client.testMixManConnection(newMixManSettings(), {}, true);
+    pHealthReply->Done();
+    pConfigReply->Done();
 
     ASSERT_EQ(diagnosticsSpy.count(), 2);
     const auto diagnostic =
             qvariant_cast<RestLibraryRequestDiagnostic>(diagnosticsSpy.takeLast().at(0));
     EXPECT_FALSE(diagnostic.success);
-    EXPECT_TRUE(diagnostic.summary.contains(QStringLiteral("not ready")));
+    EXPECT_TRUE(diagnostic.summary.contains(QStringLiteral("v2")));
     ASSERT_EQ(finishedSpy.count(), 1);
     EXPECT_FALSE(finishedSpy.takeFirst().at(0).toBool());
 }
@@ -569,6 +647,8 @@ TEST(RestLibraryClientTest, IgnoresStaleMixManConnectionTestReply) {
             {},
             200,
             R"json({"ok":true})json");
+    MockNetworkReply* pCurrentConfigReply = network.ExpectGet(
+            QStringLiteral("/config"), {}, 200, mixManSessionContractV2());
     MockNetworkReply* pCurrentIndexReply = network.ExpectGet(
             QStringLiteral("/recommendations/index_status"),
             {},
@@ -588,12 +668,13 @@ TEST(RestLibraryClientTest, IgnoresStaleMixManConnectionTestReply) {
 
     client.testMixManConnection(newMixManSettings(), {}, true);
     pCurrentHealthReply->Done();
+    pCurrentConfigReply->Done();
     pCurrentIndexReply->Done();
     pCurrentTracksReply->Done();
     pCurrentSessionReply->Done();
     pOldHealthReply->Done();
 
-    EXPECT_EQ(diagnosticsSpy.count(), 4);
+    EXPECT_EQ(diagnosticsSpy.count(), 5);
     ASSERT_EQ(finishedSpy.count(), 1);
     EXPECT_TRUE(finishedSpy.takeFirst().at(0).toBool());
 }
@@ -720,6 +801,8 @@ TEST(RestLibraryClientTest, ConnectionTestUsesOriginalSettingsAfterDiagnosticsRe
             {},
             200,
             R"json({"ready":true,"count":3,"dim":4})json");
+    MockNetworkReply* pConnectionConfigReply = network.ExpectGet(
+            QStringLiteral("/config"), {}, 200, mixManSessionContractV2());
     MockNetworkReply* pConnectionIndexReply = network.ExpectGet(
             QStringLiteral("/recommendations/index_status"),
             {},
@@ -738,6 +821,7 @@ TEST(RestLibraryClientTest, ConnectionTestUsesOriginalSettingsAfterDiagnosticsRe
     pConnectionHealthReply->Done();
     pDiagnosticsHealthReply->Done();
     pDiagnosticsIndexReply->Done();
+    pConnectionConfigReply->Done();
     pConnectionIndexReply->Done();
     pTracksReply->Done();
 
@@ -917,12 +1001,19 @@ TEST(RestLibraryClientTest, IgnoresStaleMixManSessionCreateReply) {
     RestLibraryClient client(&network);
     QSignalSpy createdSpy(&client, &RestLibraryClient::mixManSessionCreated);
     QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pOldConfigReply = network.ExpectGet(
+            QStringLiteral("/config"), {}, 200, mixManSessionContractV2());
     MockNetworkReply* pOldReply = network.ExpectPost(
             QStringLiteral("/sessions"),
             {},
             {QStringLiteral("\"client_id\":\"old-client\"")},
             201,
             R"json({"session":{"id":"old-session"},"clients":[],"recent_events":[]})json");
+    client.createMixManSession(newMixManSettings(), QStringLiteral("old-client"));
+    pOldConfigReply->Done();
+
+    MockNetworkReply* pCurrentConfigReply = network.ExpectGet(
+            QStringLiteral("/config"), {}, 200, mixManSessionContractV2());
     MockNetworkReply* pCurrentReply = network.ExpectPost(
             QStringLiteral("/sessions"),
             {},
@@ -930,8 +1021,8 @@ TEST(RestLibraryClientTest, IgnoresStaleMixManSessionCreateReply) {
             201,
             R"json({"session":{"id":"current-session"},"clients":[],"recent_events":[]})json");
 
-    client.createMixManSession(newMixManSettings(), QStringLiteral("old-client"));
     client.createMixManSession(newMixManSettings(), QStringLiteral("current-client"));
+    pCurrentConfigReply->Done();
     pCurrentReply->Done();
     pOldReply->Done();
 
@@ -970,11 +1061,13 @@ TEST(RestLibraryClientTest, CreatesMixManSession) {
     RestLibraryClient client(&network);
     QSignalSpy createdSpy(&client, &RestLibraryClient::mixManSessionCreated);
     QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pConfigReply = network.ExpectGet(
+            QStringLiteral("/config"), {}, 200, mixManSessionContractV2());
     MockNetworkReply* pReply = network.ExpectPost(
             QStringLiteral("/sessions"),
             {},
             {QStringLiteral("\"client_id\":\"client-1\""),
-                    QStringLiteral("\"role\":\"dj\""),
+                    QStringLiteral("\"client_kind\":\"mixxx\""),
                     QStringLiteral("\"source\":\"mixxx\""),
                     QStringLiteral("\"surface\":\"rest_library\"")},
             201,
@@ -990,6 +1083,7 @@ TEST(RestLibraryClientTest, CreatesMixManSession) {
             })json");
 
     client.createMixManSession(newMixManSettings(), QStringLiteral("client-1"));
+    pConfigReply->Done();
     pReply->Done();
 
     ASSERT_EQ(createdSpy.count(), 1);
@@ -1002,6 +1096,34 @@ TEST(RestLibraryClientTest, CreatesMixManSession) {
                     statusSpy.takeFirst().at(0));
     EXPECT_TRUE(status.success);
     EXPECT_EQ(status.operation, QStringLiteral("session_create"));
+}
+
+TEST(RestLibraryClientTest, DoesNotCreateSessionWithoutContractV2) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy createdSpy(&client, &RestLibraryClient::mixManSessionCreated);
+    QSignalSpy contractSpy(&client, &RestLibraryClient::mixManSessionContractVerified);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pConfigReply = network.ExpectGet(
+            QStringLiteral("/config"),
+            {},
+            200,
+            R"json({"session_contract":{"version":1,"client_kinds":["mixxx"]}})json");
+
+    client.createMixManSession(newMixManSettings(), QStringLiteral("client-1"));
+    pConfigReply->Done();
+
+    EXPECT_EQ(createdSpy.count(), 0);
+    ASSERT_EQ(contractSpy.count(), 1);
+    const auto contract = qvariant_cast<mixxx::library::rest::RestLibrarySessionContract>(
+            contractSpy.takeFirst().at(0));
+    EXPECT_FALSE(contract.valid);
+    ASSERT_EQ(statusSpy.count(), 1);
+    const auto status =
+            qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                    statusSpy.takeFirst().at(0));
+    EXPECT_FALSE(status.success);
+    EXPECT_TRUE(status.errorText.contains(QStringLiteral("v2")));
 }
 
 TEST(RestLibraryClientTest, PublishesMixManSessionSnapshot) {
@@ -1091,8 +1213,7 @@ TEST(RestLibraryClientTest, UpdatesMixManSessionIntent) {
                     QStringLiteral("\"status\":\"active\""),
                     QStringLiteral("\"policy_preset\":\"build_energy\""),
                     QStringLiteral("\"target_energy\":0.8"),
-                    QStringLiteral("\"target_color\":\"#ff6600\""),
-                    QStringLiteral("\"target_bpm\":132")},
+                    QStringLiteral("\"target_color\":\"#ff6600\"")},
             200,
             R"json({"session_id":"session-1","revision":1})json");
 
@@ -1105,8 +1226,6 @@ TEST(RestLibraryClientTest, UpdatesMixManSessionIntent) {
     intent.targetEnergy = 0.8;
     intent.targetColorEnabled = true;
     intent.targetColor = QStringLiteral("#ff6600");
-    intent.targetBpmEnabled = true;
-    intent.targetBpm = 132;
 
     client.updateMixManSessionIntent(
             newMixManSettings(),
@@ -1156,7 +1275,7 @@ TEST(RestLibraryClientTest, SendsMixManSessionHeartbeat) {
             {},
             {QStringLiteral("\"client_id\":\"client-1\""),
                     QStringLiteral("\"status\":\"active\""),
-                    QStringLiteral("\"role\":\"dj\"")},
+                    QStringLiteral("\"client_kind\":\"mixxx\"")},
             200,
             R"json({"session_id":"session-1","client_id":"client-1"})json");
 
@@ -1206,9 +1325,8 @@ TEST(RestLibraryClientTest, PublishesMixManSessionPlayback) {
             QStringLiteral("/sessions/session-1/playback"),
             {},
             {QStringLiteral("\"client_id\":\"client-1\""),
-                    QStringLiteral("\"role\":\"dj\""),
+                    QStringLiteral("\"client_kind\":\"mixxx\""),
                     QStringLiteral("\"current_track_id\":8"),
-                    QStringLiteral("\"previous_track_id\":7"),
                     QStringLiteral("\"playback_state\":\"playing\""),
                     QStringLiteral("\"current_track\""),
                     QStringLiteral("\"title\":\"Night Train\"")},
@@ -1227,7 +1345,6 @@ TEST(RestLibraryClientTest, PublishesMixManSessionPlayback) {
     playback.source = QStringLiteral("mixxx");
     playback.surface = QStringLiteral("rest_library");
     playback.currentTrackId = QStringLiteral("8");
-    playback.previousTrackId = QStringLiteral("7");
     playback.playbackState = QStringLiteral("playing");
     playback.currentTrack.insert(QStringLiteral("title"), QStringLiteral("Night Train"));
 
@@ -1251,20 +1368,20 @@ TEST(RestLibraryClientTest, PublishesMixManSessionPlayback) {
     EXPECT_EQ(session.authoritative.policyPath.candidates.at(0).remoteId, QStringLiteral("9"));
 }
 
-TEST(RestLibraryClientTest, ClaimsMixManSessionControlAsDj) {
+TEST(RestLibraryClientTest, ClaimsMixManPlaybackControlAsMixxx) {
     MockNetworkAccessManager network;
     RestLibraryClient client(&network);
     QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
     MockNetworkReply* pReply = network.ExpectPost(
-            QStringLiteral("/sessions/session-1/control/claim"),
+            QStringLiteral("/sessions/session-1/playback-control/claim"),
             {},
             {QStringLiteral("\"client_id\":\"client-1\""),
-                    QStringLiteral("\"role\":\"dj\""),
-                    QStringLiteral("\"ttl_seconds\":45")},
+                    QStringLiteral("\"client_kind\":\"mixxx\""),
+                    QStringLiteral("\"surface\":\"rest_library\"")},
             200,
             R"json({"session_id":"session-1"})json");
 
-    client.claimMixManSessionControl(
+    client.claimMixManPlaybackControl(
             newMixManSettings(),
             QStringLiteral("session-1"),
             QStringLiteral("client-1"));
@@ -1275,7 +1392,46 @@ TEST(RestLibraryClientTest, ClaimsMixManSessionControlAsDj) {
             qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
                     statusSpy.takeFirst().at(0));
     EXPECT_TRUE(status.success);
-    EXPECT_EQ(status.operation, QStringLiteral("session_control_claim"));
+    EXPECT_EQ(status.operation, QStringLiteral("session_playback_control_claim"));
+}
+
+TEST(RestLibraryClientTest, RenewsAndReleasesMixManPlaybackControl) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pRenewReply = network.ExpectPost(
+            QStringLiteral("/sessions/session-1/playback-control/renew"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"client_kind\":\"mixxx\""),
+                    QStringLiteral("\"surface\":\"rest_library\"")},
+            200,
+            R"json({"session_id":"session-1","playback_controller":{"active":true}})json");
+    MockNetworkReply* pReleaseReply = network.ExpectPost(
+            QStringLiteral("/sessions/session-1/playback-control/release"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"client_kind\":\"mixxx\""),
+                    QStringLiteral("\"surface\":\"rest_library\"")},
+            200,
+            R"json({"session_id":"session-1","playback_controller":null})json");
+
+    client.renewMixManPlaybackControl(
+            newMixManSettings(), QStringLiteral("session-1"), QStringLiteral("client-1"));
+    pRenewReply->Done();
+    client.releaseMixManPlaybackControl(
+            newMixManSettings(), QStringLiteral("session-1"), QStringLiteral("client-1"));
+    pReleaseReply->Done();
+
+    ASSERT_EQ(statusSpy.count(), 2);
+    EXPECT_EQ(statusSpy.at(0).at(0)
+                      .value<mixxx::library::rest::RestLibrarySessionWriteStatus>()
+                      .operation,
+            QStringLiteral("session_playback_control_renew"));
+    EXPECT_EQ(statusSpy.at(1).at(0)
+                      .value<mixxx::library::rest::RestLibrarySessionWriteStatus>()
+                      .operation,
+            QStringLiteral("session_playback_control_release"));
 }
 
 TEST(RestLibraryClientTest, SelectsMixManSessionCandidateAndReportsConflict) {
@@ -1286,7 +1442,7 @@ TEST(RestLibraryClientTest, SelectsMixManSessionCandidateAndReportsConflict) {
             QStringLiteral("/sessions/session-1/candidates/9/select"),
             {},
             {QStringLiteral("\"client_id\":\"client-1\""),
-                    QStringLiteral("\"role\":\"dj\""),
+                    QStringLiteral("\"client_kind\":\"mixxx\""),
                     QStringLiteral("\"selection_origin\":\"recommendation_reroll\""),
                     QStringLiteral("\"allow_external_candidate\":true")},
             409,
@@ -1319,7 +1475,7 @@ TEST(RestLibraryClientTest, PublishesMixManPolicyRefreshAction) {
             QStringLiteral("/sessions/session-1/actions"),
             {},
             {QStringLiteral("\"client_id\":\"client-1\""),
-                    QStringLiteral("\"role\":\"dj\""),
+                    QStringLiteral("\"client_kind\":\"mixxx\""),
                     QStringLiteral("\"action_type\":\"policy_refresh\""),
                     QStringLiteral("\"policy_preset\":\"build_energy\""),
                     QStringLiteral("\"target_energy\":0.8"),
