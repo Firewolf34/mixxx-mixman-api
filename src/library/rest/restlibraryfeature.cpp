@@ -28,7 +28,7 @@ namespace mixxx::library::rest {
 namespace {
 
 const Logger kLogger("RestLibraryFeature");
-const QString kViewName = QStringLiteral("REST Library");
+const QString kViewName = QStringLiteral("REST Recommendations");
 const QString kSessionCreateOperation = QStringLiteral("session_create");
 const QString kSessionPlaybackOperation = QStringLiteral("session_playback");
 const QString kPlaybackControlClaimOperation =
@@ -182,7 +182,7 @@ RestLibraryFeature::RestLibraryFeature(
 }
 
 QVariant RestLibraryFeature::title() {
-    return tr("REST Library");
+    return tr("REST Recommendations");
 }
 
 TreeItemModel* RestLibraryFeature::sidebarModel() const {

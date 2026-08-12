@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>REST Library</string>
+   <string>REST Recommendations</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <property name="spacing">
