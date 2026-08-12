@@ -22,6 +22,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=tools/deck_ostree_validation.sh
 source "${SCRIPT_DIR}/deck_ostree_validation.sh"
+"${SCRIPT_DIR}/check_hosted_capacity_lease.sh"
 
 die() {
     echo "Error: $*" >&2

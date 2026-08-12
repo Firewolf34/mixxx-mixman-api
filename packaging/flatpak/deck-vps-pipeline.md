@@ -86,6 +86,7 @@ tools/deck_flatpak_deploy.sh on the DJ laptop
 | Candidate selection | `refs/heads/deck/candidate` |
 | Workflow | `.forgejo/workflows/deck-flatpak.yml` |
 | Build/publish behavior | `tools/deck_flatpak_publish.sh` |
+| Shared host-capacity admission | `tools/check_hosted_capacity_lease.sh` and the root-owned TotalInfra deployment gateway |
 | Deck behavior | `tools/deck_flatpak_deploy.sh` |
 | VPS orchestration | `total-infra/total-infra`, branch `dev` |
 | Latest candidate | `https://forge.polinaria.world/artifacts/latest.json` |
@@ -312,6 +313,17 @@ unavailable mirror failing after compilation has started. A checksum or any
 other unrecognized source failure is not retried and remains an integrity
 incident.
 
+The workflow's first executable step acquires the root-owned TotalInfra
+host-capacity lease before checkout. Forgejo queues later runs of this workflow,
+and the lease client waits for application test/build/deploy work already using
+the host. The lease remains bound to the repository, commit, and workflow run
+through publication and final cleanup. Both `tools/deck_pressure_guard.sh` and
+`tools/deck_flatpak_publish.sh` validate it with the gateway before heavy work;
+direct execution without the lease fails closed. The final workflow step
+releases it, while the gateway's bounded expiry is the cancellation/crash
+fallback. The Mixxx runner still has no application deployment operation,
+Docker access, or shared runner registration.
+
 `tools/deck_build_preflight.sh` distinguishes cold and warm runner state. It
 requires 12 GiB free before a cold SDK setup and 6.5 GiB before a warm compile;
 the publisher repeats the warm gate. Retained Flatpak SDK data, Flatpak Builder
@@ -396,18 +408,20 @@ The fixed storage budget is made workable by:
 
 `tools/deck_flatpak_publish.sh` performs these checks and actions:
 
-1. Validate absolute publication root, positive retention, `x86_64`, and exact
+1. Validate the broker-issued host-capacity lease for this repository, commit,
+   and workflow run.
+2. Validate absolute publication root, positive retention, `x86_64`, and exact
    candidate ref.
-2. Enforce the host/cgroup memory and swap preflight.
-3. Require build, Flatpak, Git, OSTree, checksum, compression, timeout, and
+3. Enforce the host/cgroup memory and swap preflight.
+4. Require build, Flatpak, Git, OSTree, checksum, compression, timeout, and
    locking tools.
-4. Resolve checked-out `HEAD` and compare it with the Forgejo event SHA.
-5. Reject tracked checkout modifications.
-6. Acquire a publication lock so concurrent jobs cannot race publication.
-7. Download all integrity-pinned Flatpak sources into the persistent runner
+5. Resolve checked-out `HEAD` and compare it with the Forgejo event SHA.
+6. Reject tracked checkout modifications.
+7. Acquire a publication lock so concurrent jobs cannot race publication.
+8. Download all integrity-pinned Flatpak sources into the persistent runner
    state. Retry only recognized transient network failures at most three times;
    checksum and other source failures stop immediately.
-8. Build `Mixxx.flatpak` with one Flatpak Builder job and disable new source
+9. Build `Mixxx.flatpak` with one Flatpak Builder job and disable new source
    downloads so it uses the verified prefetch state. Pass the exact source SHA
    through `MIXXX_FLATPAK_SOURCE_SHA`; `flatpak_build.sh` exports the commit
    with `--subject=Built from <SHA>`:
@@ -416,26 +430,26 @@ The fixed storage budget is made workable by:
    packaging/flatpak/flatpak_build.sh bundle
    ```
 
-9. Import the bundle into a temporary OSTree repository.
-10. Run `ostree fsck`.
-11. Require `app/org.mixxx.Mixxx/x86_64/master`.
-12. Read the subject field from locale-stable normal `ostree show` output and
+10. Import the bundle into a temporary OSTree repository.
+11. Run `ostree fsck`.
+12. Require `app/org.mixxx.Mixxx/x86_64/master`.
+13. Read the subject field from locale-stable normal `ostree show` output and
     require it to identify the Git source SHA. The subject is part of the
     commit object, not detached metadata; `ostree show` has no `-s` option.
-13. Run a 30-second headless `/app/bin/mixxx --version` smoke test.
-14. Create a `git archive` source tarball compressed with Zstandard.
-15. Calculate bundle/source SHA-256 values and bundle byte length.
-16. Write manifest schema version 1.
-17. Atomically move files from a staging directory into the immutable build
+14. Run a 30-second headless `/app/bin/mixxx --version` smoke test.
+15. Create a `git archive` source tarball compressed with Zstandard.
+16. Calculate bundle/source SHA-256 values and bundle byte length.
+17. Write manifest schema version 1.
+18. Atomically move files from a staging directory into the immutable build
     directory.
-18. If the immutable directory already exists, require the bundle checksum to
+19. If the immutable directory already exists, require the bundle checksum to
     match.
-19. Query the remote candidate ref. If a newer candidate exists, retain this
+20. Query the remote candidate ref. If a newer candidate exists, retain this
     immutable build but do not promote it.
-20. Atomically replace `latest.json`.
-21. Retain the two most recent server build directories by default.
+21. Atomically replace `latest.json`.
+22. Retain the two most recent server build directories by default.
 
-A failure before step 20 leaves the previous `latest.json` unchanged.
+A failure before step 21 leaves the previous `latest.json` unchanged.
 
 ## Artifact Layout
 

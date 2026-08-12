@@ -3,6 +3,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+"${SCRIPT_DIR}/check_hosted_capacity_lease.sh"
+
 PRESSURE_FILE="${MIXXX_BUILD_PRESSURE_FILE:-/proc/pressure/memory}"
 MAX_SOME_AVG10="${MIXXX_BUILD_ABORT_PSI_SOME_AVG10:-60.00}"
 MAX_FULL_AVG10="${MIXXX_BUILD_ABORT_PSI_FULL_AVG10:-20.00}"

@@ -11,13 +11,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: mixxx-deck-${{ forgejo.ref }}
+  cancel-in-progress: false
+
 jobs:
   flatpak-x86_64:
     name: Build and publish x86_64 deck Flatpak
     runs-on: mixxx-flatpak-x86_64
     # A first cold or partially cached one-core build can exceed three hours.
     # The runner's CPU, memory, swap, PID, and PSI limits remain independent.
-    timeout-minutes: 480
+    timeout-minutes: 720
     env:
       CCACHE_DIR: /data/ccache
       CCACHE_MAXSIZE: 512M
@@ -37,8 +41,22 @@ jobs:
       MIXXX_DECK_SOURCE_REF: ${{ forgejo.ref }}
       MIXXX_DECK_EVENT_SHA: ${{ forgejo.sha }}
       FLATPAK_BUILDER_JOBS: "1"
+      HOSTED_DEPLOY_LEASE_FILE: /data/tmp/hosted-deploy-${{ forgejo.run_id }}.lease
+      HOSTED_DEPLOY_RUN_ID: ${{ forgejo.run_id }}
+      HOSTED_DEPLOY_SHA: ${{ forgejo.sha }}
 
     steps:
+      - name: Acquire the one host-wide capacity lease
+        run: |
+          umask 077
+          jq -n \
+            --arg run_id "$HOSTED_DEPLOY_RUN_ID" \
+            --arg sha "$HOSTED_DEPLOY_SHA" \
+            --arg ref "${{ forgejo.ref }}" \
+            '{run_id:$run_id,sha:$sha,ref:$ref}' |
+            hosted-deploy lease.acquire --wait-seconds 43200 --retry-seconds 30 |
+            jq -er '.lease' >"$HOSTED_DEPLOY_LEASE_FILE"
+
       - name: Check out the exact source commit
         uses: https://data.forgejo.org/actions/checkout@v6
         with:
@@ -62,3 +80,17 @@ jobs:
       - name: Clean transient runner data
         if: always()
         run: tools/deck_runner_cache_cleanup.sh --finalize
+
+      - name: Release shared host capacity
+        if: always()
+        run: |
+          if [ -s "$HOSTED_DEPLOY_LEASE_FILE" ]; then
+            jq -n \
+              --arg lease "$(cat "$HOSTED_DEPLOY_LEASE_FILE")" \
+              --arg run_id "$HOSTED_DEPLOY_RUN_ID" \
+              --arg sha "$HOSTED_DEPLOY_SHA" \
+              --arg outcome "${{ job.status }}" \
+              '{lease:$lease,run_id:$run_id,sha:$sha,outcome:$outcome}' |
+              hosted-deploy lease.release >/dev/null || true
+          fi
+          rm -f -- "$HOSTED_DEPLOY_LEASE_FILE"
