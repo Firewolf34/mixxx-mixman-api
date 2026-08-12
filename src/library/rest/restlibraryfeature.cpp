@@ -673,19 +673,25 @@ void RestLibraryFeature::slotPolicyPresetChanged(const QString& presetKey) {
         return;
     }
     m_pConfig->setValue(config::kMixManPolicyPresetKey, presetKey.trimmed());
-    requestMixManPolicyRefresh(RestLibrarySettings::fromConfig(m_pConfig));
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    updateMixManIntent(settings);
+    requestMixManPolicyRefresh(settings);
 }
 
 void RestLibraryFeature::slotTargetEnergyChanged(bool enabled, int energy) {
     m_pConfig->setValue(config::kMixManTargetEnergyEnabledKey, enabled);
     m_pConfig->setValue(config::kMixManTargetEnergyKey, energy);
-    requestMixManPolicyRefresh(RestLibrarySettings::fromConfig(m_pConfig));
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    updateMixManIntent(settings);
+    requestMixManPolicyRefresh(settings);
 }
 
 void RestLibraryFeature::slotTargetColorChanged(bool enabled, const QString& color) {
     m_pConfig->setValue(config::kMixManTargetColorEnabledKey, enabled);
     m_pConfig->setValue(config::kMixManTargetColorKey, color.trimmed());
-    requestMixManPolicyRefresh(RestLibrarySettings::fromConfig(m_pConfig));
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    updateMixManIntent(settings);
+    requestMixManPolicyRefresh(settings);
 }
 
 void RestLibraryFeature::slotTargetBpmChanged(bool enabled, int bpm) {
@@ -1076,6 +1082,11 @@ void RestLibraryFeature::updateMixManIntent(const RestLibrarySettings& settings)
     intent.clientId = m_clientId;
     intent.source = QStringLiteral("mixxx");
     intent.surface = QStringLiteral("rest_library");
+    const bool hasTargetEnergy = settings.mixManTargetEnergyEnabled;
+    const bool hasTargetColor = settings.mixManTargetColorEnabled &&
+            !settings.mixManTargetColor.trimmed().isEmpty();
+    intent.status = hasTargetEnergy || hasTargetColor ? QStringLiteral("active")
+                                                      : QStringLiteral("cleared");
     intent.policyPreset = settings.mixManPolicyPreset;
     intent.targetEnergyEnabled = settings.mixManTargetEnergyEnabled;
     intent.targetEnergy = settings.mixManTargetEnergyNormalized();

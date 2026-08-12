@@ -643,7 +643,10 @@ void RestLibraryClient::updateMixManSessionIntent(
     }
 
     QJsonObject payload = baseSessionClientObject(intent.clientId);
-    payload.insert(QStringLiteral("status"), QStringLiteral("active"));
+    payload.insert(
+            QStringLiteral("status"),
+            intent.status == QStringLiteral("cleared") ? QStringLiteral("cleared")
+                                                        : QStringLiteral("active"));
     insertIfNotEmpty(&payload, QStringLiteral("source"), intent.source);
     insertIfNotEmpty(&payload, QStringLiteral("surface"), intent.surface);
     insertIfNotEmpty(&payload, QStringLiteral("policy_preset"), intent.policyPreset);

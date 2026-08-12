@@ -80,6 +80,7 @@ struct RestLibrarySessionIntent {
     QString clientId;
     QString source;
     QString surface;
+    QString status = QStringLiteral("active");
     QString policyPreset;
     QString targetColor;
     bool targetColorEnabled = false;

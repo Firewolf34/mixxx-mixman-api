@@ -481,7 +481,11 @@ TEST(RestLibraryClientTest, TestsMixManConnectionSuccessfully) {
             QStringLiteral("/sessions"),
             {},
             {QStringLiteral("\"client_id\":\"mixxx-connection-test\""),
+                    QStringLiteral("\"client_kind\":\"mixxx\""),
+                    QStringLiteral("\"source\":\"mixxx\""),
+                    QStringLiteral("\"surface\":\"rest_library\""),
                     QStringLiteral("\"connection_test\":true")},
+            {QStringLiteral("\"role\"")},
             201,
             R"json({"session":{"id":"session-1"},"clients":[],"recent_events":[]})json");
 
@@ -662,7 +666,11 @@ TEST(RestLibraryClientTest, IgnoresStaleMixManConnectionTestReply) {
     MockNetworkReply* pCurrentSessionReply = network.ExpectPost(
             QStringLiteral("/sessions"),
             {},
-            {QStringLiteral("\"client_id\":\"mixxx-connection-test\"")},
+            {QStringLiteral("\"client_id\":\"mixxx-connection-test\""),
+                    QStringLiteral("\"client_kind\":\"mixxx\""),
+                    QStringLiteral("\"source\":\"mixxx\""),
+                    QStringLiteral("\"surface\":\"rest_library\"")},
+            {QStringLiteral("\"role\"")},
             201,
             R"json({"session":{"id":"session-1"},"clients":[],"recent_events":[]})json");
 
@@ -1239,6 +1247,35 @@ TEST(RestLibraryClientTest, UpdatesMixManSessionIntent) {
                     statusSpy.takeFirst().at(0));
     EXPECT_TRUE(status.success);
     EXPECT_EQ(status.operation, QStringLiteral("session_intent"));
+}
+
+TEST(RestLibraryClientTest, ClearsMixManSessionIntentWithoutTargets) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pReply = network.ExpectPut(
+            QStringLiteral("/sessions/session-1/intent"),
+            {},
+            {QStringLiteral("\"client_id\":\"client-1\""),
+                    QStringLiteral("\"status\":\"cleared\"")},
+            200,
+            R"json({"session_id":"session-1","revision":1,"status":"cleared"})json");
+
+    mixxx::library::rest::RestLibrarySessionIntent intent;
+    intent.clientId = QStringLiteral("client-1");
+    intent.status = QStringLiteral("cleared");
+
+    client.updateMixManSessionIntent(
+            newMixManSettings(),
+            QStringLiteral("session-1"),
+            intent);
+    pReply->Done();
+
+    ASSERT_EQ(statusSpy.count(), 1);
+    const auto status =
+            qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                    statusSpy.takeFirst().at(0));
+    EXPECT_TRUE(status.success);
 }
 
 TEST(RestLibraryClientTest, ReportsPutForFailedMixManSessionIntent) {

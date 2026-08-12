@@ -71,6 +71,13 @@ class MockNetworkAccessManager : public QNetworkAccessManager {
             const QString& contains,
             const QMap<QString, QString>& params,
             const QStringList& body_contains,
+            const QStringList& body_excludes,
+            int status,
+            const QByteArray& ret_data);
+    MockNetworkReply* ExpectPost(
+            const QString& contains,
+            const QMap<QString, QString>& params,
+            const QStringList& body_contains,
             int status,
             const QByteArray& ret_data);
     MockNetworkReply* ExpectPut(

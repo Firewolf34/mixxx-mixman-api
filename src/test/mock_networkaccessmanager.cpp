@@ -75,12 +75,13 @@ class RequestForUrlMatcher : public MatcherInterface<const QNetworkRequest&> {
 
 class BodyContainsMatcher : public MatcherInterface<QIODevice*> {
   public:
-    explicit BodyContainsMatcher(const QStringList& expected)
-            : m_expected(expected) {
+    BodyContainsMatcher(const QStringList& expected, const QStringList& forbidden)
+            : m_expected(expected),
+              m_forbidden(forbidden) {
     }
 
     bool Matches(QIODevice* device) const {
-        if (m_expected.isEmpty()) {
+        if (m_expected.isEmpty() && m_forbidden.isEmpty()) {
             return true;
         }
         if (!device) {
@@ -95,6 +96,11 @@ class BodyContainsMatcher : public MatcherInterface<QIODevice*> {
         const QString bodyText = QString::fromUtf8(body);
         for (const QString& expected : m_expected) {
             if (!bodyText.contains(expected)) {
+                return false;
+            }
+        }
+        for (const QString& forbidden : m_forbidden) {
+            if (bodyText.contains(forbidden)) {
                 return false;
             }
         }
@@ -121,6 +127,7 @@ class BodyContainsMatcher : public MatcherInterface<QIODevice*> {
 
   private:
     QStringList m_expected;
+    QStringList m_forbidden;
 };
 
 inline Matcher<const QNetworkRequest&> RequestForUrl(
@@ -129,8 +136,10 @@ inline Matcher<const QNetworkRequest&> RequestForUrl(
     return MakeMatcher(new RequestForUrlMatcher(contains, params));
 }
 
-inline Matcher<QIODevice*> BodyContains(const QStringList& expected) {
-    return MakeMatcher(new BodyContainsMatcher(expected));
+inline Matcher<QIODevice*> BodyContains(
+        const QStringList& expected,
+        const QStringList& forbidden = {}) {
+    return MakeMatcher(new BodyContainsMatcher(expected, forbidden));
 }
 
 MockNetworkReply* MockNetworkAccessManager::ExpectGet(
@@ -163,13 +172,23 @@ MockNetworkReply* MockNetworkAccessManager::ExpectPost(
         const QStringList& expected_body,
         int status,
         const QByteArray& data) {
+    return ExpectPost(contains, expected_params, expected_body, {}, status, data);
+}
+
+MockNetworkReply* MockNetworkAccessManager::ExpectPost(
+        const QString& contains,
+        const QMap<QString, QString>& expected_params,
+        const QStringList& expected_body,
+        const QStringList& forbidden_body,
+        int status,
+        const QByteArray& data) {
     MockNetworkReply* reply = new MockNetworkReply(data);
     reply->setAttribute(QNetworkRequest::HttpStatusCodeAttribute, status);
 
     EXPECT_CALL(*this,
             createRequest(PostOperation,
                     RequestForUrl(contains, expected_params),
-                    BodyContains(expected_body)))
+                    BodyContains(expected_body, forbidden_body)))
             .WillOnce([reply](
                               Operation,
                               const QNetworkRequest& request,
