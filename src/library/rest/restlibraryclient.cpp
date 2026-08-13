@@ -25,6 +25,9 @@ const Logger kLogger("RestLibraryClient");
 constexpr int kRequestTimeoutMillis = 15000;
 constexpr qsizetype kMaxLoggedResponseBytes = 500;
 const QString kSessionCreateOperation = QStringLiteral("session_create");
+const QString kSessionRegisterOperation = QStringLiteral("session_register");
+const QString kSessionDisconnectOperation = QStringLiteral("session_disconnect");
+const QString kSessionFetchOperation = QStringLiteral("session_fetch");
 const QString kSessionSnapshotOperation = QStringLiteral("session_snapshot");
 const QString kSessionIntentOperation = QStringLiteral("session_intent");
 const QString kSessionHeartbeatOperation = QStringLiteral("session_heartbeat");
@@ -42,8 +45,6 @@ const char* kRequestStartedAtProperty = "requestStartedAt";
 const char* kRequestStageProperty = "requestStage";
 const char* kAuthoritativeGenerationProperty = "authoritativeGeneration";
 const char* kRequestMethodProperty = "requestMethod";
-const char* kSessionClientIdProperty = "sessionClientId";
-const char* kSessionMetadataProperty = "sessionMetadata";
 
 bool isSuccessStatus(int statusCode) {
     return statusCode >= 200 && statusCode < 300;
@@ -200,6 +201,17 @@ QString errorTextFromResponse(const QByteArray& body) {
     return {};
 }
 
+QString errorReasonFromResponse(const QByteArray& body) {
+    const QJsonDocument document = QJsonDocument::fromJson(body);
+    if (!document.isObject()) {
+        return {};
+    }
+    const QJsonValue detail = document.object().value(QStringLiteral("detail"));
+    return detail.isObject()
+            ? detail.toObject().value(QStringLiteral("reason")).toString().trimmed()
+            : QString();
+}
+
 QByteArray jsonBody(const QJsonObject& object) {
     return QJsonDocument(object).toJson(QJsonDocument::Compact);
 }
@@ -216,15 +228,6 @@ void insertIntegerStringIfValid(QJsonObject* pObject, const QString& key, const 
     if (pObject && ok && integerValue > 0) {
         pObject->insert(key, integerValue);
     }
-}
-
-QJsonObject baseSessionClientObject(const QString& clientId) {
-    QJsonObject object;
-    insertIfNotEmpty(&object, QStringLiteral("client_id"), clientId);
-    object.insert(QStringLiteral("source"), QStringLiteral("mixxx"));
-    object.insert(QStringLiteral("surface"), QStringLiteral("rest_library"));
-    object.insert(QStringLiteral("client_kind"), QStringLiteral("mixxx"));
-    return object;
 }
 
 } // namespace
@@ -244,6 +247,8 @@ RestLibraryClient::RestLibraryClient(
             "mixxx::library::rest::RestLibrarySessionWriteStatus");
     qRegisterMetaType<RestLibrarySessionContract>(
             "mixxx::library::rest::RestLibrarySessionContract");
+    qRegisterMetaType<RestLibrarySessionRegistration>(
+            "mixxx::library::rest::RestLibrarySessionRegistration");
     qRegisterMetaType<QList<RestLibraryPolicyPreset>>(
             "QList<mixxx::library::rest::RestLibraryPolicyPreset>");
     qRegisterMetaType<RestLibraryPolicyPath>("mixxx::library::rest::RestLibraryPolicyPath");
@@ -504,11 +509,16 @@ void RestLibraryClient::fetchMixManPolicyPath(
 
 void RestLibraryClient::createMixManSession(
         const RestLibrarySettings& settings,
-        const QString& clientId,
+        const QString& sessionId,
         const QJsonObject& metadata) {
     const int requestGeneration = ++m_sessionRequestGeneration;
     m_settings = settings;
-    if (!m_pNetworkAccessManager || !m_settings.isConfigured()) {
+    m_pendingSessionId = sessionId.trimmed();
+    m_pendingSessionMetadata = metadata;
+    m_pendingResumeCredentials = {};
+    m_pendingFreshRegistrationRetried = false;
+    m_pendingCreateAttempted = false;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured() || m_pendingSessionId.isEmpty()) {
         RestLibrarySessionWriteStatus status;
         status.operation = kSessionCreateOperation;
         status.errorText = tr("Session publishing is not configured.");
@@ -519,8 +529,6 @@ void RestLibraryClient::createMixManSession(
     QNetworkReply* pReply = m_pNetworkAccessManager->get(
             newJsonRequest(config::mixManConfigPath()));
     pReply->setParent(this);
-    pReply->setProperty(kSessionClientIdProperty, clientId);
-    pReply->setProperty(kSessionMetadataProperty, metadata);
     pReply->setProperty(kRequestGenerationProperty, requestGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply,
@@ -529,19 +537,114 @@ void RestLibraryClient::createMixManSession(
             &RestLibraryClient::slotSessionContractFinished);
 }
 
+void RestLibraryClient::registerMixManSessionInstance(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const RestLibrarySessionCredentials& credentials,
+        const QJsonObject& metadata) {
+    ++m_sessionRequestGeneration;
+    m_settings = settings;
+    m_pendingSessionId = sessionId.trimmed();
+    m_pendingSessionMetadata = metadata;
+    m_pendingResumeCredentials = credentials;
+    m_pendingFreshRegistrationRetried = false;
+    m_pendingCreateAttempted = false;
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured() ||
+            m_pendingSessionId.isEmpty()) {
+        RestLibrarySessionWriteStatus status;
+        status.operation = kSessionRegisterOperation;
+        status.errorText = tr("Session registration is not configured.");
+        emit mixManSessionWriteStatusUpdated(status);
+        return;
+    }
+    startMixManInstanceRegistration(
+            m_pendingSessionId,
+            m_pendingResumeCredentials,
+            m_pendingSessionMetadata);
+}
+
+void RestLibraryClient::startMixManInstanceRegistration(
+        const QString& sessionId,
+        const RestLibrarySessionCredentials& credentials,
+        const QJsonObject& metadata) {
+    if (!m_pNetworkAccessManager || sessionId.trimmed().isEmpty()) {
+        return;
+    }
+    QJsonObject payload{
+            {QStringLiteral("application"), QStringLiteral("mixxx")},
+            {QStringLiteral("surface"), QStringLiteral("rest_library")},
+    };
+    if (credentials.isComplete()) {
+        payload.insert(QStringLiteral("resume_instance_id"), credentials.instanceId);
+        payload.insert(QStringLiteral("resume_token"), credentials.resumeToken);
+    }
+    if (!metadata.isEmpty()) {
+        payload.insert(QStringLiteral("metadata"), metadata);
+    }
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(
+            newJsonRequest(config::mixManSessionInstancesPath(sessionId.trimmed())),
+            jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionRegisterOperation);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("POST"));
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionRegisterFinished);
+}
+
+void RestLibraryClient::startMixManSessionCreate(
+        const QString& sessionId,
+        const QJsonObject& metadata) {
+    m_pendingCreateAttempted = true;
+    QJsonObject payload{{QStringLiteral("session_id"), sessionId.trimmed()}};
+    if (!metadata.isEmpty()) {
+        payload.insert(QStringLiteral("metadata"), metadata);
+    }
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(
+            newJsonRequest(config::mixManSessionsPath()), jsonBody(payload));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionCreateOperation);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("POST"));
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionCreateFinished);
+}
+
+void RestLibraryClient::disconnectMixManSessionInstance(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const QString& instanceId) {
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || sessionId.trimmed().isEmpty() || instanceId.trimmed().isEmpty()) {
+        return;
+    }
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(
+            newJsonRequest(config::mixManSessionInstanceDisconnectPath(
+                    sessionId.trimmed(), instanceId.trimmed())),
+            QByteArrayLiteral("{}"));
+    pReply->setParent(this);
+    pReply->setProperty("operation", kSessionDisconnectOperation);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("POST"));
+    pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
+}
+
 void RestLibraryClient::fetchMixManSession(
         const RestLibrarySettings& settings,
-        const QString& sessionId) {
+        const QString& sessionId,
+        const QString& instanceId) {
     m_settings = settings;
-    if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty()) {
+    if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty() ||
+            instanceId.trimmed().isEmpty()) {
         emit mixManSessionFetched({});
         return;
     }
 
     const int authoritativeGeneration = ++m_sessionAuthoritativeGeneration;
     QNetworkReply* pReply = m_pNetworkAccessManager->get(
-            newJsonRequest(QStringLiteral("%1/%2")
-                            .arg(config::mixManSessionsPath(), sessionId.trimmed())));
+            newJsonRequest(config::mixManSessionStatePath(
+                    sessionId.trimmed(), instanceId.trimmed())));
     pReply->setParent(this);
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
@@ -562,9 +665,11 @@ void RestLibraryClient::publishMixManSessionPlayback(
         return;
     }
 
-    QJsonObject payload = baseSessionClientObject(playback.clientId);
-    insertIfNotEmpty(&payload, QStringLiteral("surface"), playback.surface);
-    insertIfNotEmpty(&payload, QStringLiteral("source"), playback.source);
+    QJsonObject payload{
+            {QStringLiteral("instance_id"), playback.lease.instanceId},
+            {QStringLiteral("lease_id"), playback.lease.leaseId},
+            {QStringLiteral("lease_generation"), playback.lease.generation},
+    };
     insertIntegerStringIfValid(
             &payload,
             QStringLiteral("current_track_id"),
@@ -604,9 +709,11 @@ void RestLibraryClient::publishMixManSessionSnapshot(
         return;
     }
 
-    QJsonObject payload = baseSessionClientObject(snapshot.clientId);
-    insertIfNotEmpty(&payload, QStringLiteral("surface"), snapshot.surface);
-    insertIfNotEmpty(&payload, QStringLiteral("source"), snapshot.source);
+    QJsonObject payload{
+            {QStringLiteral("instance_id"), snapshot.lease.instanceId},
+            {QStringLiteral("lease_id"), snapshot.lease.leaseId},
+            {QStringLiteral("lease_generation"), snapshot.lease.generation},
+    };
     insertIntegerStringIfValid(
             &payload,
             QStringLiteral("current_track_id"),
@@ -618,6 +725,7 @@ void RestLibraryClient::publishMixManSessionSnapshot(
         payload.insert(QStringLiteral("metadata"), snapshot.metadata);
     }
 
+    const int authoritativeGeneration = ++m_sessionAuthoritativeGeneration;
     QNetworkReply* pReply = m_pNetworkAccessManager->put(
             newJsonRequest(config::mixManSessionSnapshotPath(sessionId.trimmed())),
             jsonBody(payload));
@@ -625,6 +733,7 @@ void RestLibraryClient::publishMixManSessionSnapshot(
     pReply->setProperty("operation", kSessionSnapshotOperation);
     pReply->setProperty(kRequestMethodProperty, QStringLiteral("PUT"));
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
+    pReply->setProperty(kAuthoritativeGenerationProperty, authoritativeGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
 }
@@ -642,13 +751,11 @@ void RestLibraryClient::updateMixManSessionIntent(
         return;
     }
 
-    QJsonObject payload = baseSessionClientObject(intent.clientId);
+    QJsonObject payload{{QStringLiteral("instance_id"), intent.instanceId}};
     payload.insert(
             QStringLiteral("status"),
             intent.status == QStringLiteral("cleared") ? QStringLiteral("cleared")
                                                         : QStringLiteral("active"));
-    insertIfNotEmpty(&payload, QStringLiteral("source"), intent.source);
-    insertIfNotEmpty(&payload, QStringLiteral("surface"), intent.surface);
     insertIfNotEmpty(&payload, QStringLiteral("policy_preset"), intent.policyPreset);
     if (intent.targetEnergyEnabled) {
         payload.insert(QStringLiteral("target_energy"), intent.targetEnergy);
@@ -674,23 +781,20 @@ void RestLibraryClient::updateMixManSessionIntent(
 void RestLibraryClient::sendMixManSessionHeartbeat(
         const RestLibrarySettings& settings,
         const QString& sessionId,
-        const QString& clientId,
+        const QString& instanceId,
         const QJsonObject& metadata) {
     m_settings = settings;
     if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty()) {
         return;
     }
 
-    QJsonObject payload;
-    insertIfNotEmpty(&payload, QStringLiteral("client_id"), clientId);
-    payload.insert(QStringLiteral("client_kind"), QStringLiteral("mixxx"));
-    payload.insert(QStringLiteral("surface"), QStringLiteral("rest_library"));
-    payload.insert(QStringLiteral("status"), QStringLiteral("active"));
+    QJsonObject payload{{QStringLiteral("status"), QStringLiteral("active")}};
     if (!metadata.isEmpty()) {
         payload.insert(QStringLiteral("metadata"), metadata);
     }
     QNetworkReply* pReply = m_pNetworkAccessManager->post(
-            newJsonRequest(config::mixManSessionHeartbeatPath(sessionId.trimmed())),
+            newJsonRequest(config::mixManSessionInstanceHeartbeatPath(
+                    sessionId.trimmed(), instanceId.trimmed())),
             jsonBody(payload));
     pReply->setParent(this);
     pReply->setProperty("operation", kSessionHeartbeatOperation);
@@ -703,49 +807,51 @@ void RestLibraryClient::sendMixManSessionHeartbeat(
 void RestLibraryClient::claimMixManPlaybackControl(
         const RestLibrarySettings& settings,
         const QString& sessionId,
-        const QString& clientId,
+        const QString& instanceId,
+        int ttlSeconds,
         const QJsonObject& metadata) {
+    QJsonObject requestMetadata = metadata;
+    requestMetadata.insert(
+            QStringLiteral("ttl_seconds"), std::clamp(ttlSeconds, 5, 300));
     requestMixManPlaybackControl(
             settings,
             sessionId,
-            clientId,
+            RestLibraryPlaybackLease{instanceId, {}, 0, false},
             QStringLiteral("claim"),
             kSessionPlaybackControlClaimOperation,
-            metadata);
+            requestMetadata);
 }
 
 void RestLibraryClient::renewMixManPlaybackControl(
         const RestLibrarySettings& settings,
         const QString& sessionId,
-        const QString& clientId,
-        const QJsonObject& metadata) {
+        const RestLibraryPlaybackLease& lease) {
     requestMixManPlaybackControl(
             settings,
             sessionId,
-            clientId,
+            lease,
             QStringLiteral("renew"),
             kSessionPlaybackControlRenewOperation,
-            metadata);
+            {});
 }
 
 void RestLibraryClient::releaseMixManPlaybackControl(
         const RestLibrarySettings& settings,
         const QString& sessionId,
-        const QString& clientId,
-        const QJsonObject& metadata) {
+        const RestLibraryPlaybackLease& lease) {
     requestMixManPlaybackControl(
             settings,
             sessionId,
-            clientId,
+            lease,
             QStringLiteral("release"),
             kSessionPlaybackControlReleaseOperation,
-            metadata);
+            {});
 }
 
 void RestLibraryClient::requestMixManPlaybackControl(
         const RestLibrarySettings& settings,
         const QString& sessionId,
-        const QString& clientId,
+        const RestLibraryPlaybackLease& lease,
         const QString& action,
         const QString& operation,
         const QJsonObject& metadata) {
@@ -758,12 +864,20 @@ void RestLibraryClient::requestMixManPlaybackControl(
         return;
     }
 
-    QJsonObject payload;
-    insertIfNotEmpty(&payload, QStringLiteral("client_id"), clientId);
-    payload.insert(QStringLiteral("client_kind"), QStringLiteral("mixxx"));
-    payload.insert(QStringLiteral("surface"), QStringLiteral("rest_library"));
-    if (!metadata.isEmpty()) {
-        payload.insert(QStringLiteral("metadata"), metadata);
+    QJsonObject payload{{QStringLiteral("instance_id"), lease.instanceId}};
+    if (action == QStringLiteral("claim")) {
+        payload.insert(QStringLiteral("ttl_seconds"),
+                metadata.value(QStringLiteral("ttl_seconds")).toInt(30));
+    } else {
+        payload.insert(QStringLiteral("lease_id"), lease.leaseId);
+        payload.insert(QStringLiteral("generation"), lease.generation);
+    }
+    if (action == QStringLiteral("claim") && !metadata.isEmpty()) {
+        QJsonObject publishedMetadata = metadata;
+        publishedMetadata.remove(QStringLiteral("ttl_seconds"));
+        if (!publishedMetadata.isEmpty()) {
+            payload.insert(QStringLiteral("metadata"), publishedMetadata);
+        }
     }
 
     const int authoritativeGeneration = ++m_sessionAuthoritativeGeneration;
@@ -791,9 +905,7 @@ void RestLibraryClient::selectMixManSessionCandidate(
         const RestLibrarySettings& settings,
         const QString& sessionId,
         const QString& trackId,
-        const QString& clientId,
-        const QString& selectionOrigin,
-        bool allowExternalCandidate,
+        const RestLibraryPlaybackLease& lease,
         const QJsonObject& metadata) {
     m_settings = settings;
     const QString normalizedTrackId = positiveIntegerString(trackId);
@@ -808,11 +920,13 @@ void RestLibraryClient::selectMixManSessionCandidate(
         return;
     }
 
-    QJsonObject payload = baseSessionClientObject(clientId);
-    insertIfNotEmpty(&payload, QStringLiteral("selection_origin"), selectionOrigin);
-    if (allowExternalCandidate) {
-        payload.insert(QStringLiteral("allow_external_candidate"), true);
-    }
+    QJsonObject payload{
+            {QStringLiteral("instance_id"), lease.instanceId},
+            {QStringLiteral("lease_id"), lease.leaseId},
+            {QStringLiteral("lease_generation"), lease.generation},
+            {QStringLiteral("selection_origin"), QStringLiteral("authoritative_candidate")},
+            {QStringLiteral("allow_external_candidate"), false},
+    };
     if (!metadata.isEmpty()) {
         payload.insert(QStringLiteral("metadata"), metadata);
     }
@@ -835,7 +949,7 @@ void RestLibraryClient::selectMixManSessionCandidate(
 void RestLibraryClient::publishMixManPolicyRefreshAction(
         const RestLibrarySettings& settings,
         const QString& sessionId,
-        const QString& clientId,
+        const QString& instanceId,
         const QJsonObject& metadata) {
     m_settings = settings;
     if (!m_pNetworkAccessManager || !m_settings.isConfigured() || sessionId.trimmed().isEmpty()) {
@@ -846,8 +960,10 @@ void RestLibraryClient::publishMixManPolicyRefreshAction(
         return;
     }
 
-    QJsonObject payload = baseSessionClientObject(clientId);
-    payload.insert(QStringLiteral("action_type"), QStringLiteral("policy_refresh"));
+    QJsonObject payload{
+            {QStringLiteral("action_type"), QStringLiteral("policy_refresh")},
+            {QStringLiteral("instance_id"), instanceId},
+    };
     insertIfNotEmpty(&payload, QStringLiteral("policy_preset"), m_settings.mixManPolicyPreset);
     if (m_settings.mixManTargetColorEnabled &&
             !m_settings.mixManTargetColor.trimmed().isEmpty()) {
@@ -891,6 +1007,9 @@ void RestLibraryClient::testMixManConnection(
     m_connectionTestClientId = clientId.trimmed().isEmpty()
             ? QStringLiteral("mixxx-connection-test")
             : clientId.trimmed();
+    m_connectionTestSessionId.clear();
+    m_connectionTestInstanceId.clear();
+    m_connectionTestLease = {};
     m_connectionTestCreateSession = createSession;
     m_connectionTestFailed = false;
     m_settings = settings;
@@ -923,6 +1042,13 @@ void RestLibraryClient::testMixManConnection(
 }
 
 void RestLibraryClient::cancelMixManConnectionTest() {
+    if (!m_connectionTestSessionId.isEmpty() &&
+            !m_connectionTestInstanceId.isEmpty()) {
+        disconnectMixManSessionInstance(
+                m_connectionTestSettings,
+                m_connectionTestSessionId,
+                m_connectionTestInstanceId);
+    }
     ++m_connectionTestRequestGeneration;
     const QVector<QPointer<QNetworkReply>> replies = m_connectionTestReplies;
     m_connectionTestReplies.clear();
@@ -935,6 +1061,9 @@ void RestLibraryClient::cancelMixManConnectionTest() {
         }
         reply->deleteLater();
     }
+    m_connectionTestSessionId.clear();
+    m_connectionTestInstanceId.clear();
+    m_connectionTestLease = {};
     m_connectionTestFailed = false;
 }
 
@@ -998,6 +1127,7 @@ QNetworkReply* RestLibraryClient::startConnectionTestGet(
     pReply->setProperty(kRequestGenerationProperty, m_connectionTestRequestGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     pReply->setProperty(kRequestStageProperty, stage);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("GET"));
     m_connectionTestReplies.append(QPointer<QNetworkReply>(pReply));
     return pReply;
 }
@@ -1013,6 +1143,7 @@ QNetworkReply* RestLibraryClient::startConnectionTestPost(
     pReply->setProperty(kRequestGenerationProperty, m_connectionTestRequestGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     pReply->setProperty(kRequestStageProperty, stage);
+    pReply->setProperty(kRequestMethodProperty, QStringLiteral("POST"));
     m_connectionTestReplies.append(QPointer<QNetworkReply>(pReply));
     return pReply;
 }
@@ -1035,7 +1166,7 @@ void RestLibraryClient::finishConnectionTestStep(
             *pReply,
             responseBody,
             pReply->property(kRequestStageProperty).toString(),
-            QStringLiteral("GET"),
+            pReply->property(kRequestMethodProperty).toString(),
             failureSummary,
             success);
     if (!success) {
@@ -1374,10 +1505,13 @@ void RestLibraryClient::slotConnectionTestTracksFinished() {
         return;
     }
 
-    QJsonObject payload = baseSessionClientObject(m_connectionTestClientId);
-    payload.insert(
-            QStringLiteral("metadata"),
-            QJsonObject{{QStringLiteral("connection_test"), true}});
+    m_connectionTestSessionId = generateMixManSessionId(QStringLiteral("mixxx-test"));
+    QJsonObject payload{
+            {QStringLiteral("session_id"), m_connectionTestSessionId},
+            {QStringLiteral("display_name"), QStringLiteral("Mixxx connection test")},
+            {QStringLiteral("metadata"),
+                    QJsonObject{{QStringLiteral("connection_test"), true}}},
+    };
     QNetworkReply* pSessionReply = startConnectionTestPost(
             config::mixManSessionsPath(),
             payload,
@@ -1407,7 +1541,7 @@ void RestLibraryClient::slotConnectionTestSessionFinished() {
     bool success =
             pReply->error() == QNetworkReply::NoError &&
             isSuccessStatus(statusCodeFromReply(*pReply));
-    QString fallbackSummary = tr("MixMan session creation failed.");
+    QString fallbackSummary = tr("MixMan temporary session creation failed.");
     if (success) {
         QJsonParseError parseError;
         const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
@@ -1417,6 +1551,8 @@ void RestLibraryClient::slotConnectionTestSessionFinished() {
         } else if (parseSessionDocument(document).id.isEmpty()) {
             success = false;
             fallbackSummary = tr("MixMan session response did not include a session ID.");
+        } else {
+            m_connectionTestSessionId = parseSessionDocument(document).id;
         }
     }
     emitReplyDiagnostic(
@@ -1428,7 +1564,210 @@ void RestLibraryClient::slotConnectionTestSessionFinished() {
             success);
     if (!success) {
         m_connectionTestFailed = true;
+        emit connectionTestFinished(false);
+        return;
     }
+    QJsonObject payload{
+            {QStringLiteral("application"), QStringLiteral("mixxx")},
+            {QStringLiteral("surface"), QStringLiteral("rest_library")},
+            {QStringLiteral("metadata"),
+                    QJsonObject{{QStringLiteral("connection_test"), true}}},
+    };
+    QNetworkReply* pRegisterReply = startConnectionTestPost(
+            config::mixManSessionInstancesPath(m_connectionTestSessionId),
+            payload,
+            tr("Instance registration"));
+    connect(pRegisterReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotConnectionTestRegisterFinished);
+}
+
+void RestLibraryClient::slotConnectionTestRegisterFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit connectionTestFinished(false);
+        return;
+    }
+    const bool stale = pReply->property(kRequestGenerationProperty).toInt() !=
+            m_connectionTestRequestGeneration;
+    forgetConnectionTestReply(pReply);
+    pReply->deleteLater();
+    if (stale) {
+        return;
+    }
+    const QByteArray body = pReply->readAll();
+    const RestLibrarySessionRegistration registration =
+            parseSessionRegistrationDocument(QJsonDocument::fromJson(body));
+    if (!registration.instance.instanceId.isEmpty()) {
+        m_connectionTestInstanceId = registration.instance.instanceId;
+    }
+    static const QStringList required{
+            QStringLiteral("session.read"),
+            QStringLiteral("session.recommendations.read"),
+            QStringLiteral("session.intent.write"),
+            QStringLiteral("session.intent.ack"),
+            QStringLiteral("session.plan.write"),
+            QStringLiteral("session.action.write"),
+            QStringLiteral("playback.claim"),
+            QStringLiteral("playback.publish"),
+    };
+    bool success = pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(statusCodeFromReply(*pReply)) && registration.isValid();
+    for (const QString& capability : required) {
+        success = success && registration.instance.capabilities.contains(capability);
+    }
+    success = success && registration.instance.capabilities.size() == required.size();
+    success = success && !registration.instance.capabilities.contains(
+            QStringLiteral("session.controller.read"));
+    emitReplyDiagnostic(*pReply,
+            body,
+            tr("Instance registration"),
+            QStringLiteral("POST"),
+            tr("MixMan did not grant the complete Mixxx v3 capability set."),
+            success);
+    if (!success) {
+        m_connectionTestFailed = true;
+        if (!m_connectionTestInstanceId.isEmpty()) {
+            startConnectionTestDisconnect();
+            return;
+        }
+        emit connectionTestFinished(false);
+        return;
+    }
+    QNetworkReply* pStateReply = startConnectionTestGet(
+            config::mixManSessionStatePath(
+                    m_connectionTestSessionId, m_connectionTestInstanceId),
+            0,
+            tr("Instance state"));
+    connect(pStateReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotConnectionTestStateFinished);
+}
+
+void RestLibraryClient::slotConnectionTestStateFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit connectionTestFinished(false);
+        return;
+    }
+    const bool stale = pReply->property(kRequestGenerationProperty).toInt() !=
+            m_connectionTestRequestGeneration;
+    forgetConnectionTestReply(pReply);
+    pReply->deleteLater();
+    if (stale) {
+        return;
+    }
+    bool success = false;
+    finishConnectionTestStep(pReply, tr("MixMan instance-bound state read failed."), &success);
+    if (!success) {
+        m_connectionTestFailed = true;
+        startConnectionTestDisconnect();
+        return;
+    }
+    QNetworkReply* pClaimReply = startConnectionTestPost(
+            config::mixManSessionPlaybackControlClaimPath(m_connectionTestSessionId),
+            QJsonObject{{QStringLiteral("instance_id"), m_connectionTestInstanceId}},
+            tr("Playback authority claim"));
+    connect(pClaimReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotConnectionTestClaimFinished);
+}
+
+void RestLibraryClient::slotConnectionTestClaimFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit connectionTestFinished(false);
+        return;
+    }
+    const bool stale = pReply->property(kRequestGenerationProperty).toInt() !=
+            m_connectionTestRequestGeneration;
+    forgetConnectionTestReply(pReply);
+    pReply->deleteLater();
+    if (stale) {
+        return;
+    }
+    const QByteArray body = pReply->readAll();
+    const RestLibraryAuthoritativeState state =
+            parseAuthoritativeDocument(QJsonDocument::fromJson(body));
+    const bool success = pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(statusCodeFromReply(*pReply)) &&
+            state.playbackLease.isValidFor(m_connectionTestInstanceId);
+    emitReplyDiagnostic(*pReply,
+            body,
+            tr("Playback authority claim"),
+            QStringLiteral("POST"),
+            tr("MixMan playback authority claim failed."),
+            success);
+    if (!success) {
+        m_connectionTestFailed = true;
+        startConnectionTestDisconnect();
+        return;
+    }
+    m_connectionTestLease = state.playbackLease;
+    QNetworkReply* pReleaseReply = startConnectionTestPost(
+            config::mixManSessionPlaybackControlReleasePath(m_connectionTestSessionId),
+            QJsonObject{
+                    {QStringLiteral("instance_id"), m_connectionTestLease.instanceId},
+                    {QStringLiteral("lease_id"), m_connectionTestLease.leaseId},
+                    {QStringLiteral("generation"), m_connectionTestLease.generation},
+            },
+            tr("Playback authority release"));
+    connect(pReleaseReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotConnectionTestReleaseFinished);
+}
+
+void RestLibraryClient::slotConnectionTestReleaseFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit connectionTestFinished(false);
+        return;
+    }
+    const bool stale = pReply->property(kRequestGenerationProperty).toInt() !=
+            m_connectionTestRequestGeneration;
+    forgetConnectionTestReply(pReply);
+    pReply->deleteLater();
+    if (stale) {
+        return;
+    }
+    bool success = false;
+    finishConnectionTestStep(pReply, tr("MixMan playback authority release failed."), &success);
+    m_connectionTestFailed = m_connectionTestFailed || !success;
+    startConnectionTestDisconnect();
+}
+
+void RestLibraryClient::startConnectionTestDisconnect() {
+    QNetworkReply* pDisconnectReply = startConnectionTestPost(
+            config::mixManSessionInstanceDisconnectPath(
+                    m_connectionTestSessionId, m_connectionTestInstanceId),
+            {},
+            tr("Instance disconnect"));
+    connect(pDisconnectReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotConnectionTestDisconnectFinished);
+}
+
+void RestLibraryClient::slotConnectionTestDisconnectFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit connectionTestFinished(false);
+        return;
+    }
+    const bool stale = pReply->property(kRequestGenerationProperty).toInt() !=
+            m_connectionTestRequestGeneration;
+    forgetConnectionTestReply(pReply);
+    pReply->deleteLater();
+    if (stale) {
+        return;
+    }
+    bool success = false;
+    finishConnectionTestStep(pReply, tr("MixMan test instance disconnect failed."), &success);
+    m_connectionTestFailed = m_connectionTestFailed || !success;
     emit connectionTestFinished(!m_connectionTestFailed);
 }
 
@@ -1892,24 +2231,12 @@ void RestLibraryClient::slotSessionContractFinished() {
         return;
     }
 
-    QJsonObject payload = baseSessionClientObject(
-            pReply->property(kSessionClientIdProperty).toString());
-    const QJsonObject metadata =
-            qvariant_cast<QJsonObject>(pReply->property(kSessionMetadataProperty));
-    if (!metadata.isEmpty()) {
-        payload.insert(QStringLiteral("metadata"), metadata);
-    }
-    QNetworkReply* pSessionReply = m_pNetworkAccessManager->post(
-            newJsonRequest(config::mixManSessionsPath()),
-            jsonBody(payload));
-    pSessionReply->setParent(this);
-    pSessionReply->setProperty("operation", kSessionCreateOperation);
-    pSessionReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
-    pSessionReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
-    connect(pSessionReply,
-            &QNetworkReply::finished,
-            this,
-            &RestLibraryClient::slotSessionCreateFinished);
+    m_pendingResumeCredentials =
+            readMixManSessionCredentials(m_settings, m_pendingSessionId);
+    startMixManInstanceRegistration(
+            m_pendingSessionId,
+            m_pendingResumeCredentials,
+            m_pendingSessionMetadata);
 }
 
 void RestLibraryClient::slotSessionCreateFinished() {
@@ -1929,10 +2256,16 @@ void RestLibraryClient::slotSessionCreateFinished() {
     RestLibrarySessionWriteStatus status;
     status.operation = kSessionCreateOperation;
     status.statusCode = statusCodeFromReply(*pReply);
-    status.success =
-            pReply->error() == QNetworkReply::NoError &&
-            isSuccessStatus(status.statusCode);
+    status.errorReason = errorReasonFromResponse(responseBody);
+    status.success = pReply->error() == QNetworkReply::NoError &&
+            (isSuccessStatus(status.statusCode) || status.statusCode == 409);
     if (!status.success) {
+        if ((status.statusCode == 0 || status.statusCode >= 500) &&
+                m_pendingCreateAttempted) {
+            startMixManInstanceRegistration(
+                    m_pendingSessionId, {}, m_pendingSessionMetadata);
+            return;
+        }
         const auto diagnostic = diagnosticForReply(
                 *pReply,
                 responseBody,
@@ -1951,38 +2284,84 @@ void RestLibraryClient::slotSessionCreateFinished() {
         return;
     }
 
-    QJsonParseError parseError;
-    const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
-    if (parseError.error != QJsonParseError::NoError) {
-        status.success = false;
-        status.errorText = tr("MixMan session response was not valid JSON.");
-        emitReplyDiagnostic(
-                *pReply,
-                responseBody,
-                tr("Session create"),
-                QStringLiteral("POST"),
-                status.errorText,
-                false);
+    if (status.statusCode != 409) {
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+        const RestLibrarySession session = parseSessionDocument(document);
+        if (parseError.error != QJsonParseError::NoError || session.id.isEmpty()) {
+            startMixManInstanceRegistration(
+                    m_pendingSessionId, {}, m_pendingSessionMetadata);
+            return;
+        }
+        emit mixManSessionCreated(session);
+    }
+    emit mixManSessionWriteStatusUpdated(status);
+    startMixManInstanceRegistration(
+            m_pendingSessionId, {}, m_pendingSessionMetadata);
+}
+
+void RestLibraryClient::slotSessionRegisterFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        return;
+    }
+    const bool staleReply = pReply->property(kRequestGenerationProperty).toInt() !=
+            m_sessionRequestGeneration;
+    pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
+
+    const QByteArray responseBody = pReply->readAll();
+    RestLibrarySessionWriteStatus status;
+    status.operation = kSessionRegisterOperation;
+    status.statusCode = statusCodeFromReply(*pReply);
+    status.errorReason = errorReasonFromResponse(responseBody);
+    status.success = pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(status.statusCode);
+    if (status.success) {
+        const RestLibrarySessionRegistration registration =
+                parseSessionRegistrationDocument(QJsonDocument::fromJson(responseBody));
+        if (!registration.isValid()) {
+            status.success = false;
+            status.errorText = tr("MixMan instance registration response was incomplete.");
+        } else {
+            const RestLibrarySessionCredentials credentials{
+                    registration.instance.instanceId,
+                    registration.resumeToken};
+            if (!writeMixManSessionCredentials(
+                        m_settings, registration.sessionId, credentials)) {
+                status.errorText = tr("MixMan instance is active, but resume credentials could not be saved securely.");
+            }
+            emit mixManSessionInstanceRegistered(registration);
+        }
         emit mixManSessionWriteStatusUpdated(status);
         return;
     }
 
-    RestLibrarySession session = parseSessionDocument(document);
-    if (session.id.isEmpty()) {
-        status.success = false;
-        status.errorText = tr("MixMan session response did not include a session ID.");
-        emitReplyDiagnostic(
-                *pReply,
-                responseBody,
-                tr("Session create"),
-                QStringLiteral("POST"),
-                status.errorText,
-                false);
-        emit mixManSessionWriteStatusUpdated(status);
+    if (status.statusCode == 404 && !m_pendingCreateAttempted) {
+        startMixManSessionCreate(m_pendingSessionId, m_pendingSessionMetadata);
+        return;
+    }
+    if (status.statusCode == 409 && m_pendingResumeCredentials.isComplete() &&
+            !m_pendingFreshRegistrationRetried) {
+        clearMixManSessionCredentials(m_settings, m_pendingSessionId);
+        m_pendingResumeCredentials = {};
+        m_pendingFreshRegistrationRetried = true;
+        startMixManInstanceRegistration(
+                m_pendingSessionId, {}, m_pendingSessionMetadata);
         return;
     }
 
-    emit mixManSessionCreated(session);
+    const auto diagnostic = diagnosticForReply(
+            *pReply,
+            responseBody,
+            tr("Session registration"),
+            QStringLiteral("POST"),
+            tr("MixMan instance registration failed."),
+            false);
+    status.errorText = diagnostic.summary;
+    emit requestDiagnosticUpdated(diagnostic);
     emit mixManSessionWriteStatusUpdated(status);
 }
 
@@ -2018,6 +2397,12 @@ void RestLibraryClient::slotSessionFetchFinished() {
                 QStringLiteral("GET"),
                 tr("MixMan session fetch failed."),
                 false);
+        RestLibrarySessionWriteStatus status;
+        status.operation = kSessionFetchOperation;
+        status.statusCode = statusCode;
+        status.errorReason = errorReasonFromResponse(responseBody);
+        status.errorText = tr("MixMan session fetch failed.");
+        emit mixManSessionWriteStatusUpdated(status);
         emit mixManSessionFetched({});
         return;
     }
@@ -2057,6 +2442,7 @@ void RestLibraryClient::slotSessionWriteFinished() {
     const QString requestMethod =
             pReply->property(kRequestMethodProperty).toString();
     status.statusCode = statusCodeFromReply(*pReply);
+    status.errorReason = errorReasonFromResponse(responseBody);
     status.success =
             pReply->error() == QNetworkReply::NoError &&
             isSuccessStatus(status.statusCode);
@@ -2076,6 +2462,7 @@ void RestLibraryClient::slotSessionWriteFinished() {
                           << responseSnippet(responseBody);
         emit requestDiagnosticUpdated(diagnostic);
     } else if (status.operation == kSessionPlaybackOperation ||
+            status.operation == kSessionSnapshotOperation ||
             status.operation == kSessionPlaybackControlClaimOperation ||
             status.operation == kSessionPlaybackControlRenewOperation ||
             status.operation == kSessionPlaybackControlReleaseOperation ||
@@ -2439,13 +2826,21 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
     if (authoritative.value(QStringLiteral("pressure_state")).isObject()) {
         state.pressureState = authoritative.value(QStringLiteral("pressure_state")).toObject();
     }
-    if (authoritative.value(QStringLiteral("selected_candidate")).isObject()) {
-        state.selectedCandidate =
-                authoritative.value(QStringLiteral("selected_candidate")).toObject();
+    if (authoritative.value(QStringLiteral("selected_candidate")).isDouble()) {
+        state.selectedCandidateId =
+                authoritative.value(QStringLiteral("selected_candidate")).toInt();
     }
     if (authoritative.value(QStringLiteral("playback_controller")).isObject()) {
         state.playbackController =
                 authoritative.value(QStringLiteral("playback_controller")).toObject();
+        state.playbackLease.instanceId =
+                readString(state.playbackController, {"instance_id"});
+        state.playbackLease.leaseId =
+                readString(state.playbackController, {"lease_id"});
+        state.playbackLease.generation = static_cast<int>(
+                readDouble(state.playbackController, {"generation"}));
+        state.playbackLease.active =
+                state.playbackController.value(QStringLiteral("active")).toBool(false);
     }
     if (authoritative.value(QStringLiteral("blocked")).isObject()) {
         state.blocked = authoritative.value(QStringLiteral("blocked")).toObject();
@@ -2458,15 +2853,17 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
     }
 
     const QJsonObject tracksById = root.value(QStringLiteral("tracks_by_id")).toObject();
-    const QJsonArray candidates =
-            authoritative.value(QStringLiteral("candidates")).toArray();
+    const QJsonValue candidatesValue = authoritative.value(QStringLiteral("candidates"));
+    const QJsonArray candidates = candidatesValue.isObject()
+            ? candidatesValue.toObject().value(QStringLiteral("candidates")).toArray()
+            : candidatesValue.toArray();
     state.policyPath.candidates.reserve(candidates.size());
     for (const QJsonValue& value : candidates) {
         if (!value.isObject()) {
             continue;
         }
         const QJsonObject candidate = value.toObject();
-        const QString remoteId = readString(candidate, {"id", "track_id"});
+        const QString remoteId = readString(candidate, {"track_id", "id"});
         QJsonObject trackObject = candidate.value(QStringLiteral("track")).toObject();
         if (trackObject.isEmpty()) {
             trackObject = objectForTrackId(tracksById, remoteId);
@@ -2514,7 +2911,7 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
             continue;
         }
         const QJsonObject stepObject = value.toObject();
-        const QString remoteId = readString(stepObject, {"id", "track_id"});
+        const QString remoteId = readString(stepObject, {"track_id", "id"});
         QJsonObject trackObject = stepObject.value(QStringLiteral("track")).toObject();
         if (trackObject.isEmpty()) {
             trackObject = objectForTrackId(tracksById, remoteId);
@@ -2593,20 +2990,59 @@ RestLibrarySessionContract RestLibraryClient::parseSessionContractDocument(
     }
     const QJsonObject object = root.value(QStringLiteral("session_contract")).toObject();
     contract.version = object.value(QStringLiteral("version")).toInt();
-    if (contract.version != 2) {
-        contract.errorText = tr("MixMan session contract v2 is required (server advertised v%1).")
+    if (contract.version != 3) {
+        contract.errorText = tr("MixMan session contract v3 is required (server advertised v%1).")
                                      .arg(contract.version);
         return contract;
     }
-    const QStringList clientKinds = readStringArray(object, QStringLiteral("client_kinds"));
-    if (!clientKinds.contains(QStringLiteral("mixxx"))) {
-        contract.errorText = tr("MixMan session contract does not support the mixxx client kind.");
+    contract.basePath = object.value(QStringLiteral("base_path")).toString();
+    if (contract.basePath != QStringLiteral("/api/v3")) {
+        contract.errorText = tr("MixMan session contract did not advertise /api/v3.");
         return contract;
     }
-    const QStringList playbackKinds =
-            readStringArray(object, QStringLiteral("playback_capable_client_kinds"));
-    if (!playbackKinds.contains(QStringLiteral("mixxx"))) {
-        contract.errorText = tr("MixMan session contract does not grant Mixxx playback control.");
+    const QJsonArray surfaces = object.value(QStringLiteral("surfaces")).toArray();
+    QJsonObject mixxxSurface;
+    for (const QJsonValue& value : surfaces) {
+        const QJsonObject surface = value.toObject();
+        if (surface.value(QStringLiteral("application")).toString() == QStringLiteral("mixxx") &&
+                surface.value(QStringLiteral("surface")).toString() == QStringLiteral("rest_library")) {
+            mixxxSurface = surface;
+            break;
+        }
+    }
+    if (mixxxSurface.isEmpty()) {
+        contract.errorText = tr("MixMan session contract does not advertise mixxx/rest_library.");
+        return contract;
+    }
+    contract.requiredScope = mixxxSurface.value(QStringLiteral("required_scope")).toString();
+    if (contract.requiredScope != QStringLiteral("session:playback:dj")) {
+        contract.errorText = tr("MixMan session contract did not require the DJ playback scope.");
+        return contract;
+    }
+    contract.capabilities = readStringArray(mixxxSurface, QStringLiteral("capabilities"));
+    const QStringList requiredCapabilities{
+            QStringLiteral("session.read"),
+            QStringLiteral("session.recommendations.read"),
+            QStringLiteral("session.intent.write"),
+            QStringLiteral("session.intent.ack"),
+            QStringLiteral("session.plan.write"),
+            QStringLiteral("session.action.write"),
+            QStringLiteral("playback.claim"),
+            QStringLiteral("playback.publish"),
+    };
+    for (const QString& capability : requiredCapabilities) {
+        if (!contract.capabilities.contains(capability)) {
+            contract.errorText = tr("MixMan session contract is missing capability %1.")
+                                         .arg(capability);
+            return contract;
+        }
+    }
+    if (contract.capabilities.size() != requiredCapabilities.size()) {
+        contract.errorText = tr("MixMan session contract capability set did not exactly match mixxx/rest_library.");
+        return contract;
+    }
+    if (contract.capabilities.contains(QStringLiteral("session.controller.read"))) {
+        contract.errorText = tr("MixMan exposed controller-only session data to Mixxx.");
         return contract;
     }
     contract.leaseTtlSeconds = std::max(
@@ -2620,6 +3056,11 @@ RestLibrarySessionContract RestLibraryClient::parseSessionContractDocument(
             object.value(QStringLiteral("pause_grace_seconds")).toInt(15),
             1,
             std::max(1, contract.leaseTtlSeconds - 1));
+    contract.heartbeatIntervalSeconds = std::max(
+            1, object.value(QStringLiteral("heartbeat_interval_seconds")).toInt(30));
+    contract.activeTimeoutSeconds = std::max(
+            contract.heartbeatIntervalSeconds + 1,
+            object.value(QStringLiteral("active_timeout_seconds")).toInt(90));
     contract.valid = true;
     return contract;
 }
@@ -2656,6 +3097,29 @@ RestLibrarySession RestLibraryClient::parseSessionDocument(const QJsonDocument& 
         session.authoritative.sessionId = session.id;
     }
     return session;
+}
+
+RestLibrarySessionRegistration RestLibraryClient::parseSessionRegistrationDocument(
+        const QJsonDocument& document) {
+    RestLibrarySessionRegistration registration;
+    if (!document.isObject()) {
+        return registration;
+    }
+    const QJsonObject root = document.object();
+    registration.sessionId = readString(root, {"session_id"});
+    registration.resumeToken = readString(root, {"resume_token"});
+    registration.heartbeatIntervalSeconds = std::max(
+            1, root.value(QStringLiteral("heartbeat_interval_seconds")).toInt(30));
+    registration.activeTimeoutSeconds = std::max(
+            registration.heartbeatIntervalSeconds + 1,
+            root.value(QStringLiteral("active_timeout_seconds")).toInt(90));
+    const QJsonObject instance = root.value(QStringLiteral("instance")).toObject();
+    registration.instance.instanceId = readString(instance, {"instance_id"});
+    registration.instance.status = readString(instance, {"status"});
+    registration.instance.capabilities =
+            readStringArray(instance, QStringLiteral("capabilities"));
+    registration.instance.active = instance.value(QStringLiteral("active")).toBool(false);
+    return registration;
 }
 
 QString RestLibraryClient::readString(

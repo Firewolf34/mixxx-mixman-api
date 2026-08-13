@@ -26,7 +26,7 @@ class RestLibraryFeature final : public LibraryFeature {
     RestLibraryFeature(
             Library* pLibrary,
             UserSettingsPointer pConfig);
-    ~RestLibraryFeature() override = default;
+    ~RestLibraryFeature() override;
 
     QVariant title() override;
     TreeItemModel* sidebarModel() const override;
@@ -56,6 +56,8 @@ class RestLibraryFeature final : public LibraryFeature {
             const mixxx::library::rest::RestLibraryPolicyPath& policyPath);
     void slotMixManSessionCreated(
             const mixxx::library::rest::RestLibrarySession& session);
+    void slotMixManSessionInstanceRegistered(
+            const mixxx::library::rest::RestLibrarySessionRegistration& registration);
     void slotMixManSessionFetched(
             const mixxx::library::rest::RestLibrarySession& session);
     void slotMixManSessionWriteStatusUpdated(
@@ -67,6 +69,7 @@ class RestLibraryFeature final : public LibraryFeature {
     void slotSessionHeartbeat();
     void slotPlaybackLeaseRenew();
     void slotPlaybackLeaseRelease();
+    void slotAuthorityReconcile();
     void slotPolicyPresetChanged(const QString& presetKey);
     void slotTargetEnergyChanged(bool enabled, int energy);
     void slotTargetColorChanged(bool enabled, const QString& color);
@@ -124,10 +127,14 @@ class RestLibraryFeature final : public LibraryFeature {
     RestLibraryCacheManager m_cacheManager;
     RestLibraryDiagnostics m_diagnostics;
     RestLibrarySession m_mixManSession;
+    RestLibrarySettings m_mixManSessionSettings;
+    RestLibrarySessionRegistration m_mixManRegistration;
     RestLibraryAuthoritativeState m_authoritativeState;
+    RestLibraryPlaybackLease m_playbackLease;
     QTimer m_sessionHeartbeatTimer;
     QTimer m_playbackLeaseRenewTimer;
     QTimer m_playbackLeaseReleaseTimer;
+    QTimer m_authorityReconcileTimer;
     QHash<QString, QString> m_cachedPathToRemoteId;
     QHash<QString, RestLibraryCacheState> m_cacheStates;
     QString m_lastRequestedTrackLocation;
@@ -135,23 +142,28 @@ class RestLibraryFeature final : public LibraryFeature {
     QString m_previousRemoteId;
     QStringList m_recentRemoteIds;
     QString m_mixManSessionConfigKey;
-    QString m_clientId;
     QString m_sessionStatusText;
     QString m_requestDiagnosticText;
     QString m_statusText;
     RestLibrarySessionPlayback m_pendingPlayback;
+    RestLibrarySessionSnapshot m_pendingSnapshot;
     QString m_pendingCandidateTrackId;
     QString m_pendingCandidateSelectionOrigin;
     QJsonObject m_pendingCandidateMetadata;
     int m_recommendationCount = 0;
+    int m_playbackLeaseTtlSeconds = 30;
     double m_averageQuality = 0.0;
     bool m_followCurrentTrack = true;
     bool m_sessionCreateAttempted = false;
     bool m_playbackControlClaimPending = false;
     bool m_playbackControlReleasePending = false;
+    bool m_playbackControlReleaseQueued = false;
+    bool m_playbackLeaseRenewPending = false;
     bool m_playbackLeaseOwned = false;
     bool m_hasPendingPlayback = false;
-    bool m_pendingCandidateAllowExternal = false;
+    bool m_hasPendingSnapshot = false;
+    bool m_authorityWritePending = false;
+    bool m_policyRefreshPending = false;
 
   signals:
     void statusTextChanged(const QString& statusText);

@@ -34,6 +34,7 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     config()->setValue(restConfig::kBaseUrlKey, QStringLiteral("https://example.com/api"));
     config()->setValue(restConfig::kLocalDevBearerTokenKey, QStringLiteral("old-token"));
     config()->setValue(restConfig::kUseMixManDefaultsKey, false);
+    config()->setValue(restConfig::kMixManSessionIdKey, QStringLiteral("old-room"));
     config()->setValue(restConfig::kTrackListPathKey, QStringLiteral("/old-tracks"));
     config()->setValue(restConfig::kTrackDetailPathTemplateKey, QStringLiteral("/old/%1"));
     config()->setValue(restConfig::kTrackLookupPathTemplateKey, QStringLiteral("/lookup"));
@@ -55,6 +56,7 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     auto* pBaseUrl = requireChild<QLineEdit>(&page, "lineEditBaseUrl");
     auto* pToken = requireChild<QLineEdit>(&page, "lineEditBearerToken");
     auto* pUseMixManDefaults = requireChild<QCheckBox>(&page, "checkBoxUseMixManDefaults");
+    auto* pSessionId = requireChild<QLineEdit>(&page, "lineEditMixManSessionId");
     auto* pMixManPathDepth = requireChild<QSpinBox>(&page, "spinBoxMixManPathDepth");
     auto* pMixManAdminApprovedOnly =
             requireChild<QCheckBox>(&page, "checkBoxMixManAdminApprovedOnly");
@@ -75,6 +77,7 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     EXPECT_EQ(pBaseUrl->text(), QStringLiteral("https://example.com/api"));
     EXPECT_EQ(pToken->text(), QStringLiteral("old-token"));
     EXPECT_FALSE(pUseMixManDefaults->isChecked());
+    EXPECT_EQ(pSessionId->text(), QStringLiteral("old-room"));
     EXPECT_EQ(pMixManPathDepth->value(), 7);
     EXPECT_FALSE(pMixManAdminApprovedOnly->isChecked());
     EXPECT_EQ(pTrackList->text(), QStringLiteral("/old-tracks"));
@@ -92,6 +95,7 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     pBaseUrl->setText(QStringLiteral("https://new.example.test"));
     pToken->setText(QStringLiteral("new-token"));
     pUseMixManDefaults->setChecked(true);
+    pSessionId->setText(QStringLiteral("new-room"));
     pMixManPathDepth->setValue(5);
     pMixManAdminApprovedOnly->setChecked(true);
     pTrackList->setText(QStringLiteral("/tracks"));
@@ -111,6 +115,8 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     EXPECT_EQ(config()->getValueString(restConfig::kBaseUrlKey), QStringLiteral("https://new.example.test"));
     EXPECT_EQ(config()->getValueString(restConfig::kLocalDevBearerTokenKey), QStringLiteral("new-token"));
     EXPECT_TRUE(config()->getValue(restConfig::kUseMixManDefaultsKey, false));
+    EXPECT_EQ(config()->getValueString(restConfig::kMixManSessionIdKey),
+            QStringLiteral("new-room"));
     EXPECT_EQ(config()->getValue(restConfig::kMixManPathDepthKey, 0), 5);
     EXPECT_TRUE(config()->getValue(restConfig::kMixManAdminApprovedOnlyKey, false));
     EXPECT_EQ(config()->getValueString(restConfig::kTrackListPathKey), QStringLiteral("/tracks"));
@@ -148,6 +154,7 @@ TEST_F(DlgPrefRestLibraryTest, ResetToDefaultsRestoresDefaultValues) {
             requireChild<QSpinBox>(&page, "spinBoxRecommendationLimit")->value(),
             restConfig::kDefaultRecommendationLimit);
     EXPECT_TRUE(requireChild<QCheckBox>(&page, "checkBoxUseMixManDefaults")->isChecked());
+    EXPECT_TRUE(requireChild<QLineEdit>(&page, "lineEditMixManSessionId")->text().isEmpty());
     EXPECT_EQ(
             requireChild<QSpinBox>(&page, "spinBoxMixManPathDepth")->value(),
             restConfig::kDefaultMixManPathDepth);

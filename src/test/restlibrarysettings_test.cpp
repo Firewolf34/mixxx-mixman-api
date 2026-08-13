@@ -25,6 +25,7 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     config()->setValue(restConfig::kBearerTokenKeychainAccountKey, uniqueKeychainAccount());
     config()->setValue(restConfig::kLocalDevBearerTokenKey, QStringLiteral("test-token"));
     config()->setValue(restConfig::kUseMixManDefaultsKey, false);
+    config()->setValue(restConfig::kMixManSessionIdKey, QStringLiteral("stable-room"));
     config()->setValue(restConfig::kTrackListPathKey, QStringLiteral("/tracks"));
     config()->setValue(restConfig::kTrackDetailPathTemplateKey, QStringLiteral("/tracks/%1"));
     config()->setValue(restConfig::kTrackLookupPathTemplateKey, QStringLiteral("/lookup"));
@@ -54,6 +55,7 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     EXPECT_TRUE(settings.enabled);
     EXPECT_FALSE(settings.cacheEnabled);
     EXPECT_FALSE(settings.useMixManDefaults);
+    EXPECT_EQ(settings.mixManSessionId, QStringLiteral("stable-room"));
     EXPECT_EQ(settings.baseUrl, QUrl(QStringLiteral("https://example.com/api")));
     EXPECT_EQ(settings.bearerToken, QStringLiteral("test-token"));
     EXPECT_EQ(settings.trackListPath, QStringLiteral("/tracks"));
@@ -85,6 +87,7 @@ TEST_F(RestLibrarySettingsTest, UsesDefaultsAndFallbackCacheDirectory) {
     EXPECT_EQ(settings.enabled, restConfig::kDefaultEnabled);
     EXPECT_EQ(settings.cacheEnabled, restConfig::kDefaultCacheEnabled);
     EXPECT_EQ(settings.useMixManDefaults, restConfig::kDefaultUseMixManDefaults);
+    EXPECT_TRUE(settings.mixManSessionId.isEmpty());
     EXPECT_EQ(settings.trackListPath, restConfig::mixManTrackListPath());
     EXPECT_EQ(settings.trackDetailPathTemplate, restConfig::mixManTrackDetailPathTemplate());
     EXPECT_EQ(settings.trackLookupPathTemplate, restConfig::mixManTrackLookupPathTemplate());
@@ -104,6 +107,13 @@ TEST_F(RestLibrarySettingsTest, UsesDefaultsAndFallbackCacheDirectory) {
     EXPECT_EQ(settings.cacheMaxAgeDays, restConfig::kDefaultCacheMaxAgeDays);
     EXPECT_EQ(settings.maxConcurrentDownloads, restConfig::kDefaultMaxConcurrentDownloads);
     EXPECT_EQ(settings.cacheDirectoryPath, restConfig::defaultCacheDirectoryPath(config()));
+}
+
+TEST_F(RestLibrarySettingsTest, GeneratesValidStableMixManSessionId) {
+    const QString id = mixxx::library::rest::generateMixManSessionId();
+    EXPECT_TRUE(id.startsWith(QStringLiteral("mixxx-")));
+    EXPECT_LE(id.size(), 80);
+    EXPECT_FALSE(id.contains(QLatin1Char('{')));
 }
 
 TEST_F(RestLibrarySettingsTest, ClampsNumericValues) {

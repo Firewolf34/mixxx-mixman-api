@@ -1,65 +1,71 @@
-# MixMan Session Contract v2 Integration
+# MixMan Session Contract v3 Integration
 
-Mixxx is the highest-priority playback client. Every session request identifies
-the product with `client_kind: "mixxx"`, `source: "mixxx"`, and
-`surface: "rest_library"`. This identity is separate from authorization: the
-configured bearer token must still have the MixMan user scope and controller
-role.
+Mixxx uses the breaking MixMan session contract v3 at `/api/v3`. It registers
+as application `mixxx`, surface `rest_library`; the server issues the instance
+identity, capabilities, resume token, priority, and playback authority. Mixxx
+never submits legacy client identity, role, tier, priority, or capability
+fields.
 
-## Compatibility Handshake
+## Authentication and compatibility
 
-Before creating a session, Mixxx reads `GET /config` and requires:
+Before registration, Mixxx reads `GET /config` and requires version 3, base
+path `/api/v3`, and the exact `mixxx/rest_library` capability set. The returned
+registration capabilities are checked again before session features are
+enabled. In OIDC mode the configured bearer token needs the MixMan user access
+and `session:playback:dj` scope. When the server is explicitly configured for
+trusted-LAN authentication, an empty bearer token is intentionally omitted.
+A `401` or `403` never triggers an anonymous retry.
 
-- `session_contract.version == 2`;
-- `mixxx` in `client_kinds`;
-- `mixxx` in `playback_capable_client_kinds`.
+The optional Session ID preference selects a stable room. When blank, Mixxx
+generates and remembers a `mixxx-<uuid>` ID before connecting. Registration is
+attempted directly; `404` causes creation of that exact room followed by a
+second registration. A create `409` is treated as a race or lost create
+response and registration is retried.
 
-The Connection Test runs the same check between health and index probes. A
-missing, legacy, or incompatible contract fails before Mixxx posts `/sessions`,
-which prevents the old `role: "dj"` payload from reaching a v2 server.
+The server-issued instance ID and rotating resume token are stored only in
+QtKeychain, scoped to server, room, application, and surface. A rejected resume
+is deleted and retried as a fresh instance. If secure storage is unavailable,
+the current process remains usable but no plaintext resume fallback is made.
+Clean shutdown and reconfiguration disconnect the instance; server expiry is
+the fallback for abrupt termination.
 
-## Playback Lease Sequence
+## Playback authority and ordering
 
-Playback and candidate selection never race the lease claim:
+Mixxx retains the server-issued `lease_id` and positive generation. Candidate,
+playback, and snapshot writes are serialized in this order and carry
+`instance_id`, `lease_id`, and `lease_generation`. Renew and release carry the
+same instance and lease with the field name `generation`.
 
-1. Mixxx queues the latest playback/candidate mutation.
-2. It posts `POST /sessions/{id}/playback-control/claim`.
-3. It flushes queued mutations only after a successful response.
-4. While a deck is playing, it renews through
-   `POST /sessions/{id}/playback-control/renew` at the interval advertised by
-   `/config`.
-5. When playback becomes paused or loaded, it publishes that state and releases
-   through `POST /sessions/{id}/playback-control/release` after the advertised
-   pause grace period.
+Only the newest pending playback/snapshot state is retained during rapid deck
+changes. A stale or held lease clears the local authority tuple, stops remote
+authoritative publication, and enters standby reconciliation. Mixxx never
+pauses, unloads, or otherwise changes local DJ audio because remote authority
+was lost.
 
-A release already in flight is allowed to finish before a new claim, avoiding a
-release/play race. A `409` stops lease-backed writes and is surfaced in REST
-Library diagnostics. Mixxx does not stop local deck audio merely because the
-remote session lease was lost.
+Heartbeat timing comes from registration. Lease TTL, renew timing, and pause
+grace come from the v3 contract. A final paused or loaded publication is sent
+before the pause-grace release.
 
-## Authoritative State
+## Recommendation boundary
 
-Mixxx publishes playback to `POST /sessions/{id}/playback` and keeps publishing
-snapshots as non-authoritative compatibility telemetry. It reads candidates,
-path, pressure, intents, queue, blocked state, revision, and
-`playback_controller` from `GET /sessions/{id}.authoritative` and mutation
-responses. MixMan owns the authoritative queue.
+With MixMan defaults enabled, recommendations come only from the instance-bound
+state route and authoritative mutation responses. Mixxx accepts the limited
+candidate display projection and path steps; controller queue, pressure,
+presence, intent graph, and event products are outside this surface.
 
-For a current authoritative candidate, Mixxx selects with
-`selection_origin: "authoritative_candidate"`. A MixMan-backed reroll/search
-track uses `selection_origin: "recommendation_reroll"` and
-`allow_external_candidate: true`.
+Mixxx may request only `policy_refresh` from the shared actions route. It may
+select only a currently advertised candidate, using the current playback lease,
+`selection_origin: "authoritative_candidate"`, and
+`allow_external_candidate: false`. Custom REST Library recommendation routes
+remain available when MixMan defaults are disabled.
 
-Policy, energy, color, BPM, and reroll steering use
-`POST /sessions/{id}/actions` with `action_type: "policy_refresh"`. Policy
-actions do not claim playback control.
+## Connection test
 
-## Playback States
+The optional v3 session-permission test deliberately creates a unique durable
+test room, registers an instance, validates actual capabilities, reads state,
+claims and releases playback authority, and disconnects. The instance is not
+persisted, but the room and audit history remain until normal server retention
+or operator cleanup. Cleanup failure is reported as a failed test.
 
-- `playing`: a deck is actively playing;
-- `paused`: active playback stopped while a current MixMan track is known;
-- `loaded`: the DJ loaded a track without active playback;
-- `idle`: no current MixMan track is known.
-
-Native OAuth/PKCE remains separate follow-up work. Until implemented, bearer
-token provisioning is operational configuration and must not be committed.
+Native OAuth/PKCE and migration of the manually entered bearer token out of
+tracked preferences remain separate follow-up work.

@@ -244,6 +244,12 @@ journalctl --user -u mixxx-deck-update.service
 - Confirm decks and controllers are detected after reconnecting them.
 - Exercise the REST recommendation library, MixMan session steering, and
   request diagnostics.
+- For MixMan v3, verify both a configured bearer-token deployment and an
+  explicitly auth-disabled trusted-LAN deployment. Confirm the same stable room
+  is resumed after restarting Mixxx, recommendation controls use the
+  instance-bound state projection, and losing remote playback authority puts
+  publication in standby without interrupting deck audio. A `401` or `403`
+  must not cause a tokenless retry.
 - Verify rollback launches with the same library database and controller
   configuration.
 

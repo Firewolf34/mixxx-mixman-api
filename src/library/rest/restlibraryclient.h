@@ -43,11 +43,21 @@ class RestLibraryClient final : public QObject {
             const QStringList& recentTrackIds = {});
     void createMixManSession(
             const RestLibrarySettings& settings,
-            const QString& clientId,
+            const QString& sessionId,
             const QJsonObject& metadata = {});
+    void registerMixManSessionInstance(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const RestLibrarySessionCredentials& credentials = {},
+            const QJsonObject& metadata = {});
+    void disconnectMixManSessionInstance(
+            const RestLibrarySettings& settings,
+            const QString& sessionId,
+            const QString& instanceId);
     void fetchMixManSession(
             const RestLibrarySettings& settings,
-            const QString& sessionId);
+            const QString& sessionId,
+            const QString& instanceId);
     void publishMixManSessionPlayback(
             const RestLibrarySettings& settings,
             const QString& sessionId,
@@ -63,35 +73,32 @@ class RestLibraryClient final : public QObject {
     void sendMixManSessionHeartbeat(
             const RestLibrarySettings& settings,
             const QString& sessionId,
-            const QString& clientId,
+            const QString& instanceId,
             const QJsonObject& metadata = {});
     void claimMixManPlaybackControl(
             const RestLibrarySettings& settings,
             const QString& sessionId,
-            const QString& clientId,
+            const QString& instanceId,
+            int ttlSeconds,
             const QJsonObject& metadata = {});
     void renewMixManPlaybackControl(
             const RestLibrarySettings& settings,
             const QString& sessionId,
-            const QString& clientId,
-            const QJsonObject& metadata = {});
+            const RestLibraryPlaybackLease& lease);
     void releaseMixManPlaybackControl(
             const RestLibrarySettings& settings,
             const QString& sessionId,
-            const QString& clientId,
-            const QJsonObject& metadata = {});
+            const RestLibraryPlaybackLease& lease);
     void selectMixManSessionCandidate(
             const RestLibrarySettings& settings,
             const QString& sessionId,
             const QString& trackId,
-            const QString& clientId,
-            const QString& selectionOrigin = QStringLiteral("authoritative_candidate"),
-            bool allowExternalCandidate = false,
+            const RestLibraryPlaybackLease& lease,
             const QJsonObject& metadata = {});
     void publishMixManPolicyRefreshAction(
             const RestLibrarySettings& settings,
             const QString& sessionId,
-            const QString& clientId,
+            const QString& instanceId,
             const QJsonObject& metadata = {});
     void testMixManConnection(
             const RestLibrarySettings& settings,
@@ -131,6 +138,8 @@ class RestLibraryClient final : public QObject {
             const mixxx::library::rest::RestLibraryPolicyPath& policyPath);
     void mixManSessionCreated(
             const mixxx::library::rest::RestLibrarySession& session);
+    void mixManSessionInstanceRegistered(
+            const mixxx::library::rest::RestLibrarySessionRegistration& registration);
     void mixManSessionFetched(
             const mixxx::library::rest::RestLibrarySession& session);
     void mixManSessionWriteStatusUpdated(
@@ -151,6 +160,7 @@ class RestLibraryClient final : public QObject {
     void slotPolicyPathFinished();
     void slotSessionContractFinished();
     void slotSessionCreateFinished();
+    void slotSessionRegisterFinished();
     void slotSessionFetchFinished();
     void slotSessionWriteFinished();
     void slotConnectionTestHealthFinished();
@@ -158,6 +168,11 @@ class RestLibraryClient final : public QObject {
     void slotConnectionTestIndexFinished();
     void slotConnectionTestTracksFinished();
     void slotConnectionTestSessionFinished();
+    void slotConnectionTestRegisterFinished();
+    void slotConnectionTestStateFinished();
+    void slotConnectionTestClaimFinished();
+    void slotConnectionTestReleaseFinished();
+    void slotConnectionTestDisconnectFinished();
 
   private:
     struct PendingDetail {
@@ -239,10 +254,18 @@ class RestLibraryClient final : public QObject {
     void requestMixManPlaybackControl(
             const RestLibrarySettings& settings,
             const QString& sessionId,
-            const QString& clientId,
+            const RestLibraryPlaybackLease& lease,
             const QString& action,
             const QString& operation,
             const QJsonObject& metadata);
+    void startMixManInstanceRegistration(
+            const QString& sessionId,
+            const RestLibrarySessionCredentials& credentials,
+            const QJsonObject& metadata);
+    void startMixManSessionCreate(
+            const QString& sessionId,
+            const QJsonObject& metadata);
+    void startConnectionTestDisconnect();
 
     static QList<RestLibraryTrack> parseTrackListDocument(
             const QJsonDocument& document,
@@ -255,6 +278,8 @@ class RestLibraryClient final : public QObject {
     static RestLibrarySessionContract parseSessionContractDocument(
             const QJsonDocument& document);
     static RestLibrarySession parseSessionDocument(const QJsonDocument& document);
+    static RestLibrarySessionRegistration parseSessionRegistrationDocument(
+            const QJsonDocument& document);
     static RestLibraryAuthoritativeState parseAuthoritativeDocument(
             const QJsonDocument& document);
     static QString readString(
@@ -276,9 +301,17 @@ class RestLibraryClient final : public QObject {
     int m_sessionRequestGeneration = 0;
     int m_sessionAuthoritativeGeneration = 0;
     int m_connectionTestRequestGeneration = 0;
+    QString m_pendingSessionId;
+    QJsonObject m_pendingSessionMetadata;
+    RestLibrarySessionCredentials m_pendingResumeCredentials;
+    bool m_pendingFreshRegistrationRetried = false;
+    bool m_pendingCreateAttempted = false;
     bool m_connectionTestFailed = false;
     RestLibrarySettings m_connectionTestSettings;
     QString m_connectionTestClientId;
+    QString m_connectionTestSessionId;
+    QString m_connectionTestInstanceId;
+    RestLibraryPlaybackLease m_connectionTestLease;
     bool m_connectionTestCreateSession = false;
     QVector<QPointer<QNetworkReply>> m_connectionTestReplies;
 };

@@ -8,6 +8,7 @@
 #include <QNetworkReply>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSpinBox>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -101,6 +102,7 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pCo
     connect(m_pUi->checkBoxUseMixManDefaults, &QCheckBox::toggled, this, updateValidation);
     connect(m_pUi->lineEditBaseUrl, &QLineEdit::textChanged, this, updateValidation);
     connect(m_pUi->lineEditBearerToken, &QLineEdit::textChanged, this, updateValidation);
+    connect(m_pUi->lineEditMixManSessionId, &QLineEdit::textChanged, this, updateValidation);
     connect(m_pUi->lineEditTrackListPath, &QLineEdit::textChanged, this, updateValidation);
     connect(m_pUi->lineEditTrackDetailPathTemplate,
             &QLineEdit::textChanged,
@@ -177,6 +179,7 @@ void DlgPrefRestLibrary::slotUpdate() {
             m_pConfig->getValueString(restConfig::kLocalDevBearerTokenKey));
     m_pUi->spinBoxPageSize->setValue(settings.pageSize);
     m_pUi->checkBoxUseMixManDefaults->setChecked(settings.useMixManDefaults);
+    m_pUi->lineEditMixManSessionId->setText(settings.mixManSessionId);
     m_pUi->spinBoxMixManPathDepth->setValue(settings.mixManPathDepth);
     m_pUi->checkBoxMixManAdminApprovedOnly->setChecked(settings.mixManAdminApprovedOnly);
     m_pUi->lineEditTrackListPath->setText(
@@ -219,6 +222,7 @@ void DlgPrefRestLibrary::slotResetToDefaults() {
     m_pUi->lineEditBearerToken->clear();
     m_pUi->spinBoxPageSize->setValue(restConfig::kDefaultPageSize);
     m_pUi->checkBoxUseMixManDefaults->setChecked(restConfig::kDefaultUseMixManDefaults);
+    m_pUi->lineEditMixManSessionId->clear();
     m_pUi->spinBoxMixManPathDepth->setValue(restConfig::kDefaultMixManPathDepth);
     m_pUi->checkBoxMixManAdminApprovedOnly->setChecked(
             restConfig::kDefaultMixManAdminApprovedOnly);
@@ -262,6 +266,8 @@ void DlgPrefRestLibrary::slotUpdateCacheControls(bool enabled) {
 }
 
 void DlgPrefRestLibrary::slotUpdateMixManDefaultsControls(bool enabled) {
+    m_pUi->labelMixManSessionId->setEnabled(enabled);
+    m_pUi->lineEditMixManSessionId->setEnabled(enabled);
     m_pUi->labelTrackListPath->setEnabled(!enabled);
     m_pUi->lineEditTrackListPath->setEnabled(!enabled);
     m_pUi->labelTrackDetailPathTemplate->setEnabled(!enabled);
@@ -288,6 +294,7 @@ void DlgPrefRestLibrary::slotUpdateValidationState() {
         return;
     }
     if (m_pUi->checkBoxUseMixManDefaults->isChecked()) {
+        m_pUi->lineEditMixManSessionId->setToolTip(message);
         return;
     }
     if (m_pUi->lineEditTrackListPath->text().trimmed().isEmpty() ||
@@ -400,6 +407,12 @@ QString DlgPrefRestLibrary::validationMessage() const {
         return tr("Enter an absolute REST Library base URL, such as https://example.com.");
     }
     if (useMixManDefaults) {
+        const QString sessionId = m_pUi->lineEditMixManSessionId->text().trimmed();
+        static const QRegularExpression sessionIdPattern(
+                QStringLiteral("^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$"));
+        if (!sessionId.isEmpty() && !sessionIdPattern.match(sessionId).hasMatch()) {
+            return tr("Session ID must begin with a letter or number and contain only letters, numbers, '.', '_', ':', or '-'.");
+        }
         return {};
     }
     if (m_pUi->lineEditTrackListPath->text().trimmed().isEmpty()) {
@@ -445,6 +458,7 @@ RestLibrarySettings DlgPrefRestLibrary::settingsFromUi() const {
     settings.bearerToken = m_pUi->lineEditBearerToken->text();
     settings.pageSize = m_pUi->spinBoxPageSize->value();
     settings.useMixManDefaults = m_pUi->checkBoxUseMixManDefaults->isChecked();
+    settings.mixManSessionId = m_pUi->lineEditMixManSessionId->text().trimmed();
     settings.mixManPathDepth = m_pUi->spinBoxMixManPathDepth->value();
     settings.mixManAdminApprovedOnly = m_pUi->checkBoxMixManAdminApprovedOnly->isChecked();
     settings.recommendationLimit = m_pUi->spinBoxRecommendationLimit->value();
@@ -525,6 +539,8 @@ QString DlgPrefRestLibrary::diagnosticDetails(
 
 void DlgPrefRestLibrary::clearValidationToolTips() {
     m_pUi->lineEditBaseUrl->setToolTip({});
+    m_pUi->lineEditMixManSessionId->setToolTip(
+            tr("Attach to this stable MixMan room. Leave blank to create and remember a new room."));
     m_pUi->lineEditTrackListPath->setToolTip({});
     m_pUi->lineEditTrackDetailPathTemplate->setToolTip({});
     m_pUi->lineEditRecommendationPathTemplate->setToolTip({});
@@ -545,6 +561,9 @@ void DlgPrefRestLibrary::writeSettings() {
     m_pConfig->setValue(
             restConfig::kUseMixManDefaultsKey,
             m_pUi->checkBoxUseMixManDefaults->isChecked());
+    m_pConfig->setValue(
+            restConfig::kMixManSessionIdKey,
+            m_pUi->lineEditMixManSessionId->text().trimmed());
     m_pConfig->setValue(restConfig::kMixManPathDepthKey, m_pUi->spinBoxMixManPathDepth->value());
     m_pConfig->setValue(
             restConfig::kMixManAdminApprovedOnlyKey,

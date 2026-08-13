@@ -3,7 +3,11 @@
 #include <algorithm>
 
 #include <QDir>
+#include <QCryptographicHash>
 #include <QEventLoop>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QUuid>
 
 #ifdef __QTKEYCHAIN__
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
@@ -22,10 +26,11 @@ namespace {
 const Logger kLogger("RestLibrarySettings");
 
 const QString kDefaultKeychainAccount = QStringLiteral("default");
+const QString kRestLibraryKeychainService = QStringLiteral("Mixxx REST Library");
 
 QString readBearerTokenFromKeychain(const QString& account) {
 #ifdef __QTKEYCHAIN__
-    QKeychain::ReadPasswordJob readJob(QStringLiteral("Mixxx REST Library"));
+    QKeychain::ReadPasswordJob readJob(kRestLibraryKeychainService);
     readJob.setAutoDelete(false);
     readJob.setKey(account);
 
@@ -42,6 +47,20 @@ QString readBearerTokenFromKeychain(const QString& account) {
     Q_UNUSED(account);
 #endif
     return {};
+}
+
+QString sessionCredentialAccount(
+        const RestLibrarySettings& settings,
+        const QString& sessionId) {
+    QUrl scopedUrl = settings.baseUrl.adjusted(
+            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment |
+            QUrl::StripTrailingSlash);
+    const QByteArray scope = QStringLiteral("%1\nmixxx\nrest_library\n%2")
+                                     .arg(scopedUrl.toString(), sessionId.trimmed())
+                                     .toUtf8();
+    return QStringLiteral("session-v3:%1")
+            .arg(QString::fromLatin1(
+                    QCryptographicHash::hash(scope, QCryptographicHash::Sha256).toHex()));
 }
 
 } // namespace
@@ -92,43 +111,62 @@ QString mixManPolicyPresetsPath() {
 }
 
 QString mixManSessionsPath() {
-    return QStringLiteral("/sessions");
+    return QStringLiteral("/api/v3/sessions");
+}
+
+QString mixManSessionInstancesPath(const QString& sessionId) {
+    return QStringLiteral("/api/v3/sessions/%1/instances").arg(sessionId);
+}
+
+QString mixManSessionInstanceHeartbeatPath(
+        const QString& sessionId,
+        const QString& instanceId) {
+    return QStringLiteral("/api/v3/sessions/%1/instances/%2/heartbeat")
+            .arg(sessionId, instanceId);
+}
+
+QString mixManSessionInstanceDisconnectPath(
+        const QString& sessionId,
+        const QString& instanceId) {
+    return QStringLiteral("/api/v3/sessions/%1/instances/%2/disconnect")
+            .arg(sessionId, instanceId);
+}
+
+QString mixManSessionStatePath(const QString& sessionId, const QString& instanceId) {
+    return QStringLiteral("/api/v3/sessions/%1/state?instance_id=%2")
+            .arg(sessionId, QString::fromUtf8(QUrl::toPercentEncoding(instanceId)));
 }
 
 QString mixManSessionSnapshotPath(const QString& sessionId) {
-    return QStringLiteral("/sessions/%1/snapshot").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/%1/snapshot").arg(sessionId);
 }
 
 QString mixManSessionIntentPath(const QString& sessionId) {
-    return QStringLiteral("/sessions/%1/intent").arg(sessionId);
-}
-
-QString mixManSessionHeartbeatPath(const QString& sessionId) {
-    return QStringLiteral("/sessions/%1/heartbeat").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/%1/intent").arg(sessionId);
 }
 
 QString mixManSessionPlaybackPath(const QString& sessionId) {
-    return QStringLiteral("/sessions/%1/playback").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/%1/playback").arg(sessionId);
 }
 
 QString mixManSessionPlaybackControlClaimPath(const QString& sessionId) {
-    return QStringLiteral("/sessions/%1/playback-control/claim").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/%1/playback-control/claim").arg(sessionId);
 }
 
 QString mixManSessionPlaybackControlRenewPath(const QString& sessionId) {
-    return QStringLiteral("/sessions/%1/playback-control/renew").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/%1/playback-control/renew").arg(sessionId);
 }
 
 QString mixManSessionPlaybackControlReleasePath(const QString& sessionId) {
-    return QStringLiteral("/sessions/%1/playback-control/release").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/%1/playback-control/release").arg(sessionId);
 }
 
 QString mixManSessionCandidateSelectPath(const QString& sessionId, const QString& trackId) {
-    return QStringLiteral("/sessions/%1/candidates/%2/select").arg(sessionId, trackId);
+    return QStringLiteral("/api/v3/sessions/%1/candidates/%2/select").arg(sessionId, trackId);
 }
 
 QString mixManSessionActionsPath(const QString& sessionId) {
-    return QStringLiteral("/sessions/%1/actions").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/%1/actions").arg(sessionId);
 }
 
 QUrl urlWithRestPath(const QUrl& baseUrl, const QString& path) {
@@ -178,6 +216,7 @@ RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& p
             config::kCacheEnabledKey,
             config::kDefaultCacheEnabled);
     settings.baseUrl = QUrl(pConfig->getValueString(config::kBaseUrlKey));
+    settings.mixManSessionId = pConfig->getValueString(config::kMixManSessionIdKey).trimmed();
     QString keychainAccount = pConfig->getValueString(
             config::kBearerTokenKeychainAccountKey);
     if (keychainAccount.trimmed().isEmpty()) {
@@ -272,6 +311,91 @@ RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& p
             config::kMinMaxConcurrentDownloads,
             config::kMaxMaxConcurrentDownloads);
     return settings;
+}
+
+QString generateMixManSessionId(const QString& prefix) {
+    QString normalizedPrefix = prefix.trimmed().toLower();
+    if (normalizedPrefix.isEmpty()) {
+        normalizedPrefix = QStringLiteral("mixxx");
+    }
+    return QStringLiteral("%1-%2")
+            .arg(normalizedPrefix,
+                    QUuid::createUuid().toString(QUuid::WithoutBraces).toLower());
+}
+
+RestLibrarySessionCredentials readMixManSessionCredentials(
+        const RestLibrarySettings& settings,
+        const QString& sessionId) {
+    RestLibrarySessionCredentials credentials;
+#ifdef __QTKEYCHAIN__
+    QKeychain::ReadPasswordJob readJob(kRestLibraryKeychainService);
+    readJob.setAutoDelete(false);
+    readJob.setKey(sessionCredentialAccount(settings, sessionId));
+    QEventLoop loop;
+    readJob.connect(&readJob, &QKeychain::ReadPasswordJob::finished, &loop, &QEventLoop::quit);
+    readJob.start();
+    loop.exec();
+    if (readJob.error() == QKeychain::Error::NoError) {
+        const QJsonDocument document = QJsonDocument::fromJson(readJob.textData().toUtf8());
+        if (document.isObject()) {
+            credentials.instanceId =
+                    document.object().value(QStringLiteral("instance_id")).toString();
+            credentials.resumeToken =
+                    document.object().value(QStringLiteral("resume_token")).toString();
+        }
+    }
+#else
+    Q_UNUSED(settings);
+    Q_UNUSED(sessionId);
+#endif
+    return credentials;
+}
+
+bool writeMixManSessionCredentials(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const RestLibrarySessionCredentials& credentials) {
+    if (!credentials.isComplete()) {
+        return false;
+    }
+#ifdef __QTKEYCHAIN__
+    QKeychain::WritePasswordJob writeJob(kRestLibraryKeychainService);
+    writeJob.setAutoDelete(false);
+    writeJob.setKey(sessionCredentialAccount(settings, sessionId));
+    writeJob.setTextData(QString::fromUtf8(QJsonDocument(QJsonObject{
+            {QStringLiteral("instance_id"), credentials.instanceId},
+            {QStringLiteral("resume_token"), credentials.resumeToken},
+    }).toJson(QJsonDocument::Compact)));
+    QEventLoop loop;
+    writeJob.connect(&writeJob, &QKeychain::WritePasswordJob::finished, &loop, &QEventLoop::quit);
+    writeJob.start();
+    loop.exec();
+    return writeJob.error() == QKeychain::Error::NoError;
+#else
+    Q_UNUSED(settings);
+    Q_UNUSED(sessionId);
+    return false;
+#endif
+}
+
+bool clearMixManSessionCredentials(
+        const RestLibrarySettings& settings,
+        const QString& sessionId) {
+#ifdef __QTKEYCHAIN__
+    QKeychain::DeletePasswordJob deleteJob(kRestLibraryKeychainService);
+    deleteJob.setAutoDelete(false);
+    deleteJob.setKey(sessionCredentialAccount(settings, sessionId));
+    QEventLoop loop;
+    deleteJob.connect(&deleteJob, &QKeychain::DeletePasswordJob::finished, &loop, &QEventLoop::quit);
+    deleteJob.start();
+    loop.exec();
+    return deleteJob.error() == QKeychain::Error::NoError ||
+            deleteJob.error() == QKeychain::Error::EntryNotFound;
+#else
+    Q_UNUSED(settings);
+    Q_UNUSED(sessionId);
+    return false;
+#endif
 }
 
 bool RestLibrarySettings::isConfigured() const {

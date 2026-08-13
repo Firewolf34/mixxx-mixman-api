@@ -6,6 +6,7 @@
 #include <QMap>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 
 #include "library/rest/restlibrarytrack.h"
 
@@ -42,22 +43,68 @@ struct RestLibrarySessionWriteStatus {
     QString operation;
     bool success = false;
     int statusCode = 0;
+    QString errorReason;
     QString errorText;
 };
 
 struct RestLibrarySessionContract {
     bool valid = false;
     int version = 0;
+    QString basePath;
+    QString requiredScope;
+    QStringList capabilities;
     int leaseTtlSeconds = 30;
     int leaseRenewIntervalSeconds = 10;
     int pauseGraceSeconds = 15;
+    int heartbeatIntervalSeconds = 30;
+    int activeTimeoutSeconds = 90;
     QString errorText;
 };
 
+struct RestLibrarySessionCredentials {
+    QString instanceId;
+    QString resumeToken;
+
+    bool isComplete() const {
+        return !instanceId.trimmed().isEmpty() && !resumeToken.trimmed().isEmpty();
+    }
+};
+
+struct RestLibrarySessionInstance {
+    QString instanceId;
+    QString status;
+    QStringList capabilities;
+    bool active = false;
+};
+
+struct RestLibrarySessionRegistration {
+    QString sessionId;
+    RestLibrarySessionInstance instance;
+    QString resumeToken;
+    int heartbeatIntervalSeconds = 30;
+    int activeTimeoutSeconds = 90;
+
+    bool isValid() const {
+        return !sessionId.trimmed().isEmpty() &&
+                !instance.instanceId.trimmed().isEmpty() &&
+                !resumeToken.trimmed().isEmpty();
+    }
+};
+
+struct RestLibraryPlaybackLease {
+    QString instanceId;
+    QString leaseId;
+    int generation = 0;
+    bool active = false;
+
+    bool isValidFor(const QString& expectedInstanceId) const {
+        return active && instanceId == expectedInstanceId &&
+                !leaseId.trimmed().isEmpty() && generation > 0;
+    }
+};
+
 struct RestLibrarySessionSnapshot {
-    QString clientId;
-    QString surface;
-    QString source;
+    RestLibraryPlaybackLease lease;
     QString currentTrackId;
     QString cue;
     QString playbackState;
@@ -66,9 +113,7 @@ struct RestLibrarySessionSnapshot {
 };
 
 struct RestLibrarySessionPlayback {
-    QString clientId;
-    QString surface;
-    QString source;
+    RestLibraryPlaybackLease lease;
     QString currentTrackId;
     QString cue;
     QString playbackState;
@@ -77,9 +122,7 @@ struct RestLibrarySessionPlayback {
 };
 
 struct RestLibrarySessionIntent {
-    QString clientId;
-    QString source;
-    QString surface;
+    QString instanceId;
     QString status = QStringLiteral("active");
     QString policyPreset;
     QString targetColor;
@@ -123,8 +166,9 @@ struct RestLibraryAuthoritativeState {
     RestLibraryPolicyPath policyPath;
     QJsonObject playback;
     QJsonObject pressureState;
-    QJsonObject selectedCandidate;
+    int selectedCandidateId = 0;
     QJsonObject playbackController;
+    RestLibraryPlaybackLease playbackLease;
     QJsonObject blocked;
     QJsonArray queue;
     QJsonArray intents;
@@ -150,6 +194,7 @@ Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryRequestDiagnostic)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySession)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySessionWriteStatus)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySessionContract)
+Q_DECLARE_METATYPE(mixxx::library::rest::RestLibrarySessionRegistration)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryAuthoritativeState)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryPolicyPreset)
 Q_DECLARE_METATYPE(QList<mixxx::library::rest::RestLibraryPolicyPreset>)

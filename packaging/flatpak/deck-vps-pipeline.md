@@ -731,6 +731,11 @@ mixxx-deck run
 
 Check launch, preserved library/preferences, audio, controllers, mappings,
 REST recommendation behavior, MixMan steering, and diagnostics.
+MixMan acceptance uses session contract v3: verify server-issued instance
+resume, generation-fenced playback publication, the limited Mixxx
+recommendation projection, and both configured-bearer and explicitly
+auth-disabled trusted-LAN operation. Authentication failures must remain
+fail-closed and must not silently retry without credentials.
 
 ### Reject
 

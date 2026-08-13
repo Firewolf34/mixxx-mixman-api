@@ -232,6 +232,16 @@ Before changing the deck pipeline, read:
 
 ## Client Invariants
 
+- MixMan REST Library session integration requires contract v3 and the exact
+  `mixxx/rest_library` capability set. Preserve bearer-token and explicitly
+  auth-disabled trusted-LAN operation, but never retry tokenless after `401` or
+  `403`.
+- Store the rotating MixMan instance resume token only in QtKeychain, scoped to
+  server and session. Never log or persist it in ordinary Mixxx settings.
+- Every authoritative MixMan playback, snapshot, and candidate write is fenced
+  by the current server-issued instance, lease ID, and generation. Remote lease
+  loss must never interrupt local deck audio.
+
 - Default manifest:
   `https://forge.polinaria.world/artifacts/latest.json`
 - Accept only HTTPS `latest.json` publication roots.

@@ -4,6 +4,7 @@
 #include <QUrl>
 
 #include "preferences/usersettings.h"
+#include "library/rest/restlibrarymixman.h"
 
 namespace mixxx::library::rest {
 
@@ -54,6 +55,9 @@ inline const ConfigKey kRecommendationLimitKey(
 inline const ConfigKey kUseMixManDefaultsKey(
         QStringLiteral("[RestLibrary]"),
         QStringLiteral("UseMixManDefaults"));
+inline const ConfigKey kMixManSessionIdKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManSessionId"));
 inline const ConfigKey kMixManPolicyPresetKey(
         QStringLiteral("[RestLibrary]"),
         QStringLiteral("MixManPolicyPreset"));
@@ -125,9 +129,16 @@ QString mixManConfigPath();
 QString mixManIndexStatusPath();
 QString mixManPolicyPresetsPath();
 QString mixManSessionsPath();
+QString mixManSessionInstancesPath(const QString& sessionId);
+QString mixManSessionInstanceHeartbeatPath(
+        const QString& sessionId,
+        const QString& instanceId);
+QString mixManSessionInstanceDisconnectPath(
+        const QString& sessionId,
+        const QString& instanceId);
+QString mixManSessionStatePath(const QString& sessionId, const QString& instanceId);
 QString mixManSessionSnapshotPath(const QString& sessionId);
 QString mixManSessionIntentPath(const QString& sessionId);
-QString mixManSessionHeartbeatPath(const QString& sessionId);
 QString mixManSessionPlaybackPath(const QString& sessionId);
 QString mixManSessionPlaybackControlClaimPath(const QString& sessionId);
 QString mixManSessionPlaybackControlRenewPath(const QString& sessionId);
@@ -152,6 +163,7 @@ class RestLibrarySettings final {
     bool mixManAdminApprovedOnly = config::kDefaultMixManAdminApprovedOnly;
     QUrl baseUrl;
     QString bearerToken;
+    QString mixManSessionId;
     QString trackListPath;
     QString trackDetailPathTemplate;
     QString trackLookupPathTemplate;
@@ -174,5 +186,17 @@ class RestLibrarySettings final {
     bool hasRecommendationsConfigured() const;
     double mixManTargetEnergyNormalized() const;
 };
+
+QString generateMixManSessionId(const QString& prefix = QStringLiteral("mixxx"));
+RestLibrarySessionCredentials readMixManSessionCredentials(
+        const RestLibrarySettings& settings,
+        const QString& sessionId);
+bool writeMixManSessionCredentials(
+        const RestLibrarySettings& settings,
+        const QString& sessionId,
+        const RestLibrarySessionCredentials& credentials);
+bool clearMixManSessionCredentials(
+        const RestLibrarySettings& settings,
+        const QString& sessionId);
 
 } // namespace mixxx::library::rest

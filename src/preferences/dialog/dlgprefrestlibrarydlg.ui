@@ -93,8 +93,11 @@
       </item>
       <item row="2" column="1">
        <widget class="QCheckBox" name="checkBoxTestConnectionCreateSession">
+        <property name="toolTip">
+         <string>Creates a uniquely named durable MixMan room, registers a Mixxx instance, verifies v3 permissions and playback authority, then disconnects it. The room and audit records remain on the server.</string>
+        </property>
         <property name="text">
-         <string>Verify session creation</string>
+         <string>Verify v3 session permissions</string>
         </property>
        </widget>
       </item>
@@ -182,6 +185,29 @@
         </property>
         <property name="checked">
          <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="labelMixManSessionId">
+        <property name="text">
+         <string>Session ID:</string>
+        </property>
+        <property name="buddy">
+         <cstring>lineEditMixManSessionId</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QLineEdit" name="lineEditMixManSessionId">
+        <property name="toolTip">
+         <string>Attach to this stable MixMan room. Leave blank to create and remember a new room.</string>
+        </property>
+        <property name="maxLength">
+         <number>80</number>
+        </property>
+        <property name="placeholderText">
+         <string>Leave blank to create and remember a room</string>
         </property>
        </widget>
       </item>
