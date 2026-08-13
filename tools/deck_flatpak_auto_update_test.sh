@@ -15,7 +15,26 @@ cat >"${TEMP_ROOT}/bin/flatpak" <<'EOF'
 set -euo pipefail
 case "$1" in
     ps)
-        [[ "${TEST_RUNNING:-no}" == yes ]] && echo org.mixxx.Mixxx
+        case "${TEST_PROCESS_STATE:-idle}" in
+            live)
+                printf '%s\t%s\n' "${TEST_LIVE_PID}" org.mixxx.Mixxx
+                ;;
+            stale)
+                printf '%s\t%s\n' 999999999 org.mixxx.Mixxx
+                ;;
+            malformed)
+                printf '%s\t%s\n' invalid org.mixxx.Mixxx
+                ;;
+            error)
+                exit 2
+                ;;
+            idle)
+                ;;
+            *)
+                echo "unexpected TEST_PROCESS_STATE" >&2
+                exit 2
+                ;;
+        esac
         ;;
     info)
         if [[ "$*" == *--show-commit* ]]; then
@@ -57,7 +76,20 @@ export TEST_AVAILABLE_COMMIT="${TEST_INSTALLED_COMMIT}"
 export TEST_INSTALLED_SOURCE="1111111111111111111111111111111111111111"
 export TEST_AVAILABLE_SOURCE="${TEST_INSTALLED_SOURCE}"
 export TEST_AC_POWER=yes
-export TEST_RUNNING=no
+export TEST_PROCESS_STATE=idle
+
+TEST_PROCESS_STATE=live bash -c \
+    'export TEST_LIVE_PID=$$; source "$1"; is_mixxx_running' bash \
+    "${SCRIPT_DIR}/deck_flatpak_auto_update.sh"
+TEST_PROCESS_STATE=stale bash -c \
+    'source "$1"; ! is_mixxx_running' bash \
+    "${SCRIPT_DIR}/deck_flatpak_auto_update.sh"
+TEST_PROCESS_STATE=malformed bash -c \
+    'source "$1"; is_mixxx_running' bash \
+    "${SCRIPT_DIR}/deck_flatpak_auto_update.sh"
+TEST_PROCESS_STATE=error bash -c \
+    'source "$1"; is_mixxx_running' bash \
+    "${SCRIPT_DIR}/deck_flatpak_auto_update.sh"
 
 "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" auto-update
 jq -e '.result == "up-to-date"' \
@@ -73,7 +105,8 @@ jq -e '.result == "deferred-battery" and .pending_commit != ""' \
 [[ ! -e "${TEST_COMMAND_LOG}" ]]
 
 export TEST_AC_POWER=yes
-export TEST_RUNNING=yes
+export TEST_PROCESS_STATE=live
+export TEST_LIVE_PID=$$
 "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" auto-update
 jq -e '.result == "deferred-running" and .pending_commit != ""' \
     "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json" >/dev/null

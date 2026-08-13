@@ -13,6 +13,3 @@ RestartSec=2min
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
-
-[Install]
-WantedBy=default.target

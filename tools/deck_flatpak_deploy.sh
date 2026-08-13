@@ -158,7 +158,20 @@ install_udev_rules() {
 }
 
 is_mixxx_running() {
-    flatpak ps --columns=application 2>/dev/null | grep -Fxq "${APP_ID}"
+    local processes pid application
+    if ! processes="$(flatpak ps --columns=pid,application 2>/dev/null)"; then
+        echo "Could not verify whether Mixxx is running; treating it as active." >&2
+        return 0
+    fi
+    while read -r pid application; do
+        [[ "${application:-}" == "${APP_ID}" ]] || continue
+        if [[ ! "${pid:-}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Flatpak reported Mixxx with an invalid PID; treating it as active." >&2
+            return 0
+        fi
+        [[ -d "/proc/${pid}" ]] && return 0
+    done <<<"${processes}"
+    return 1
 }
 
 installed_source_sha() {
@@ -880,7 +893,9 @@ setup_client() {
             update-desktop-database "${DESKTOP_USER_ROOT}" || true
     fi
     systemctl --user daemon-reload
-    systemctl --user enable mixxx-deck-update.service mixxx-deck-update.timer
+    systemctl --user disable mixxx-deck-update.service 2>/dev/null || true
+    systemctl --user enable mixxx-deck-update.timer
+    systemctl --user restart mixxx-deck-update.timer
     echo "Installed mixxx-deck, signed-repository updater, desktop lock, and user units."
     echo "Run 'sudo loginctl enable-linger ${USER}' once so boot checks run while signed out."
 }

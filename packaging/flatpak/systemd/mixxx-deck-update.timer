@@ -2,6 +2,7 @@
 Description=Run the Mixxx deck update check every four hours
 
 [Timer]
+OnStartupSec=1min
 OnUnitInactiveSec=4h
 AccuracySec=1min
 Unit=mixxx-deck-update.service

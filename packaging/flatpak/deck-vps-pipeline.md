@@ -31,8 +31,8 @@ Forgejo as source authority.
 - Keep the GitHub build optional and independently triggered.
 - Promote either provider through one durable signed Flatpak repository without
   placing a GitHub credential on the deck.
-- Check for updates immediately after Coal networking is ready at boot and
-  every four hours thereafter.
+- Check for updates within one minute of the lingering user manager starting at
+  boot and every four hours after each completed check.
 - Automatically activate only when Mixxx is stopped, the shared launch lock is
   free, and the laptop is on AC power.
 
@@ -635,22 +635,25 @@ through this command and preserves Flatpak file forwarding.
 
 ### Automatic update
 
-The user systemd service starts immediately with the lingering user manager at
-boot, waits up to three minutes for NetworkManager, and is also triggered every
-four hours. It reads signed repository metadata on any power source. If a new
-commit exists, it downloads and deploys only on AC power.
+The user systemd timer starts with the lingering user manager at boot, triggers
+the service within one minute, and retriggers it four hours after each completed
+check. The service waits up to three minutes for NetworkManager. It reads signed
+repository metadata on any power source. If a new commit exists, it downloads
+and deploys only on AC power.
 
-Before downloading, it exits successfully when Mixxx is running. After a
-download-only Flatpak pull it attempts the nonblocking exclusive deployment
-lock and checks `flatpak ps` again. A launch during download therefore leaves a
-verified pending update without changing the installed deployment. Activation
-exports the current build for rollback, deploys from the local Flatpak object
-cache, verifies the installed commit and source SHA, and runs `mixxx --version`
-offscreen with an isolated temporary home. Failure restores the previous
-commit. It never stops or restarts Mixxx.
+Before downloading, it exits successfully when Mixxx is running. Process
+detection requires both a matching `flatpak ps` record and a live wrapper PID;
+this ignores dead Flatpak instance records while treating command or parse
+errors as active and deferring safely. After a download-only Flatpak pull it
+attempts the nonblocking exclusive deployment lock and checks again. A launch
+during download therefore leaves a verified pending update without changing
+the installed deployment. Activation exports the current build for rollback,
+deploys from the local Flatpak object cache, verifies the installed commit and
+source SHA, and runs `mixxx --version` offscreen with an isolated temporary
+home. Failure restores the previous commit. It never stops or restarts Mixxx.
 
-`loginctl enable-linger <deck-user>` is required once so the user service starts
-without a graphical login. Status is written atomically under
+`loginctl enable-linger <deck-user>` is required once so the user timer and its
+service run without a graphical login. Status is written atomically under
 `~/.local/state/mixxx-deck/` and is also available in the user journal.
 
 ## Profile Preservation

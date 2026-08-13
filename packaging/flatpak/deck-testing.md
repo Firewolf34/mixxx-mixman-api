@@ -134,18 +134,20 @@ validator, the boot/four-hour user systemd units, and a user-local desktop entry
 that shares the deployment lock. It also adds the signed `polinaria-mixxx`
 remote. Reconnect controllers after the first udev setup.
 
-Enable the user manager at boot once, then start the service and timer:
+Enable the user manager at boot once, then enable the timer:
 
 ```bash
 sudo loginctl enable-linger "$USER"
-systemctl --user enable --now mixxx-deck-update.service
 systemctl --user enable --now mixxx-deck-update.timer
 ```
 
-The service checks immediately after `nm-online` reports networking ready and
-then every four hours. Metadata checks are allowed on battery; download and
-deployment require AC power. Running Mixxx or an active shared launch lock
-defers activation without changing the installed app.
+The timer triggers the service within one minute of the lingering user manager
+starting and then four hours after each completed check. The service waits for
+`nm-online` before checking. Metadata checks are allowed on battery; download
+and deployment require AC power. A live Mixxx Flatpak process or an active
+shared launch lock defers activation without changing the installed app. Dead
+Flatpak instance records are ignored only after their wrapper PID is confirmed
+absent from `/proc`; inspection errors fail closed.
 
 The signed Polinaria repository requires no provider credential on Coal. The
 legacy direct GitHub fallback remains available for manual recovery only; to

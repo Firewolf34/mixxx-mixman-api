@@ -25,7 +25,20 @@ require_command() {
 }
 
 is_mixxx_running() {
-    flatpak ps --columns=application 2>/dev/null | grep -Fxq "${APP_ID}"
+    local processes pid application
+    if ! processes="$(flatpak ps --columns=pid,application 2>/dev/null)"; then
+        echo "Could not verify whether Mixxx is running; deferring safely." >&2
+        return 0
+    fi
+    while read -r pid application; do
+        [[ "${application:-}" == "${APP_ID}" ]] || continue
+        if [[ ! "${pid:-}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Flatpak reported Mixxx with an invalid PID; deferring safely." >&2
+            return 0
+        fi
+        [[ -d "/proc/${pid}" ]] && return 0
+    done <<<"${processes}"
+    return 1
 }
 
 installed_commit() {
@@ -236,17 +249,23 @@ auto_update() {
     echo "Activated and validated Mixxx ${new_source}."
 }
 
-case "${1:-auto-update}" in
-    auto-update)
-        [[ $# -eq 1 || $# -eq 0 ]] || die "auto-update takes no arguments."
-        auto_update
-        ;;
-    configure-remote)
-        [[ $# -eq 1 ]] || die "configure-remote takes no arguments."
-        require_command flatpak
-        configure_remote
-        ;;
-    *)
-        die "Usage: $0 [auto-update|configure-remote]"
-        ;;
-esac
+main() {
+    case "${1:-auto-update}" in
+        auto-update)
+            [[ $# -eq 1 || $# -eq 0 ]] || die "auto-update takes no arguments."
+            auto_update
+            ;;
+        configure-remote)
+            [[ $# -eq 1 ]] || die "configure-remote takes no arguments."
+            require_command flatpak
+            configure_remote
+            ;;
+        *)
+            die "Usage: $0 [auto-update|configure-remote]"
+            ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

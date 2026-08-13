@@ -265,9 +265,12 @@ Before changing the deck pipeline, read:
 - Normal desktop launches must use `mixxx-deck run` and hold a shared lock for
   the Mixxx process lifetime. Automatic activation uses a nonblocking exclusive
   lock and rechecks `flatpak ps` after download.
-- The user service starts at boot through systemd linger, waits for
-  NetworkManager, checks every four hours, and downloads/deploys only on AC
-  power. A battery or running-session deferral is a successful no-change check.
+- The user timer starts through systemd linger, triggers the service within one
+  minute and every four hours after a completed check, and the service waits for
+  NetworkManager. Download/deploy requires AC power. Running detection must
+  confirm the Flatpak wrapper PID is live, ignore only dead instance records,
+  and fail closed on inspection errors. A battery or running-session deferral
+  is a successful no-change check.
 - Snapshot a different installed user Flatpak before replacing it.
 - Verify cached checksums before installation.
 - Verify installed source SHA after installation.
