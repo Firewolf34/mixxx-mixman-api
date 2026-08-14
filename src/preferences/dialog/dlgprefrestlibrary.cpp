@@ -45,12 +45,30 @@ bool isValidPathOrAbsoluteUrl(const QString& value) {
     return url.isValid();
 }
 
+bool resolvesToBaseOrigin(const QUrl& baseUrl, QString value) {
+    if (value.trimmed().isEmpty()) {
+        return true;
+    }
+    value.replace(QStringLiteral("%1"), QStringLiteral("1"));
+    value.replace(QStringLiteral("%artist"), QStringLiteral("artist"));
+    value.replace(QStringLiteral("%title"), QStringLiteral("title"));
+    value.replace(QStringLiteral("%duration"), QStringLiteral("duration"));
+    value.replace(QStringLiteral("%location"), QStringLiteral("location"));
+    return restConfig::urlWithRestPath(baseUrl, value).isValid();
+}
+
 } // namespace
 
-DlgPrefRestLibrary::DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pConfig)
+DlgPrefRestLibrary::DlgPrefRestLibrary(
+        QWidget* pParent,
+        UserSettingsPointer pConfig,
+        mixxx::library::rest::RestLibraryCredentialStore* pCredentialStore)
         : DlgPreferencePage(pParent),
           m_pUi(new Ui::DlgPrefRestLibraryDlg),
           m_pConfig(std::move(pConfig)),
+          m_pCredentialStore(pCredentialStore
+                          ? pCredentialStore
+                          : mixxx::library::rest::defaultRestLibraryCredentialStore()),
           m_connectionTestClient(&m_networkAccessManager, this) {
     m_pUi->setupUi(this);
 
@@ -171,12 +189,12 @@ bool DlgPrefRestLibrary::okayToClose() const {
 }
 
 void DlgPrefRestLibrary::slotUpdate() {
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    const RestLibrarySettings settings =
+            RestLibrarySettings::fromConfig(m_pConfig, m_pCredentialStore);
 
     m_pUi->checkBoxEnabled->setChecked(settings.enabled);
     m_pUi->lineEditBaseUrl->setText(m_pConfig->getValueString(restConfig::kBaseUrlKey));
-    m_pUi->lineEditBearerToken->setText(
-            m_pConfig->getValueString(restConfig::kLocalDevBearerTokenKey));
+    m_pUi->lineEditBearerToken->setText(settings.bearerToken);
     m_pUi->spinBoxPageSize->setValue(settings.pageSize);
     m_pUi->checkBoxUseMixManDefaults->setChecked(settings.useMixManDefaults);
     m_pUi->lineEditMixManSessionId->setText(settings.mixManSessionId);
@@ -406,6 +424,10 @@ QString DlgPrefRestLibrary::validationMessage() const {
     if (!hasValidBaseUrl()) {
         return tr("Enter an absolute REST Library base URL, such as https://example.com.");
     }
+    const RestLibrarySettings uiSettings = settingsFromUi();
+    if (!uiSettings.hasAllowedBearerTransport()) {
+        return tr("Bearer-token connections require HTTPS, except for loopback development addresses.");
+    }
     if (useMixManDefaults) {
         const QString sessionId = m_pUi->lineEditMixManSessionId->text().trimmed();
         static const QRegularExpression sessionIdPattern(
@@ -421,11 +443,23 @@ QString DlgPrefRestLibrary::validationMessage() const {
     if (!isValidPathOrAbsoluteUrl(m_pUi->lineEditTrackListPath->text())) {
         return tr("Track list path is not a valid path or URL.");
     }
+    if (!resolvesToBaseOrigin(uiSettings.baseUrl, m_pUi->lineEditTrackListPath->text())) {
+        return tr("REST Library endpoints must remain on the base URL origin.");
+    }
     if (!hasValidRemoteIdTemplate(m_pUi->lineEditTrackDetailPathTemplate->text())) {
         return tr("Track detail path must include %1 when configured.");
     }
     if (!isValidPathOrAbsoluteUrl(m_pUi->lineEditTrackDetailPathTemplate->text())) {
         return tr("Track detail path is not a valid path or URL.");
+    }
+    if (!resolvesToBaseOrigin(
+                uiSettings.baseUrl, m_pUi->lineEditTrackDetailPathTemplate->text())) {
+        return tr("REST Library endpoints must remain on the base URL origin.");
+    }
+    if (!isValidPathOrAbsoluteUrl(m_pUi->lineEditTrackLookupPathTemplate->text()) ||
+            !resolvesToBaseOrigin(
+                    uiSettings.baseUrl, m_pUi->lineEditTrackLookupPathTemplate->text())) {
+        return tr("Track lookup must be a valid endpoint on the base URL origin.");
     }
     if (!hasValidRemoteIdTemplate(m_pUi->lineEditRecommendationPathTemplate->text())) {
         return tr("Recommendation path must include %1 when configured.");
@@ -433,18 +467,29 @@ QString DlgPrefRestLibrary::validationMessage() const {
     if (!isValidPathOrAbsoluteUrl(m_pUi->lineEditRecommendationPathTemplate->text())) {
         return tr("Recommendation path is not a valid path or URL.");
     }
+    if (!resolvesToBaseOrigin(
+                uiSettings.baseUrl, m_pUi->lineEditRecommendationPathTemplate->text())) {
+        return tr("REST Library endpoints must remain on the base URL origin.");
+    }
     if (!hasValidRemoteIdTemplate(m_pUi->lineEditAudioDownloadPathTemplate->text())) {
         return tr("Audio download path must include %1 when configured.");
     }
     if (!isValidPathOrAbsoluteUrl(m_pUi->lineEditAudioDownloadPathTemplate->text())) {
         return tr("Audio download path is not a valid path or URL.");
     }
+    if (!resolvesToBaseOrigin(
+                uiSettings.baseUrl, m_pUi->lineEditAudioDownloadPathTemplate->text())) {
+        return tr("REST Library endpoints must remain on the base URL origin.");
+    }
     return {};
 }
 
 bool DlgPrefRestLibrary::hasValidBaseUrl() const {
     const QUrl url(m_pUi->lineEditBaseUrl->text().trimmed());
-    return url.isValid() && !url.isEmpty() && !url.isRelative();
+    const QString scheme = url.scheme().toLower();
+    return url.isValid() && !url.isEmpty() && !url.isRelative() &&
+            url.userInfo().isEmpty() &&
+            (scheme == QStringLiteral("https") || scheme == QStringLiteral("http"));
 }
 
 bool DlgPrefRestLibrary::hasValidRemoteIdTemplate(const QString& pathTemplate) const {
@@ -456,6 +501,8 @@ RestLibrarySettings DlgPrefRestLibrary::settingsFromUi() const {
     settings.enabled = m_pUi->checkBoxEnabled->isChecked();
     settings.baseUrl = QUrl(m_pUi->lineEditBaseUrl->text().trimmed());
     settings.bearerToken = m_pUi->lineEditBearerToken->text();
+    settings.bearerTokenKeychainAccount =
+            mixxx::library::rest::bearerTokenAccountForUrl(settings.baseUrl);
     settings.pageSize = m_pUi->spinBoxPageSize->value();
     settings.useMixManDefaults = m_pUi->checkBoxUseMixManDefaults->isChecked();
     settings.mixManSessionId = m_pUi->lineEditMixManSessionId->text().trimmed();
@@ -553,10 +600,21 @@ void DlgPrefRestLibrary::setConnectionTestRunning(bool running) {
     m_pUi->pushButtonCancelConnectionTest->setEnabled(running);
 }
 
-void DlgPrefRestLibrary::writeSettings() {
+bool DlgPrefRestLibrary::writeSettings() {
+    const RestLibrarySettings settings = settingsFromUi();
+    if (!mixxx::library::rest::writeRestLibraryBearerToken(
+                settings, settings.bearerToken, m_pCredentialStore)) {
+        m_pUi->labelValidationWarning->setText(
+                tr("The bearer token could not be saved in the OS keychain. Settings were not changed."));
+        m_pUi->labelValidationWarning->setVisible(true);
+        return false;
+    }
+    m_pConfig->remove(restConfig::kLocalDevBearerTokenKey);
     m_pConfig->setValue(restConfig::kEnabledKey, m_pUi->checkBoxEnabled->isChecked());
     m_pConfig->setValue(restConfig::kBaseUrlKey, m_pUi->lineEditBaseUrl->text().trimmed());
-    m_pConfig->setValue(restConfig::kLocalDevBearerTokenKey, m_pUi->lineEditBearerToken->text());
+    m_pConfig->setValue(
+            restConfig::kBearerTokenKeychainAccountKey,
+            settings.bearerTokenKeychainAccount);
     m_pConfig->setValue(restConfig::kPageSizeKey, m_pUi->spinBoxPageSize->value());
     m_pConfig->setValue(
             restConfig::kUseMixManDefaultsKey,
@@ -597,4 +655,5 @@ void DlgPrefRestLibrary::writeSettings() {
     m_pConfig->setValue(
             restConfig::kMaxConcurrentDownloadsKey,
             m_pUi->spinBoxMaxConcurrentDownloads->value());
+    return true;
 }

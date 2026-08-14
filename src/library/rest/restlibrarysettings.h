@@ -8,6 +8,17 @@
 
 namespace mixxx::library::rest {
 
+class RestLibraryCredentialStore {
+  public:
+    virtual ~RestLibraryCredentialStore() = default;
+
+    virtual QString read(const QString& account) = 0;
+    virtual bool write(const QString& account, const QString& secret) = 0;
+    virtual bool remove(const QString& account) = 0;
+};
+
+RestLibraryCredentialStore* defaultRestLibraryCredentialStore();
+
 namespace config {
 
 inline const ConfigKey kEnabledKey(QStringLiteral("[RestLibrary]"), QStringLiteral("Enabled"));
@@ -146,12 +157,16 @@ QString mixManSessionPlaybackControlReleasePath(const QString& sessionId);
 QString mixManSessionCandidateSelectPath(const QString& sessionId, const QString& trackId);
 QString mixManSessionActionsPath(const QString& sessionId);
 QUrl urlWithRestPath(const QUrl& baseUrl, const QString& path);
+bool isSameOrigin(const QUrl& lhs, const QUrl& rhs);
+bool isLoopbackUrl(const QUrl& url);
 
 } // namespace config
 
 class RestLibrarySettings final {
   public:
-    static RestLibrarySettings fromConfig(const UserSettingsPointer& pConfig);
+    static RestLibrarySettings fromConfig(
+            const UserSettingsPointer& pConfig,
+            RestLibraryCredentialStore* pCredentialStore = nullptr);
 
     bool isConfigured() const;
     bool enabled = config::kDefaultEnabled;
@@ -163,6 +178,7 @@ class RestLibrarySettings final {
     bool mixManAdminApprovedOnly = config::kDefaultMixManAdminApprovedOnly;
     QUrl baseUrl;
     QString bearerToken;
+    QString bearerTokenKeychainAccount;
     QString mixManSessionId;
     QString trackListPath;
     QString trackDetailPathTemplate;
@@ -184,8 +200,19 @@ class RestLibrarySettings final {
     bool hasAudioDownloadConfigured() const;
     bool hasTrackLookupConfigured() const;
     bool hasRecommendationsConfigured() const;
+    bool hasAllowedBearerTransport() const;
+    bool maySendBearerTokenTo(const QUrl& url) const;
     double mixManTargetEnergyNormalized() const;
 };
+
+QString bearerTokenAccountForUrl(const QUrl& baseUrl);
+bool writeRestLibraryBearerToken(
+        const RestLibrarySettings& settings,
+        const QString& token,
+        RestLibraryCredentialStore* pCredentialStore = nullptr);
+bool clearRestLibraryBearerToken(
+        const RestLibrarySettings& settings,
+        RestLibraryCredentialStore* pCredentialStore = nullptr);
 
 QString generateMixManSessionId(const QString& prefix = QStringLiteral("mixxx"));
 RestLibrarySessionCredentials readMixManSessionCredentials(

@@ -10,6 +10,7 @@
 #include "library/libraryfeature.h"
 #include "library/rest/restlibrarycachemanager.h"
 #include "library/rest/restlibraryclient.h"
+#include "library/rest/restlibrarymutationsequencer.h"
 #include "library/rest/restlibrarytablemodel.h"
 #include "library/treeitemmodel.h"
 #include "track/track_decl.h"
@@ -131,6 +132,7 @@ class RestLibraryFeature final : public LibraryFeature {
     RestLibrarySessionRegistration m_mixManRegistration;
     RestLibraryAuthoritativeState m_authoritativeState;
     RestLibraryPlaybackLease m_playbackLease;
+    RestLibraryMutationSequencer m_mutationSequencer;
     QTimer m_sessionHeartbeatTimer;
     QTimer m_playbackLeaseRenewTimer;
     QTimer m_playbackLeaseReleaseTimer;
@@ -157,13 +159,7 @@ class RestLibraryFeature final : public LibraryFeature {
     bool m_sessionCreateAttempted = false;
     bool m_playbackControlClaimPending = false;
     bool m_playbackControlReleasePending = false;
-    bool m_playbackControlReleaseQueued = false;
-    bool m_playbackLeaseRenewPending = false;
     bool m_playbackLeaseOwned = false;
-    bool m_hasPendingPlayback = false;
-    bool m_hasPendingSnapshot = false;
-    bool m_authorityWritePending = false;
-    bool m_policyRefreshPending = false;
 
   signals:
     void statusTextChanged(const QString& statusText);

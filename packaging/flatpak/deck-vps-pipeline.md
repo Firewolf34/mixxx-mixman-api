@@ -738,7 +738,10 @@ MixMan acceptance uses session contract v3: verify server-issued instance
 resume, generation-fenced playback publication, the limited Mixxx
 recommendation projection, and both configured-bearer and explicitly
 auth-disabled trusted-LAN operation. Authentication failures must remain
-fail-closed and must not silently retry without credentials.
+fail-closed and must not silently retry without credentials. Bearer credentials
+must remain in the OS keychain, require HTTPS outside loopback, and stay on the
+configured origin. Rapid deck changes must converge to the newest serialized
+remote mutation without affecting local playback.
 
 ### Reject
 

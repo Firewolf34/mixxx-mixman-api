@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include <QUuid>
+#include <QHash>
 
 #include "library/rest/restlibrarysettings.h"
 #include "test/mixxxtest.h"
@@ -9,20 +9,44 @@ namespace {
 
 namespace restConfig = mixxx::library::rest::config;
 using mixxx::library::rest::RestLibrarySettings;
+using mixxx::library::rest::RestLibraryCredentialStore;
 
-QString uniqueKeychainAccount() {
-    return QStringLiteral("mixxx-test-%1").arg(QUuid::createUuid().toString(QUuid::Id128));
-}
+class FakeCredentialStore final : public RestLibraryCredentialStore {
+  public:
+    QString read(const QString& account) override {
+        return secrets.value(account);
+    }
+    bool write(const QString& account, const QString& secret) override {
+        if (failWrites) {
+            return false;
+        }
+        secrets.insert(account, secret);
+        return true;
+    }
+    bool remove(const QString& account) override {
+        secrets.remove(account);
+        return true;
+    }
+
+    QHash<QString, QString> secrets;
+    bool failWrites = false;
+};
 
 } // namespace
 
 class RestLibrarySettingsTest : public MixxxTest {
+  protected:
+    RestLibrarySettings readSettings() {
+        return RestLibrarySettings::fromConfig(config(), &credentialStore);
+    }
+
+    FakeCredentialStore credentialStore;
 };
 
 TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     config()->setValue(restConfig::kEnabledKey, true);
     config()->setValue(restConfig::kBaseUrlKey, QStringLiteral("https://example.com/api"));
-    config()->setValue(restConfig::kBearerTokenKeychainAccountKey, uniqueKeychainAccount());
+    config()->setValue(restConfig::kBearerTokenKeychainAccountKey, QStringLiteral("test-account"));
     config()->setValue(restConfig::kLocalDevBearerTokenKey, QStringLiteral("test-token"));
     config()->setValue(restConfig::kUseMixManDefaultsKey, false);
     config()->setValue(restConfig::kMixManSessionIdKey, QStringLiteral("stable-room"));
@@ -50,7 +74,7 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     config()->setValue(restConfig::kCacheMaxAgeDaysKey, 45);
     config()->setValue(restConfig::kMaxConcurrentDownloadsKey, 4);
 
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(config());
+    const RestLibrarySettings settings = readSettings();
 
     EXPECT_TRUE(settings.enabled);
     EXPECT_FALSE(settings.cacheEnabled);
@@ -82,7 +106,7 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
 }
 
 TEST_F(RestLibrarySettingsTest, UsesDefaultsAndFallbackCacheDirectory) {
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(config());
+    const RestLibrarySettings settings = readSettings();
 
     EXPECT_EQ(settings.enabled, restConfig::kDefaultEnabled);
     EXPECT_EQ(settings.cacheEnabled, restConfig::kDefaultCacheEnabled);
@@ -136,7 +160,7 @@ TEST_F(RestLibrarySettingsTest, ClampsNumericValues) {
             restConfig::kMaxConcurrentDownloadsKey,
             restConfig::kMaxMaxConcurrentDownloads + 1);
 
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(config());
+    const RestLibrarySettings settings = readSettings();
 
     EXPECT_EQ(settings.pageSize, restConfig::kMaxPageSize);
     EXPECT_EQ(settings.recommendationLimit, restConfig::kMinRecommendationLimit);
@@ -148,13 +172,47 @@ TEST_F(RestLibrarySettingsTest, ClampsNumericValues) {
     EXPECT_EQ(settings.maxConcurrentDownloads, restConfig::kMaxMaxConcurrentDownloads);
 }
 
-TEST_F(RestLibrarySettingsTest, UsesLocalDevBearerTokenFallback) {
-    config()->setValue(restConfig::kBearerTokenKeychainAccountKey, uniqueKeychainAccount());
+TEST_F(RestLibrarySettingsTest, MigratesAndClearsPlaintextBearerToken) {
+    config()->setValue(restConfig::kBearerTokenKeychainAccountKey, QStringLiteral("migration"));
     config()->setValue(restConfig::kLocalDevBearerTokenKey, QStringLiteral("fallback-token"));
 
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(config());
+    const RestLibrarySettings settings = readSettings();
 
     EXPECT_EQ(settings.bearerToken, QStringLiteral("fallback-token"));
+    EXPECT_EQ(credentialStore.secrets.value(settings.bearerTokenKeychainAccount),
+            QStringLiteral("fallback-token"));
+    EXPECT_EQ(config()->getValueString(restConfig::kBearerTokenKeychainAccountKey),
+            settings.bearerTokenKeychainAccount);
+    EXPECT_FALSE(config()->exists(restConfig::kLocalDevBearerTokenKey));
+}
+
+TEST_F(RestLibrarySettingsTest, FailedPlaintextMigrationFailsClosed) {
+    credentialStore.failWrites = true;
+    config()->setValue(restConfig::kBearerTokenKeychainAccountKey, QStringLiteral("migration"));
+    config()->setValue(restConfig::kLocalDevBearerTokenKey, QStringLiteral("discard-me"));
+
+    const RestLibrarySettings settings = readSettings();
+
+    EXPECT_TRUE(settings.bearerToken.isEmpty());
+    EXPECT_FALSE(config()->exists(restConfig::kLocalDevBearerTokenKey));
+}
+
+TEST_F(RestLibrarySettingsTest, IgnoresBearerAccountFromAnotherServer) {
+    config()->setValue(restConfig::kBaseUrlKey, QStringLiteral("https://new.example.test"));
+    config()->setValue(
+            restConfig::kBearerTokenKeychainAccountKey,
+            QStringLiteral("bearer-for-old-server"));
+    credentialStore.secrets.insert(
+            QStringLiteral("bearer-for-old-server"),
+            QStringLiteral("must-not-cross-origins"));
+
+    const RestLibrarySettings settings = readSettings();
+
+    EXPECT_TRUE(settings.bearerToken.isEmpty());
+    EXPECT_EQ(settings.bearerTokenKeychainAccount,
+            mixxx::library::rest::bearerTokenAccountForUrl(settings.baseUrl));
+    EXPECT_EQ(config()->getValueString(restConfig::kBearerTokenKeychainAccountKey),
+            settings.bearerTokenKeychainAccount);
 }
 
 TEST_F(RestLibrarySettingsTest, UrlWithRestPathPreservesBasePath) {
@@ -180,6 +238,34 @@ TEST_F(RestLibrarySettingsTest, UrlWithRestPathPreservesBasePath) {
             restConfig::urlWithRestPath(
                     QUrl(QStringLiteral("https://example.com/api")),
                     QStringLiteral("https://cdn.example.test/audio/1"))
-                    .toString(),
-            QStringLiteral("https://cdn.example.test/audio/1"));
+                    .isValid(),
+            false);
+}
+
+TEST_F(RestLibrarySettingsTest, BearerTransportRequiresHttpsOrLoopback) {
+    RestLibrarySettings settings;
+    settings.bearerToken = QStringLiteral("secret");
+    settings.baseUrl = QUrl(QStringLiteral("http://mixman.lan/api"));
+    EXPECT_FALSE(settings.hasAllowedBearerTransport());
+
+    settings.baseUrl = QUrl(QStringLiteral("http://127.0.0.1:8000/api"));
+    EXPECT_TRUE(settings.hasAllowedBearerTransport());
+
+    settings.baseUrl = QUrl(QStringLiteral("https://mixman.example/api"));
+    EXPECT_TRUE(settings.hasAllowedBearerTransport());
+    EXPECT_TRUE(settings.maySendBearerTokenTo(
+            QUrl(QStringLiteral("https://mixman.example/tracks"))));
+    EXPECT_FALSE(settings.maySendBearerTokenTo(
+            QUrl(QStringLiteral("https://cdn.example/tracks"))));
+}
+
+TEST_F(RestLibrarySettingsTest, TokenlessTrustedLanHttpRemainsAllowed) {
+    RestLibrarySettings settings;
+    settings.enabled = true;
+    settings.baseUrl = QUrl(QStringLiteral("http://mixman.lan/api"));
+    settings.trackListPath = QStringLiteral("/tracks");
+
+    EXPECT_TRUE(settings.isConfigured());
+    EXPECT_FALSE(settings.maySendBearerTokenTo(
+            QUrl(QStringLiteral("http://mixman.lan/api/tracks"))));
 }

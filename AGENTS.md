@@ -236,11 +236,18 @@ Before changing the deck pipeline, read:
   `mixxx/rest_library` capability set. Preserve bearer-token and explicitly
   auth-disabled trusted-LAN operation, but never retry tokenless after `401` or
   `403`.
+- Store REST bearer tokens only in QtKeychain, scoped to the configured server.
+  Require HTTPS except for loopback development, and never send credentials or
+  follow redirects outside the configured origin.
 - Store the rotating MixMan instance resume token only in QtKeychain, scoped to
   server and session. Never log or persist it in ordinary Mixxx settings.
 - Every authoritative MixMan playback, snapshot, and candidate write is fenced
   by the current server-issued instance, lease ID, and generation. Remote lease
   loss must never interrupt local deck audio.
+- Keep authoritative mutations serialized, coalesce queued state to the newest
+  value, and ignore stale mutation completions. Keep JSON responses bounded to
+  4 MiB after decompression with the 15-second transfer timeout; cache audio
+  directly to temporary files and discard partial, failed, or oversized files.
 
 - Default manifest:
   `https://forge.polinaria.world/artifacts/latest.json`

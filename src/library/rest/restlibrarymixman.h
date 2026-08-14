@@ -41,6 +41,7 @@ struct RestLibraryRequestDiagnostic {
 
 struct RestLibrarySessionWriteStatus {
     QString operation;
+    quint64 mutationSequence = 0;
     bool success = false;
     int statusCode = 0;
     QString errorReason;

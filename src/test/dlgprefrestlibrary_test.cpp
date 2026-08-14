@@ -2,6 +2,7 @@
 
 #include <QCheckBox>
 #include <QDir>
+#include <QHash>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -17,6 +18,23 @@ namespace {
 
 namespace restConfig = mixxx::library::rest::config;
 
+class FakeCredentialStore final : public mixxx::library::rest::RestLibraryCredentialStore {
+  public:
+    QString read(const QString& account) override {
+        return secrets.value(account);
+    }
+    bool write(const QString& account, const QString& secret) override {
+        secrets.insert(account, secret);
+        return true;
+    }
+    bool remove(const QString& account) override {
+        secrets.remove(account);
+        return true;
+    }
+
+    QHash<QString, QString> secrets;
+};
+
 template<typename Widget>
 Widget* requireChild(QWidget* pParent, const char* name) {
     Widget* pWidget = pParent->findChild<Widget*>(QString::fromUtf8(name));
@@ -27,6 +45,8 @@ Widget* requireChild(QWidget* pParent, const char* name) {
 } // namespace
 
 class DlgPrefRestLibraryTest : public MixxxTest {
+  protected:
+    FakeCredentialStore credentialStore;
 };
 
 TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
@@ -50,7 +70,7 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     config()->setValue(restConfig::kCacheMaxAgeDaysKey, 10);
     config()->setValue(restConfig::kMaxConcurrentDownloadsKey, 3);
 
-    DlgPrefRestLibrary page(nullptr, config());
+    DlgPrefRestLibrary page(nullptr, config(), &credentialStore);
 
     auto* pEnabled = requireChild<QCheckBox>(&page, "checkBoxEnabled");
     auto* pBaseUrl = requireChild<QLineEdit>(&page, "lineEditBaseUrl");
@@ -113,7 +133,14 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     page.slotApply();
 
     EXPECT_EQ(config()->getValueString(restConfig::kBaseUrlKey), QStringLiteral("https://new.example.test"));
-    EXPECT_EQ(config()->getValueString(restConfig::kLocalDevBearerTokenKey), QStringLiteral("new-token"));
+    EXPECT_FALSE(config()->exists(restConfig::kLocalDevBearerTokenKey));
+    EXPECT_EQ(config()->getValueString(restConfig::kBearerTokenKeychainAccountKey),
+            mixxx::library::rest::bearerTokenAccountForUrl(
+                    QUrl(QStringLiteral("https://new.example.test"))));
+    EXPECT_EQ(credentialStore.secrets.value(
+                      mixxx::library::rest::bearerTokenAccountForUrl(
+                              QUrl(QStringLiteral("https://new.example.test")))),
+            QStringLiteral("new-token"));
     EXPECT_TRUE(config()->getValue(restConfig::kUseMixManDefaultsKey, false));
     EXPECT_EQ(config()->getValueString(restConfig::kMixManSessionIdKey),
             QStringLiteral("new-room"));
@@ -141,7 +168,7 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
 }
 
 TEST_F(DlgPrefRestLibraryTest, ResetToDefaultsRestoresDefaultValues) {
-    DlgPrefRestLibrary page(nullptr, config());
+    DlgPrefRestLibrary page(nullptr, config(), &credentialStore);
 
     page.slotResetToDefaults();
 
@@ -177,7 +204,7 @@ TEST_F(DlgPrefRestLibraryTest, ResetToDefaultsRestoresDefaultValues) {
 }
 
 TEST_F(DlgPrefRestLibraryTest, CacheControlsFollowCacheEnabledCheckbox) {
-    DlgPrefRestLibrary page(nullptr, config());
+    DlgPrefRestLibrary page(nullptr, config(), &credentialStore);
 
     auto* pCacheEnabled = requireChild<QCheckBox>(&page, "checkBoxCacheEnabled");
     auto* pCacheDirectory = requireChild<QLineEdit>(&page, "lineEditCacheDirectory");
@@ -198,7 +225,7 @@ TEST_F(DlgPrefRestLibraryTest, CacheControlsFollowCacheEnabledCheckbox) {
 }
 
 TEST_F(DlgPrefRestLibraryTest, MixManDefaultsOnlyDisablePathControls) {
-    DlgPrefRestLibrary page(nullptr, config());
+    DlgPrefRestLibrary page(nullptr, config(), &credentialStore);
 
     auto* pUseMixManDefaults = requireChild<QCheckBox>(&page, "checkBoxUseMixManDefaults");
     auto* pTrackList = requireChild<QLineEdit>(&page, "lineEditTrackListPath");
@@ -233,7 +260,7 @@ TEST_F(DlgPrefRestLibraryTest, MixManDefaultsOnlyDisablePathControls) {
 }
 
 TEST_F(DlgPrefRestLibraryTest, InvalidEnabledSettingsBlockApply) {
-    DlgPrefRestLibrary page(nullptr, config());
+    DlgPrefRestLibrary page(nullptr, config(), &credentialStore);
 
     auto* pEnabled = requireChild<QCheckBox>(&page, "checkBoxEnabled");
     auto* pBaseUrl = requireChild<QLineEdit>(&page, "lineEditBaseUrl");
@@ -270,7 +297,7 @@ TEST_F(DlgPrefRestLibraryTest, InvalidEnabledSettingsBlockApply) {
 }
 
 TEST_F(DlgPrefRestLibraryTest, TestConnectionRequiresValidInputAndShowsDetails) {
-    DlgPrefRestLibrary page(nullptr, config());
+    DlgPrefRestLibrary page(nullptr, config(), &credentialStore);
 
     auto* pEnabled = requireChild<QCheckBox>(&page, "checkBoxEnabled");
     auto* pBaseUrl = requireChild<QLineEdit>(&page, "lineEditBaseUrl");

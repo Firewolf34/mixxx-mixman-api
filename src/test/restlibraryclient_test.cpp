@@ -399,6 +399,99 @@ TEST(RestLibraryClientTest, FetchesTrackListWithMockNetworkAccessManager) {
     EXPECT_EQ(tracks.at(0).remoteId, QStringLiteral("7"));
 }
 
+TEST(RestLibraryClientTest, SendsBearerTokenOnlyToSecureBaseOrigin) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("https://example.test/configured-list"),
+            {{QStringLiteral("limit"), QStringLiteral("5")}},
+            200,
+            QByteArrayLiteral("[]"));
+    RestLibrarySettings settings = newSettings();
+    settings.baseUrl = QUrl(QStringLiteral("https://example.test"));
+    settings.bearerToken = QStringLiteral("secret-token");
+
+    client.fetchTracks(settings);
+
+    EXPECT_EQ(pReply->request().rawHeader("Authorization"),
+            QByteArrayLiteral("Bearer secret-token"));
+    EXPECT_EQ(pReply->request().attribute(QNetworkRequest::RedirectPolicyAttribute).toInt(),
+            static_cast<int>(QNetworkRequest::SameOriginRedirectPolicy));
+    pReply->Done();
+}
+
+TEST(RestLibraryClientTest, MetadataRequestsUseAndReportTheTransferTimeout) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy failedSpy(&client, &RestLibraryClient::fetchFailed);
+    QSignalSpy diagnosticSpy(
+            &client,
+            &RestLibraryClient::requestDiagnosticUpdated);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-list"),
+            {{QStringLiteral("limit"), QStringLiteral("5")}},
+            200,
+            {});
+
+    client.fetchTracks(newSettings());
+
+    EXPECT_EQ(pReply->request().transferTimeout(), 15000);
+    pReply->Fail(QNetworkReply::TimeoutError, QStringLiteral("timed out"));
+
+    ASSERT_EQ(failedSpy.count(), 1);
+    ASSERT_EQ(diagnosticSpy.count(), 1);
+    const auto diagnostic = qvariant_cast<RestLibraryRequestDiagnostic>(
+            diagnosticSpy.takeFirst().at(0));
+    EXPECT_EQ(diagnostic.networkError,
+            static_cast<int>(QNetworkReply::TimeoutError));
+    EXPECT_TRUE(diagnostic.summary.contains(QStringLiteral("timed out")));
+}
+
+TEST(RestLibraryClientTest, OversizedMetadataResponseIsAbortedAndDiagnosed) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy failedSpy(&client, &RestLibraryClient::fetchFailed);
+    QSignalSpy diagnosticSpy(
+            &client,
+            &RestLibraryClient::requestDiagnosticUpdated);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-list"),
+            {{QStringLiteral("limit"), QStringLiteral("5")}},
+            200,
+            QByteArray(4 * 1024 * 1024 + 1, 'x'));
+
+    client.fetchTracks(newSettings());
+    pReply->EmitReadyRead();
+
+    EXPECT_TRUE(pReply->WasAborted());
+    ASSERT_EQ(failedSpy.count(), 1);
+    ASSERT_EQ(diagnosticSpy.count(), 1);
+    const auto diagnostic = qvariant_cast<RestLibraryRequestDiagnostic>(
+            diagnosticSpy.takeFirst().at(0));
+    EXPECT_EQ(diagnostic.networkError,
+            static_cast<int>(QNetworkReply::NoError));
+    EXPECT_TRUE(diagnostic.errorText.contains(QStringLiteral("4 MiB")));
+    EXPECT_TRUE(diagnostic.summary.contains(QStringLiteral("too large")));
+}
+
+TEST(RestLibraryClientTest, DeclaredOversizedMetadataResponseIsRejectedEarly) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy failedSpy(&client, &RestLibraryClient::fetchFailed);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-list"),
+            {{QStringLiteral("limit"), QStringLiteral("5")}},
+            200,
+            QByteArrayLiteral("must not be parsed"));
+
+    client.fetchTracks(newSettings());
+    pReply->SetHeader(QNetworkRequest::ContentLengthHeader, 5 * 1024 * 1024);
+    pReply->EmitMetaDataChanged();
+
+    EXPECT_TRUE(pReply->WasAborted());
+    EXPECT_EQ(failedSpy.count(), 1);
+}
+
 TEST(RestLibraryClientTest, IgnoresStaleTrackListReplyAfterNewerRequest) {
     MockNetworkAccessManager network;
     RestLibraryClient client(&network);
@@ -456,7 +549,8 @@ TEST(RestLibraryClientTest, EmitsDiagnosticForAuthFailure) {
     QSignalSpy diagnosticsSpy(&client, &RestLibraryClient::requestDiagnosticUpdated);
     QSignalSpy failedSpy(&client, &RestLibraryClient::fetchFailed);
     RestLibrarySettings settings = newSettings();
-    settings.baseUrl = QUrl(QStringLiteral("http://user:secret@example.invalid"));
+    settings.baseUrl = QUrl(QStringLiteral("https://example.invalid"));
+    settings.bearerToken = QStringLiteral("secret-token");
     MockNetworkReply* pReply = network.ExpectGet(
             QStringLiteral("/configured-list"),
             {{"limit", "5"}},
@@ -473,7 +567,7 @@ TEST(RestLibraryClientTest, EmitsDiagnosticForAuthFailure) {
     EXPECT_EQ(diagnostic.statusCode, 401);
     EXPECT_EQ(diagnostic.stage, QStringLiteral("Track list"));
     EXPECT_TRUE(diagnostic.url.contains(QStringLiteral("/configured-list")));
-    EXPECT_FALSE(diagnostic.url.contains(QStringLiteral("secret")));
+    EXPECT_FALSE(diagnostic.url.contains(QStringLiteral("secret-token")));
     EXPECT_TRUE(diagnostic.responseSnippet.contains(QStringLiteral("bad token")));
     EXPECT_TRUE(diagnostic.summary.contains(QStringLiteral("Authentication failed")));
     ASSERT_EQ(failedSpy.count(), 1);
@@ -1484,7 +1578,8 @@ TEST(RestLibraryClientTest, PublishesMixManSessionPlayback) {
     client.publishMixManSessionPlayback(
             newMixManSettings(),
             QStringLiteral("session-1"),
-            playback);
+            playback,
+            42);
     pReply->Done();
 
     ASSERT_EQ(statusSpy.count(), 1);
@@ -1493,6 +1588,7 @@ TEST(RestLibraryClientTest, PublishesMixManSessionPlayback) {
                     statusSpy.takeFirst().at(0));
     EXPECT_TRUE(status.success);
     EXPECT_EQ(status.operation, QStringLiteral("session_playback"));
+    EXPECT_EQ(status.mutationSequence, 42U);
     ASSERT_EQ(fetchedSpy.count(), 1);
     const auto session = qvariant_cast<mixxx::library::rest::RestLibrarySession>(
             fetchedSpy.takeFirst().at(0));

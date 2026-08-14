@@ -1,6 +1,7 @@
 #include "library/rest/restlibrarycachemanager.h"
 
 #include <algorithm>
+#include <utility>
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -98,9 +99,16 @@ QString errorTextFromResponse(const QByteArray& body) {
 
 RestLibraryCacheManager::RestLibraryCacheManager(
         QNetworkAccessManager* pNetworkAccessManager,
-        QObject* parent)
+        QObject* parent,
+        CacheFileFactory cacheFileFactory)
         : QObject(parent),
-          m_pNetworkAccessManager(pNetworkAccessManager) {
+          m_pNetworkAccessManager(pNetworkAccessManager),
+          m_cacheFileFactory(cacheFileFactory ? std::move(cacheFileFactory)
+                                              : CacheFileFactory([](
+                                                        const QString& filePath,
+                                                        QObject* parent) {
+                                                    return new QFile(filePath, parent);
+                                                })) {
     qRegisterMetaType<RestLibraryCacheResult>(
             "mixxx::library::rest::RestLibraryCacheResult");
     qRegisterMetaType<RestLibraryRequestDiagnostic>(
@@ -271,9 +279,9 @@ QNetworkRequest RestLibraryCacheManager::newDownloadRequest(
             track.remoteId));
     request.setAttribute(
             QNetworkRequest::RedirectPolicyAttribute,
-            QNetworkRequest::NoLessSafeRedirectPolicy);
+            QNetworkRequest::SameOriginRedirectPolicy);
     request.setTransferTimeout(kDownloadTimeoutMillis);
-    if (!m_settings.bearerToken.isEmpty()) {
+    if (m_settings.maySendBearerTokenTo(request.url())) {
         request.setRawHeader(
                 "Authorization",
                 QByteArray("Bearer ") + m_settings.bearerToken.toUtf8());
@@ -297,7 +305,17 @@ void RestLibraryCacheManager::startDownload(const RestLibraryTrack& track) {
             cacheFileStem(track.remoteId) + QStringLiteral(".download"));
     QFile::remove(tempFilePath);
 
-    auto* pFile = new QFile(tempFilePath, this);
+    QFile* pFile = m_cacheFileFactory(tempFilePath, this);
+    if (!pFile) {
+        m_knownPendingRemoteIds.remove(track.remoteId);
+        emitState(
+                track.remoteId,
+                RestLibraryCacheState::Failed,
+                {},
+                tr("Cache file could not be created."));
+        startNextDownloads();
+        return;
+    }
     if (!pFile->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         pFile->deleteLater();
         m_knownPendingRemoteIds.remove(track.remoteId);
@@ -322,6 +340,23 @@ void RestLibraryCacheManager::startDownload(const RestLibraryTrack& track) {
     emitState(track.remoteId, RestLibraryCacheState::Downloading);
 
     connect(pReply, &QNetworkReply::readyRead, this, &RestLibraryCacheManager::slotReadyRead);
+    connect(pReply, &QNetworkReply::metaDataChanged, this, [this, pReply] {
+        ActiveDownload* pDownload = activeDownloadForReply(pReply);
+        if (!pDownload || pDownload->sizeLimitExceeded) {
+            return;
+        }
+        bool validContentLength = false;
+        const qint64 contentLength = pReply
+                                             ->header(QNetworkRequest::ContentLengthHeader)
+                                             .toLongLong(&validContentLength);
+        const qint64 maxBytes =
+                static_cast<qint64>(pDownload->settings.cacheMaxMegabytes) *
+                kBytesPerMegabyte;
+        if (validContentLength && contentLength > maxBytes) {
+            pDownload->sizeLimitExceeded = true;
+            pReply->abort();
+        }
+    });
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryCacheManager::slotDownloadFinished);
 }
 

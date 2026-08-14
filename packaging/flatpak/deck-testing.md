@@ -251,7 +251,10 @@ journalctl --user -u mixxx-deck-update.service
   is resumed after restarting Mixxx, recommendation controls use the
   instance-bound state projection, and losing remote playback authority puts
   publication in standby without interrupting deck audio. A `401` or `403`
-  must not cause a tokenless retry.
+  must not cause a tokenless retry. Confirm bearer tokens survive restart via
+  the OS keychain but are absent from ordinary Mixxx settings, non-loopback
+  bearer URLs require HTTPS, and rapid deck changes converge to the newest
+  remotely published state.
 - Verify rollback launches with the same library database and controller
   configuration.
 

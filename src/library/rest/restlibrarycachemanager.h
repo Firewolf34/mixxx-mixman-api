@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <QByteArray>
 #include <QHash>
 #include <QList>
@@ -33,9 +35,13 @@ class RestLibraryCacheManager final : public QObject {
     Q_OBJECT
 
   public:
+    using CacheFileFactory =
+            std::function<QFile*(const QString& filePath, QObject* parent)>;
+
     explicit RestLibraryCacheManager(
             QNetworkAccessManager* pNetworkAccessManager,
-            QObject* parent = nullptr);
+            QObject* parent = nullptr,
+            CacheFileFactory cacheFileFactory = {});
     ~RestLibraryCacheManager() override;
 
     void reconcileTracks(
@@ -112,6 +118,7 @@ class RestLibraryCacheManager final : public QObject {
             const QString& remoteId);
 
     QPointer<QNetworkAccessManager> m_pNetworkAccessManager;
+    CacheFileFactory m_cacheFileFactory;
     RestLibrarySettings m_settings;
     QQueue<RestLibraryTrack> m_downloadQueue;
     QList<ActiveDownload> m_activeDownloads;

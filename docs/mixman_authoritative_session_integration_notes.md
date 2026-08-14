@@ -16,6 +16,13 @@ and `session:playback:dj` scope. When the server is explicitly configured for
 trusted-LAN authentication, an empty bearer token is intentionally omitted.
 A `401` or `403` never triggers an anonymous retry.
 
+Bearer tokens are stored only in QtKeychain. Existing plaintext preference
+tokens are migrated once and then removed; failed secure-storage migration
+fails closed. Tokens require HTTPS except on loopback development addresses,
+and all REST endpoints, redirects, and authenticated requests are restricted to
+the configured base origin. Auth-disabled HTTP remains available for an
+explicitly trusted LAN deployment.
+
 The optional Session ID preference selects a stable room. When blank, Mixxx
 generates and remembers a `mixxx-<uuid>` ID before connecting. Registration is
 attempted directly; `404` causes creation of that exact room followed by a
@@ -36,11 +43,13 @@ playback, and snapshot writes are serialized in this order and carry
 `instance_id`, `lease_id`, and `lease_generation`. Renew and release carry the
 same instance and lease with the field name `generation`.
 
-Only the newest pending playback/snapshot state is retained during rapid deck
-changes. A stale or held lease clears the local authority tuple, stops remote
-authoritative publication, and enters standby reconciliation. Mixxx never
-pauses, unloads, or otherwise changes local DJ audio because remote authority
-was lost.
+Only one authoritative mutation is in flight. Rapid candidate, playback, and
+snapshot changes coalesce to their newest queued state; each dispatch carries
+a local sequence plus the current server-issued lease fence. Late completions
+from an older sequence cannot release the current write. A stale or held lease
+clears the local authority tuple, stops remote authoritative publication, and
+enters standby reconciliation. Mixxx never pauses, unloads, or otherwise
+changes local DJ audio because remote authority was lost.
 
 Heartbeat timing comes from registration. Lease TTL, renew timing, and pause
 grace come from the v3 contract. A final paused or loaded publication is sent
@@ -59,6 +68,11 @@ select only a currently advertised candidate, using the current playback lease,
 `allow_external_candidate: false`. Custom REST Library recommendation routes
 remain available when MixMan defaults are disabled.
 
+All JSON responses use a 15-second transfer timeout and a 4 MiB decompressed
+body ceiling, enforced while streaming. Audio cache downloads reject an
+oversized declared length before writing, enforce the configured limit across
+chunked reads, and discard temporary files after short or failed writes.
+
 ## Connection test
 
 The optional v3 session-permission test deliberately creates a unique durable
@@ -67,5 +81,4 @@ claims and releases playback authority, and disconnects. The instance is not
 persisted, but the room and audit history remain until normal server retention
 or operator cleanup. Cleanup failure is reported as a failed test.
 
-Native OAuth/PKCE and migration of the manually entered bearer token out of
-tracked preferences remain separate follow-up work.
+Native OAuth/PKCE remains separate follow-up work.

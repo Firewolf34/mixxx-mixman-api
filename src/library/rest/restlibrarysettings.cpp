@@ -2,9 +2,10 @@
 
 #include <algorithm>
 
-#include <QDir>
 #include <QCryptographicHash>
+#include <QDir>
 #include <QEventLoop>
+#include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUuid>
@@ -25,28 +26,77 @@ namespace {
 
 const Logger kLogger("RestLibrarySettings");
 
-const QString kDefaultKeychainAccount = QStringLiteral("default");
 const QString kRestLibraryKeychainService = QStringLiteral("Mixxx REST Library");
 
-QString readBearerTokenFromKeychain(const QString& account) {
+class QtKeychainCredentialStore final : public RestLibraryCredentialStore {
+  public:
+    QString read(const QString& account) override {
 #ifdef __QTKEYCHAIN__
-    QKeychain::ReadPasswordJob readJob(kRestLibraryKeychainService);
-    readJob.setAutoDelete(false);
-    readJob.setKey(account);
+        QKeychain::ReadPasswordJob readJob(kRestLibraryKeychainService);
+        readJob.setAutoDelete(false);
+        readJob.setKey(account);
 
-    QEventLoop loop;
-    readJob.connect(&readJob, &QKeychain::ReadPasswordJob::finished, &loop, &QEventLoop::quit);
-    readJob.start();
-    loop.exec();
+        QEventLoop loop;
+        readJob.connect(
+                &readJob, &QKeychain::ReadPasswordJob::finished, &loop, &QEventLoop::quit);
+        readJob.start();
+        loop.exec();
 
-    if (readJob.error() == QKeychain::Error::NoError) {
-        return readJob.textData();
-    }
-    kLogger.debug() << "REST library bearer token was not available from keychain";
+        if (readJob.error() == QKeychain::Error::NoError) {
+            return readJob.textData();
+        }
+        kLogger.debug() << "REST library bearer token was not available from keychain";
 #else
-    Q_UNUSED(account);
+        Q_UNUSED(account);
 #endif
-    return {};
+        return {};
+    }
+
+    bool write(const QString& account, const QString& secret) override {
+#ifdef __QTKEYCHAIN__
+        QKeychain::WritePasswordJob writeJob(kRestLibraryKeychainService);
+        writeJob.setAutoDelete(false);
+        writeJob.setKey(account);
+        writeJob.setTextData(secret);
+        QEventLoop loop;
+        writeJob.connect(
+                &writeJob, &QKeychain::WritePasswordJob::finished, &loop, &QEventLoop::quit);
+        writeJob.start();
+        loop.exec();
+        return writeJob.error() == QKeychain::Error::NoError;
+#else
+        Q_UNUSED(account);
+        Q_UNUSED(secret);
+        return false;
+#endif
+    }
+
+    bool remove(const QString& account) override {
+#ifdef __QTKEYCHAIN__
+        QKeychain::DeletePasswordJob deleteJob(kRestLibraryKeychainService);
+        deleteJob.setAutoDelete(false);
+        deleteJob.setKey(account);
+        QEventLoop loop;
+        deleteJob.connect(
+                &deleteJob, &QKeychain::DeletePasswordJob::finished, &loop, &QEventLoop::quit);
+        deleteJob.start();
+        loop.exec();
+        return deleteJob.error() == QKeychain::Error::NoError ||
+                deleteJob.error() == QKeychain::Error::EntryNotFound;
+#else
+        Q_UNUSED(account);
+        return true;
+#endif
+    }
+};
+
+int effectivePort(const QUrl& url) {
+    if (url.port() >= 0) {
+        return url.port();
+    }
+    return url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0
+            ? 443
+            : 80;
 }
 
 QString sessionCredentialAccount(
@@ -64,6 +114,11 @@ QString sessionCredentialAccount(
 }
 
 } // namespace
+
+RestLibraryCredentialStore* defaultRestLibraryCredentialStore() {
+    static QtKeychainCredentialStore store;
+    return &store;
+}
 
 namespace config {
 
@@ -172,7 +227,7 @@ QString mixManSessionActionsPath(const QString& sessionId) {
 QUrl urlWithRestPath(const QUrl& baseUrl, const QString& path) {
     const QUrl pathUrl(path);
     if (pathUrl.isValid() && !pathUrl.isRelative()) {
-        return pathUrl;
+        return isSameOrigin(baseUrl, pathUrl) ? pathUrl : QUrl();
     }
 
     QUrl url = baseUrl;
@@ -200,9 +255,25 @@ QUrl urlWithRestPath(const QUrl& baseUrl, const QString& path) {
     return url;
 }
 
+bool isSameOrigin(const QUrl& lhs, const QUrl& rhs) {
+    return lhs.scheme().compare(rhs.scheme(), Qt::CaseInsensitive) == 0 &&
+            lhs.host().compare(rhs.host(), Qt::CaseInsensitive) == 0 &&
+            effectivePort(lhs) == effectivePort(rhs);
+}
+
+bool isLoopbackUrl(const QUrl& url) {
+    if (url.host().compare(QStringLiteral("localhost"), Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    const QHostAddress address(url.host());
+    return !address.isNull() && address.isLoopback();
+}
+
 } // namespace config
 
-RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& pConfig) {
+RestLibrarySettings RestLibrarySettings::fromConfig(
+        const UserSettingsPointer& pConfig,
+        RestLibraryCredentialStore* pCredentialStore) {
     RestLibrarySettings settings;
     if (!pConfig) {
         return settings;
@@ -217,14 +288,35 @@ RestLibrarySettings RestLibrarySettings::fromConfig(const UserSettingsPointer& p
             config::kDefaultCacheEnabled);
     settings.baseUrl = QUrl(pConfig->getValueString(config::kBaseUrlKey));
     settings.mixManSessionId = pConfig->getValueString(config::kMixManSessionIdKey).trimmed();
-    QString keychainAccount = pConfig->getValueString(
+    settings.bearerTokenKeychainAccount = bearerTokenAccountForUrl(settings.baseUrl);
+    const QString configuredBearerAccount = pConfig->getValueString(
             config::kBearerTokenKeychainAccountKey);
-    if (keychainAccount.trimmed().isEmpty()) {
-        keychainAccount = kDefaultKeychainAccount;
+    if (configuredBearerAccount != settings.bearerTokenKeychainAccount) {
+        if (!configuredBearerAccount.isEmpty()) {
+            kLogger.warning()
+                    << "Ignoring REST library bearer token account that is not scoped to the configured server";
+        }
+        pConfig->setValue(
+                config::kBearerTokenKeychainAccountKey,
+                settings.bearerTokenKeychainAccount);
     }
-    settings.bearerToken = readBearerTokenFromKeychain(keychainAccount);
-    if (settings.bearerToken.isEmpty()) {
-        settings.bearerToken = pConfig->getValueString(config::kLocalDevBearerTokenKey);
+    if (!pCredentialStore) {
+        pCredentialStore = defaultRestLibraryCredentialStore();
+    }
+    settings.bearerToken = pCredentialStore->read(settings.bearerTokenKeychainAccount);
+    const QString legacyBearerToken =
+            pConfig->getValueString(config::kLocalDevBearerTokenKey);
+    if (settings.bearerToken.isEmpty() && !legacyBearerToken.isEmpty()) {
+        if (pCredentialStore->write(
+                    settings.bearerTokenKeychainAccount, legacyBearerToken)) {
+            settings.bearerToken = legacyBearerToken;
+        } else {
+            kLogger.warning()
+                    << "REST library bearer token migration failed; plaintext token was discarded";
+        }
+    }
+    if (pConfig->exists(config::kLocalDevBearerTokenKey)) {
+        pConfig->remove(config::kLocalDevBearerTokenKey);
     }
     if (settings.useMixManDefaults) {
         settings.trackListPath = config::mixManTrackListPath();
@@ -399,32 +491,86 @@ bool clearMixManSessionCredentials(
 }
 
 bool RestLibrarySettings::isConfigured() const {
+    const QString scheme = baseUrl.scheme().toLower();
     return enabled &&
             baseUrl.isValid() &&
             !baseUrl.isEmpty() &&
-            !trackListPath.trimmed().isEmpty();
+            !baseUrl.isRelative() &&
+            baseUrl.userInfo().isEmpty() &&
+            (scheme == QStringLiteral("https") || scheme == QStringLiteral("http")) &&
+            hasAllowedBearerTransport() &&
+            !trackListPath.trimmed().isEmpty() &&
+            config::urlWithRestPath(baseUrl, trackListPath).isValid();
 }
 
 bool RestLibrarySettings::hasAudioDownloadConfigured() const {
     return isConfigured() &&
             cacheEnabled &&
             !cacheDirectoryPath.trimmed().isEmpty() &&
-            audioDownloadPathTemplate.contains(QStringLiteral("%1"));
+            audioDownloadPathTemplate.contains(QStringLiteral("%1")) &&
+            config::urlWithRestPath(baseUrl, audioDownloadPathTemplate).isValid();
 }
 
 bool RestLibrarySettings::hasTrackLookupConfigured() const {
     return isConfigured() &&
-            !trackLookupPathTemplate.trimmed().isEmpty();
+            !trackLookupPathTemplate.trimmed().isEmpty() &&
+            config::urlWithRestPath(baseUrl, trackLookupPathTemplate).isValid();
 }
 
 bool RestLibrarySettings::hasRecommendationsConfigured() const {
     return isConfigured() &&
-            recommendationPathTemplate.contains(QStringLiteral("%1"));
+            recommendationPathTemplate.contains(QStringLiteral("%1")) &&
+            config::urlWithRestPath(baseUrl, recommendationPathTemplate).isValid();
+}
+
+bool RestLibrarySettings::hasAllowedBearerTransport() const {
+    return bearerToken.isEmpty() ||
+            baseUrl.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0 ||
+            (baseUrl.scheme().compare(QStringLiteral("http"), Qt::CaseInsensitive) == 0 &&
+                    config::isLoopbackUrl(baseUrl));
+}
+
+bool RestLibrarySettings::maySendBearerTokenTo(const QUrl& url) const {
+    return !bearerToken.isEmpty() && hasAllowedBearerTransport() &&
+            config::isSameOrigin(baseUrl, url);
 }
 
 double RestLibrarySettings::mixManTargetEnergyNormalized() const {
     return static_cast<double>(mixManTargetEnergy) /
             static_cast<double>(config::kMaxMixManTargetEnergy);
+}
+
+QString bearerTokenAccountForUrl(const QUrl& baseUrl) {
+    const QUrl scopedUrl = baseUrl.adjusted(
+            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment |
+            QUrl::StripTrailingSlash);
+    return QStringLiteral("bearer:%1")
+            .arg(QString::fromLatin1(
+                    QCryptographicHash::hash(
+                            scopedUrl.toString().toUtf8(), QCryptographicHash::Sha256)
+                            .toHex()));
+}
+
+bool writeRestLibraryBearerToken(
+        const RestLibrarySettings& settings,
+        const QString& token,
+        RestLibraryCredentialStore* pCredentialStore) {
+    if (token.isEmpty()) {
+        return clearRestLibraryBearerToken(settings, pCredentialStore);
+    }
+    if (!pCredentialStore) {
+        pCredentialStore = defaultRestLibraryCredentialStore();
+    }
+    return pCredentialStore->write(settings.bearerTokenKeychainAccount, token);
+}
+
+bool clearRestLibraryBearerToken(
+        const RestLibrarySettings& settings,
+        RestLibraryCredentialStore* pCredentialStore) {
+    if (!pCredentialStore) {
+        pCredentialStore = defaultRestLibraryCredentialStore();
+    }
+    return pCredentialStore->remove(settings.bearerTokenKeychainAccount);
 }
 
 } // namespace mixxx::library::rest

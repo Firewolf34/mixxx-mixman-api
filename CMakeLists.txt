@@ -1467,6 +1467,7 @@ add_library(
   src/library/rest/dlgrestlibrary.ui
   src/library/rest/restlibrarycachemanager.cpp
   src/library/rest/restlibraryclient.cpp
+  src/library/rest/restlibrarymutationsequencer.cpp
   src/library/rest/restlibraryfeature.cpp
   src/library/rest/restlibrarysettings.cpp
   src/library/rest/restlibrarytablemodel.cpp
@@ -2952,6 +2953,7 @@ if(BUILD_TESTING)
     src/test/replaygaintest.cpp
     src/test/restlibrarycachemanager_test.cpp
     src/test/restlibraryclient_test.cpp
+    src/test/restlibrarymutationsequencer_test.cpp
     src/test/restlibrarysettings_test.cpp
     src/test/restlibrarytablemodel_test.cpp
     src/test/dlgrestlibrary_test.cpp

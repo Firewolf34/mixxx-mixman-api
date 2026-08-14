@@ -15,7 +15,10 @@ class DlgPrefRestLibraryDlg;
 class DlgPrefRestLibrary : public DlgPreferencePage {
     Q_OBJECT
   public:
-    DlgPrefRestLibrary(QWidget* pParent, UserSettingsPointer pConfig);
+    DlgPrefRestLibrary(
+            QWidget* pParent,
+            UserSettingsPointer pConfig,
+            mixxx::library::rest::RestLibraryCredentialStore* pCredentialStore = nullptr);
     ~DlgPrefRestLibrary() override;
 
     bool okayToClose() const override;
@@ -55,10 +58,11 @@ class DlgPrefRestLibrary : public DlgPreferencePage {
             const mixxx::library::rest::RestLibraryRequestDiagnostic& diagnostic) const;
     void clearValidationToolTips();
     void setConnectionTestRunning(bool running);
-    void writeSettings();
+    bool writeSettings();
 
     Ui::DlgPrefRestLibraryDlg* m_pUi;
     UserSettingsPointer m_pConfig;
+    mixxx::library::rest::RestLibraryCredentialStore* m_pCredentialStore;
     QNetworkAccessManager m_networkAccessManager;
     mixxx::library::rest::RestLibraryClient m_connectionTestClient;
     bool m_connectionTestRunning = false;

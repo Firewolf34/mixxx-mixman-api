@@ -240,6 +240,22 @@ void MockNetworkReply::SetRequest(const QNetworkRequest& request) {
     setRequest(request);
 }
 
+void MockNetworkReply::SetHeader(
+        QNetworkRequest::KnownHeaders header,
+        const QVariant& value) {
+    QNetworkReply::setHeader(header, value);
+}
+
+void MockNetworkReply::EmitMetaDataChanged() {
+    setOpenMode(QIODevice::ReadOnly);
+    emit metaDataChanged();
+}
+
+void MockNetworkReply::EmitReadyRead() {
+    setOpenMode(QIODevice::ReadOnly);
+    emit readyRead();
+}
+
 void MockNetworkReply::abort() {
     m_aborted = true;
     setAttribute(QNetworkRequest::HttpStatusCodeAttribute, {});
@@ -277,6 +293,19 @@ void MockNetworkReply::Done(bool emitReadyReadSignal) {
     if (m_aborted) {
         return;
     }
+    emit finished();
+}
+
+void MockNetworkReply::Fail(
+        QNetworkReply::NetworkError error,
+        const QString& errorString) {
+    setOpenMode(QIODevice::ReadOnly);
+    setError(error, errorString);
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
+    emit QNetworkReply::error(error);
+#else
+    emit errorOccurred(error);
+#endif
     emit finished();
 }
 

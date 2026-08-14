@@ -45,6 +45,33 @@ constexpr int kDefaultPlaybackLeaseRenewIntervalMillis = 10000;
 constexpr int kDefaultPlaybackPauseGraceMillis = 15000;
 constexpr qsizetype kMaxRecentRemoteIds = 20;
 
+using MutationKind = RestLibraryMutationSequencer::Kind;
+
+std::optional<MutationKind> mutationKindForOperation(const QString& operation) {
+    if (operation == kPlaybackControlClaimOperation) {
+        return MutationKind::Claim;
+    }
+    if (operation == kPlaybackControlRenewOperation) {
+        return MutationKind::Renew;
+    }
+    if (operation == kSessionPolicyRefreshOperation) {
+        return MutationKind::PolicyRefresh;
+    }
+    if (operation == kSessionCandidateSelectOperation) {
+        return MutationKind::Candidate;
+    }
+    if (operation == kSessionPlaybackOperation) {
+        return MutationKind::Playback;
+    }
+    if (operation == kSessionSnapshotOperation) {
+        return MutationKind::Snapshot;
+    }
+    if (operation == kPlaybackControlReleaseOperation) {
+        return MutationKind::Release;
+    }
+    return std::nullopt;
+}
+
 QString conciseDiagnosticText(const RestLibraryRequestDiagnostic& diagnostic) {
     if (diagnostic.networkError == static_cast<int>(QNetworkReply::OperationCanceledError)) {
         return QObject::tr("%1 canceled").arg(diagnostic.stage);
@@ -627,8 +654,9 @@ void RestLibraryFeature::slotMixManSessionFetched(const RestLibrarySession& sess
         setRecommendationTracks(m_authoritativeState.policyPath.candidates);
     }
     if (!m_playbackLeaseOwned &&
-            (m_hasPendingPlayback || m_hasPendingSnapshot ||
-                    !m_pendingCandidateTrackId.isEmpty()) &&
+            (m_mutationSequencer.hasQueued(MutationKind::Playback) ||
+                    m_mutationSequencer.hasQueued(MutationKind::Snapshot) ||
+                    m_mutationSequencer.hasQueued(MutationKind::Candidate)) &&
             (m_authoritativeState.playbackLease.instanceId.isEmpty() ||
                     !m_authoritativeState.playbackLease.active)) {
         ensureMixManPlaybackControl(RestLibrarySettings::fromConfig(m_pConfig));
@@ -657,6 +685,12 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
     if (status.operation.isEmpty()) {
         return;
     }
+    const auto mutationKind = mutationKindForOperation(status.operation);
+    if (mutationKind && status.mutationSequence > 0 &&
+            !m_mutationSequencer.complete(
+                    status.mutationSequence, *mutationKind)) {
+        return;
+    }
     if (!status.success && (status.statusCode == 401 || status.statusCode == 403)) {
         m_sessionHeartbeatTimer.stop();
         m_playbackLeaseRenewTimer.stop();
@@ -667,19 +701,13 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
         m_playbackLeaseOwned = false;
         m_playbackControlClaimPending = false;
         m_playbackControlReleasePending = false;
-        m_playbackControlReleaseQueued = false;
-        m_playbackLeaseRenewPending = false;
-        m_authorityWritePending = false;
-        m_hasPendingPlayback = false;
-        m_hasPendingSnapshot = false;
+        m_mutationSequencer.clear();
         m_pendingCandidateTrackId.clear();
-        m_policyRefreshPending = false;
         m_sessionStatusText = tr("MixMan authentication or DJ permission failed; no anonymous retry was attempted.");
         updateDiagnosticsText();
         return;
     }
     if (status.operation == kPlaybackControlClaimOperation) {
-        m_authorityWritePending = false;
         m_playbackControlClaimPending = false;
         m_playbackLeaseOwned = status.success &&
                 m_playbackLease.isValidFor(m_mixManRegistration.instance.instanceId);
@@ -693,8 +721,6 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
             }
         }
     } else if (status.operation == kPlaybackControlRenewOperation) {
-        m_authorityWritePending = false;
-        m_playbackLeaseRenewPending = false;
         if (!status.success) {
             m_playbackLease = {};
             m_playbackLeaseOwned = false;
@@ -706,29 +732,32 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
             flushMixManPlaybackMutations(RestLibrarySettings::fromConfig(m_pConfig));
         }
     } else if (status.operation == kPlaybackControlReleaseOperation) {
-        m_authorityWritePending = false;
         m_playbackControlReleasePending = false;
-        m_playbackControlReleaseQueued = false;
+        m_mutationSequencer.cancel(MutationKind::Release);
         if (status.success || status.statusCode == 409) {
             m_playbackLease = {};
             m_playbackLeaseOwned = false;
         }
         m_playbackLeaseRenewTimer.stop();
-        if (m_hasPendingPlayback || !m_pendingCandidateTrackId.isEmpty()) {
+        if (m_mutationSequencer.hasQueued(MutationKind::Playback) ||
+                m_mutationSequencer.hasQueued(MutationKind::Candidate)) {
             ensureMixManPlaybackControl(RestLibrarySettings::fromConfig(m_pConfig));
         }
     } else if (status.operation == kSessionPlaybackOperation ||
             status.operation == kSessionSnapshotOperation ||
             status.operation == kSessionCandidateSelectOperation ||
             status.operation == kSessionPolicyRefreshOperation) {
-        m_authorityWritePending = false;
         if (!status.success &&
                 (status.statusCode == 0 || status.statusCode == 409 ||
                         status.statusCode >= 500)) {
             if (status.operation == kSessionPlaybackOperation) {
-                m_hasPendingPlayback = true;
+                m_mutationSequencer.queue(MutationKind::Playback);
             } else if (status.operation == kSessionSnapshotOperation) {
-                m_hasPendingSnapshot = true;
+                m_mutationSequencer.queue(MutationKind::Snapshot);
+            } else if (status.operation == kSessionCandidateSelectOperation) {
+                m_mutationSequencer.queue(MutationKind::Candidate);
+            } else if (status.operation == kSessionPolicyRefreshOperation) {
+                m_mutationSequencer.queue(MutationKind::PolicyRefresh);
             }
             if (status.statusCode == 409) {
                 m_playbackLease = {};
@@ -739,6 +768,15 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
                 m_authorityReconcileTimer.start();
             }
         } else if (status.success) {
+            if (status.operation == kSessionCandidateSelectOperation &&
+                    !m_mutationSequencer.hasQueued(MutationKind::Candidate)) {
+                m_pendingCandidateTrackId.clear();
+                m_pendingCandidateSelectionOrigin.clear();
+                m_pendingCandidateMetadata = {};
+            }
+            flushMixManPlaybackMutations(RestLibrarySettings::fromConfig(m_pConfig));
+        } else {
+            // A rejected mutation must not strand newer coalesced work behind it.
             flushMixManPlaybackMutations(RestLibrarySettings::fromConfig(m_pConfig));
         }
     }
@@ -765,8 +803,7 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
             m_playbackLeaseOwned = false;
             m_playbackControlClaimPending = false;
             m_playbackControlReleasePending = false;
-            m_playbackLeaseRenewPending = false;
-            m_authorityWritePending = false;
+            m_mutationSequencer.clear();
             m_sessionCreateAttempted = false;
             ensureMixManSession(settings);
             updateDiagnosticsText();
@@ -787,8 +824,7 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
             m_playbackLeaseOwned = false;
             m_playbackControlClaimPending = false;
             m_playbackControlReleasePending = false;
-            m_playbackLeaseRenewPending = false;
-            m_authorityWritePending = false;
+            m_mutationSequencer.clear();
             m_sessionCreateAttempted = false;
             ensureMixManSession(settings);
             updateDiagnosticsText();
@@ -864,7 +900,7 @@ void RestLibraryFeature::slotPlaybackLeaseRenew() {
         m_playbackLeaseRenewTimer.stop();
         return;
     }
-    m_playbackLeaseRenewPending = true;
+    m_mutationSequencer.queue(MutationKind::Renew);
     flushMixManPlaybackMutations(settings);
 }
 
@@ -876,7 +912,7 @@ void RestLibraryFeature::slotPlaybackLeaseRelease() {
             m_mixManSession.id.isEmpty()) {
         return;
     }
-    m_playbackControlReleaseQueued = true;
+    m_mutationSequencer.queue(MutationKind::Release);
     flushMixManPlaybackMutations(settings);
 }
 
@@ -885,8 +921,9 @@ void RestLibraryFeature::slotAuthorityReconcile() {
     if (!settings.isConfigured() || !settings.useMixManDefaults ||
             m_mixManSession.id.isEmpty() ||
             m_mixManRegistration.instance.instanceId.isEmpty() ||
-            (!m_hasPendingPlayback && !m_hasPendingSnapshot &&
-                    m_pendingCandidateTrackId.isEmpty())) {
+            (!m_mutationSequencer.hasQueued(MutationKind::Playback) &&
+                    !m_mutationSequencer.hasQueued(MutationKind::Snapshot) &&
+                    !m_mutationSequencer.hasQueued(MutationKind::Candidate))) {
         m_authorityReconcileTimer.stop();
         return;
     }
@@ -1109,13 +1146,8 @@ void RestLibraryFeature::resetMixManSessionState() {
     m_authorityReconcileTimer.stop();
     m_playbackControlClaimPending = false;
     m_playbackControlReleasePending = false;
-    m_playbackControlReleaseQueued = false;
-    m_playbackLeaseRenewPending = false;
     m_playbackLeaseOwned = false;
-    m_hasPendingPlayback = false;
-    m_hasPendingSnapshot = false;
-    m_authorityWritePending = false;
-    m_policyRefreshPending = false;
+    m_mutationSequencer.clear();
     m_pendingCandidateTrackId.clear();
     m_pendingCandidateSelectionOrigin.clear();
     m_pendingCandidateMetadata = {};
@@ -1147,7 +1179,7 @@ void RestLibraryFeature::publishMixManSnapshot(
     snapshot.snapshot = mixManTrackSnapshot(pTrack, remoteId);
     snapshot.metadata = mixManSessionMetadata();
     m_pendingSnapshot = snapshot;
-    m_hasPendingSnapshot = true;
+    m_mutationSequencer.queue(MutationKind::Snapshot);
 }
 
 void RestLibraryFeature::publishMixManPlayback(
@@ -1193,9 +1225,9 @@ void RestLibraryFeature::publishMixManPlayback(
     }
 
     m_pendingPlayback = playback;
-    m_hasPendingPlayback = true;
+    m_mutationSequencer.queue(MutationKind::Playback);
     if (playback.playbackState == QStringLiteral("playing")) {
-        m_playbackControlReleaseQueued = false;
+        m_mutationSequencer.cancel(MutationKind::Release);
         m_playbackLeaseReleaseTimer.stop();
     }
     publishMixManSnapshot(settings, pTrack, remoteId);
@@ -1210,79 +1242,103 @@ void RestLibraryFeature::ensureMixManPlaybackControl(
             m_mixManRegistration.instance.instanceId.isEmpty()) {
         return;
     }
-    if (m_playbackControlReleasePending || m_authorityWritePending) {
+    if (m_playbackControlReleasePending || m_mutationSequencer.hasInFlight()) {
         return;
     }
     if (m_playbackLeaseOwned) {
         flushMixManPlaybackMutations(settings);
         return;
     }
-    if (m_playbackControlClaimPending) {
+    if (m_playbackControlClaimPending ||
+            m_mutationSequencer.hasQueued(MutationKind::Claim)) {
         return;
     }
-    m_playbackControlClaimPending = true;
-    m_authorityWritePending = true;
-    QJsonObject metadata = mixManSessionMetadata();
-    metadata.insert(QStringLiteral("reason"), QStringLiteral("mixxx dj action"));
-    m_client.claimMixManPlaybackControl(
-            settings,
-            m_mixManSession.id,
-            m_mixManRegistration.instance.instanceId,
-            m_playbackLeaseTtlSeconds,
-            metadata);
+    m_mutationSequencer.queue(MutationKind::Claim);
+    flushMixManPlaybackMutations(settings);
 }
 
 void RestLibraryFeature::flushMixManPlaybackMutations(
         const RestLibrarySettings& settings) {
-    if (m_authorityWritePending ||
-            m_mixManSession.id.isEmpty()) {
+    if (m_mutationSequencer.hasInFlight() || m_mixManSession.id.isEmpty()) {
         return;
     }
-    if (m_playbackLeaseOwned && m_playbackLeaseRenewPending) {
-        m_authorityWritePending = true;
+
+    const bool leaseMutationQueued =
+            m_mutationSequencer.hasQueued(MutationKind::Renew) ||
+            m_mutationSequencer.hasQueued(MutationKind::Candidate) ||
+            m_mutationSequencer.hasQueued(MutationKind::Playback) ||
+            m_mutationSequencer.hasQueued(MutationKind::Snapshot) ||
+            m_mutationSequencer.hasQueued(MutationKind::Release);
+    if (!m_playbackLeaseOwned && leaseMutationQueued &&
+            !m_playbackControlClaimPending &&
+            !m_mutationSequencer.hasQueued(MutationKind::Claim)) {
+        m_mutationSequencer.queue(MutationKind::Claim);
+    }
+
+    RestLibraryMutationSequencer::LeaseFence leaseFence;
+    if (m_playbackLeaseOwned) {
+        leaseFence = {
+                m_playbackLease.instanceId,
+                m_playbackLease.leaseId,
+                m_playbackLease.generation};
+    }
+    const auto dispatch = m_mutationSequencer.takeNext(leaseFence);
+    if (!dispatch) {
+        return;
+    }
+
+    RestLibraryPlaybackLease fencedLease{
+            dispatch->lease.instanceId,
+            dispatch->lease.leaseId,
+            dispatch->lease.generation,
+            dispatch->lease.isValid()};
+    switch (dispatch->kind) {
+    case MutationKind::Claim: {
+        m_playbackControlClaimPending = true;
+        QJsonObject metadata = mixManSessionMetadata();
+        metadata.insert(
+                QStringLiteral("reason"), QStringLiteral("mixxx dj action"));
+        m_client.claimMixManPlaybackControl(
+                settings,
+                m_mixManSession.id,
+                m_mixManRegistration.instance.instanceId,
+                m_playbackLeaseTtlSeconds,
+                metadata,
+                dispatch->sequence);
+        return;
+    }
+    case MutationKind::Renew:
         m_client.renewMixManPlaybackControl(
-                settings, m_mixManSession.id, m_playbackLease);
+                settings,
+                m_mixManSession.id,
+                fencedLease,
+                dispatch->sequence);
         return;
-    }
-    if (m_policyRefreshPending) {
-        m_policyRefreshPending = false;
-        m_authorityWritePending = true;
+    case MutationKind::PolicyRefresh:
         m_client.publishMixManPolicyRefreshAction(
                 settings,
                 m_mixManSession.id,
                 m_mixManRegistration.instance.instanceId,
-                mixManSessionMetadata());
+                mixManSessionMetadata(),
+                dispatch->sequence);
         return;
-    }
-    if (!m_playbackLeaseOwned || m_playbackControlReleasePending) {
-        if ((m_hasPendingPlayback || m_hasPendingSnapshot ||
-                    !m_pendingCandidateTrackId.isEmpty()) &&
-                !m_playbackControlClaimPending) {
-            ensureMixManPlaybackControl(settings);
-        }
-        return;
-    }
-    if (!m_pendingCandidateTrackId.isEmpty()) {
-        const QString trackId = m_pendingCandidateTrackId;
-        const QJsonObject metadata = m_pendingCandidateMetadata;
-        m_pendingCandidateTrackId.clear();
-        m_pendingCandidateSelectionOrigin.clear();
-        m_pendingCandidateMetadata = {};
-        m_authorityWritePending = true;
+    case MutationKind::Candidate:
         m_client.selectMixManSessionCandidate(
                 settings,
                 m_mixManSession.id,
-                trackId,
-                m_playbackLease,
-                metadata);
+                m_pendingCandidateTrackId,
+                fencedLease,
+                m_pendingCandidateMetadata,
+                dispatch->sequence);
         return;
-    }
-    if (m_hasPendingPlayback) {
+    case MutationKind::Playback: {
         RestLibrarySessionPlayback playback = m_pendingPlayback;
-        playback.lease = m_playbackLease;
-        m_hasPendingPlayback = false;
-        m_authorityWritePending = true;
-        m_client.publishMixManSessionPlayback(settings, m_mixManSession.id, playback);
+        playback.lease = fencedLease;
+        m_client.publishMixManSessionPlayback(
+                settings,
+                m_mixManSession.id,
+                playback,
+                dispatch->sequence);
         if (playback.playbackState == QStringLiteral("playing")) {
             m_playbackLeaseReleaseTimer.stop();
             if (!m_playbackLeaseRenewTimer.isActive()) {
@@ -1294,21 +1350,26 @@ void RestLibraryFeature::flushMixManPlaybackMutations(
         }
         return;
     }
-    if (m_hasPendingSnapshot) {
+    case MutationKind::Snapshot: {
         RestLibrarySessionSnapshot snapshot = m_pendingSnapshot;
-        snapshot.lease = m_playbackLease;
-        m_hasPendingSnapshot = false;
-        m_authorityWritePending = true;
+        snapshot.lease = fencedLease;
         m_client.publishMixManSessionSnapshot(
-                settings, m_mixManSession.id, snapshot);
+                settings,
+                m_mixManSession.id,
+                snapshot,
+                dispatch->sequence);
         return;
     }
-    if (m_playbackControlReleaseQueued) {
-        m_playbackControlReleaseQueued = false;
+    case MutationKind::Release:
         m_playbackControlReleasePending = true;
-        m_authorityWritePending = true;
         m_client.releaseMixManPlaybackControl(
-                settings, m_mixManSession.id, m_playbackLease);
+                settings,
+                m_mixManSession.id,
+                fencedLease,
+                dispatch->sequence);
+        return;
+    case MutationKind::Count:
+        return;
     }
 }
 
@@ -1334,6 +1395,7 @@ void RestLibraryFeature::selectMixManCandidateForTrack(const TrackPointer& pTrac
     m_pendingCandidateTrackId = remoteId;
     m_pendingCandidateSelectionOrigin = selectionOrigin;
     m_pendingCandidateMetadata = metadata;
+    m_mutationSequencer.queue(MutationKind::Candidate);
     ensureMixManPlaybackControl(settings);
 }
 
@@ -1345,7 +1407,7 @@ void RestLibraryFeature::requestMixManPolicyRefresh(const RestLibrarySettings& s
         return;
     }
 
-    m_policyRefreshPending = true;
+    m_mutationSequencer.queue(MutationKind::PolicyRefresh);
     flushMixManPlaybackMutations(settings);
 }
 

@@ -61,11 +61,13 @@ class RestLibraryClient final : public QObject {
     void publishMixManSessionPlayback(
             const RestLibrarySettings& settings,
             const QString& sessionId,
-            const RestLibrarySessionPlayback& playback);
+            const RestLibrarySessionPlayback& playback,
+            quint64 mutationSequence = 0);
     void publishMixManSessionSnapshot(
             const RestLibrarySettings& settings,
             const QString& sessionId,
-            const RestLibrarySessionSnapshot& snapshot);
+            const RestLibrarySessionSnapshot& snapshot,
+            quint64 mutationSequence = 0);
     void updateMixManSessionIntent(
             const RestLibrarySettings& settings,
             const QString& sessionId,
@@ -80,26 +82,31 @@ class RestLibraryClient final : public QObject {
             const QString& sessionId,
             const QString& instanceId,
             int ttlSeconds,
-            const QJsonObject& metadata = {});
+            const QJsonObject& metadata = {},
+            quint64 mutationSequence = 0);
     void renewMixManPlaybackControl(
             const RestLibrarySettings& settings,
             const QString& sessionId,
-            const RestLibraryPlaybackLease& lease);
+            const RestLibraryPlaybackLease& lease,
+            quint64 mutationSequence = 0);
     void releaseMixManPlaybackControl(
             const RestLibrarySettings& settings,
             const QString& sessionId,
-            const RestLibraryPlaybackLease& lease);
+            const RestLibraryPlaybackLease& lease,
+            quint64 mutationSequence = 0);
     void selectMixManSessionCandidate(
             const RestLibrarySettings& settings,
             const QString& sessionId,
             const QString& trackId,
             const RestLibraryPlaybackLease& lease,
-            const QJsonObject& metadata = {});
+            const QJsonObject& metadata = {},
+            quint64 mutationSequence = 0);
     void publishMixManPolicyRefreshAction(
             const RestLibrarySettings& settings,
             const QString& sessionId,
             const QString& instanceId,
-            const QJsonObject& metadata = {});
+            const QJsonObject& metadata = {},
+            quint64 mutationSequence = 0);
     void testMixManConnection(
             const RestLibrarySettings& settings,
             const QString& clientId = {},
@@ -243,6 +250,9 @@ class RestLibraryClient final : public QObject {
             const RestLibraryRequestDiagnostic& diagnostic,
             const QString& fallbackSummary) const;
     void emitConfigurationDiagnostic(const QString& summary);
+    void monitorMetadataReply(QNetworkReply* pReply);
+    void consumeMetadataReply(QNetworkReply* pReply, bool abortIfOversized);
+    QByteArray takeMetadataReplyBody(QNetworkReply* pReply);
     void forgetConnectionTestReply(QNetworkReply* pReply);
     void startDetailRequests(int requestGeneration, const QStringList& remoteIds);
     void finishDetailBatchIfComplete(int requestGeneration);
@@ -257,7 +267,8 @@ class RestLibraryClient final : public QObject {
             const RestLibraryPlaybackLease& lease,
             const QString& action,
             const QString& operation,
-            const QJsonObject& metadata);
+            const QJsonObject& metadata,
+            quint64 mutationSequence);
     void startMixManInstanceRegistration(
             const QString& sessionId,
             const RestLibrarySessionCredentials& credentials,
@@ -293,6 +304,7 @@ class RestLibraryClient final : public QObject {
     QPointer<QNetworkAccessManager> m_pNetworkAccessManager;
     RestLibrarySettings m_settings;
     QHash<QNetworkReply*, RequestContext> m_requestContexts;
+    QHash<QNetworkReply*, QByteArray> m_metadataResponseBodies;
     QHash<int, TrackRequestBatch> m_trackBatches;
     int m_trackListRequestGeneration = 0;
     int m_policyPathRequestGeneration = 0;

@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -19,6 +21,16 @@ using mixxx::library::rest::RestLibraryCacheState;
 using mixxx::library::rest::RestLibraryRequestDiagnostic;
 using mixxx::library::rest::RestLibrarySettings;
 using mixxx::library::rest::RestLibraryTrack;
+
+class PartialWriteFile final : public QFile {
+  public:
+    using QFile::QFile;
+
+  protected:
+    qint64 writeData(const char* data, qint64 len) override {
+        return QFile::writeData(data, std::max<qint64>(1, len / 2));
+    }
+};
 
 RestLibraryTrack newTrack(
         const QString& remoteId,
@@ -195,6 +207,30 @@ TEST(RestLibraryCacheManagerTest, DownloadsAudioToFinalCacheFile) {
     EXPECT_TRUE(result.cachedFilePath.endsWith(QStringLiteral(".mp3")));
 }
 
+TEST(RestLibraryCacheManagerTest, AudioDownloadUsesSecureSameOriginBearerRequest) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MockNetworkAccessManager network;
+    RestLibraryCacheManager manager(&network);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("https://example.test/configured-audio/42"),
+            {},
+            200,
+            QByteArrayLiteral("audio bytes"));
+    RestLibrarySettings settings = newSettings(tempDir.path());
+    settings.baseUrl = QUrl(QStringLiteral("https://example.test"));
+    settings.bearerToken = QStringLiteral("secret-token");
+
+    manager.cacheTracks({newTrack(QStringLiteral("42"))}, settings);
+
+    EXPECT_EQ(pReply->request().rawHeader("Authorization"),
+            QByteArrayLiteral("Bearer secret-token"));
+    EXPECT_EQ(pReply->request().attribute(QNetworkRequest::RedirectPolicyAttribute).toInt(),
+            static_cast<int>(QNetworkRequest::SameOriginRedirectPolicy));
+    pReply->Done(true);
+}
+
 TEST(RestLibraryCacheManagerTest, DownloadPreservesBaseUrlPath) {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -282,6 +318,96 @@ TEST(RestLibraryCacheManagerTest, OversizedDownloadFailsAndIsNotFinalized) {
     const RestLibraryCacheResult result = lastResult(spy);
     EXPECT_EQ(result.cacheState, RestLibraryCacheState::Failed);
     EXPECT_TRUE(QDir(tempDir.path()).entryList(QStringList{QStringLiteral("*.mp3")}).isEmpty());
+}
+
+TEST(RestLibraryCacheManagerTest, DeclaredOversizedDownloadIsRejectedBeforeWriting) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MockNetworkAccessManager network;
+    RestLibraryCacheManager manager(&network);
+    QSignalSpy spy(
+            &manager,
+            &RestLibraryCacheManager::trackCacheStateChanged);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-audio/42"),
+            {},
+            200,
+            QByteArrayLiteral("must not be written"));
+    RestLibrarySettings settings = newSettings(tempDir.path());
+    settings.cacheMaxMegabytes = 1;
+
+    manager.cacheTracks({newTrack(QStringLiteral("42"))}, settings);
+    pReply->SetHeader(QNetworkRequest::ContentLengthHeader, 2 * 1024 * 1024);
+    pReply->EmitMetaDataChanged();
+
+    EXPECT_TRUE(pReply->WasAborted());
+    ASSERT_GE(spy.count(), 3);
+    EXPECT_EQ(lastResult(spy).cacheState, RestLibraryCacheState::Failed);
+    EXPECT_TRUE(QDir(tempDir.path())
+                        .entryList(QDir::Files | QDir::NoDotAndDotDot)
+                        .isEmpty());
+}
+
+TEST(RestLibraryCacheManagerTest, ChunkedOversizedDownloadIsRejectedAcrossReads) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MockNetworkAccessManager network;
+    RestLibraryCacheManager manager(&network);
+    QSignalSpy spy(
+            &manager,
+            &RestLibraryCacheManager::trackCacheStateChanged);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-audio/42"), {}, 200, {});
+    RestLibrarySettings settings = newSettings(tempDir.path());
+    settings.cacheMaxMegabytes = 1;
+
+    manager.cacheTracks({newTrack(QStringLiteral("42"))}, settings);
+    pReply->SetData(QByteArray(700 * 1024, 'a'));
+    pReply->EmitReadyRead();
+    EXPECT_FALSE(pReply->WasAborted());
+    pReply->SetData(QByteArray(700 * 1024, 'b'));
+    pReply->EmitReadyRead();
+
+    EXPECT_TRUE(pReply->WasAborted());
+    ASSERT_GE(spy.count(), 3);
+    EXPECT_EQ(lastResult(spy).cacheState, RestLibraryCacheState::Failed);
+    EXPECT_TRUE(QDir(tempDir.path())
+                        .entryList(QDir::Files | QDir::NoDotAndDotDot)
+                        .isEmpty());
+}
+
+TEST(RestLibraryCacheManagerTest, PartialFileWriteFailsAndRemovesTemporaryFile) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MockNetworkAccessManager network;
+    RestLibraryCacheManager manager(
+            &network,
+            nullptr,
+            [](const QString& filePath, QObject* parent) {
+                return new PartialWriteFile(filePath, parent);
+            });
+    QSignalSpy spy(
+            &manager,
+            &RestLibraryCacheManager::trackCacheStateChanged);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-audio/42"),
+            {},
+            200,
+            QByteArrayLiteral("audio bytes"));
+
+    manager.cacheTracks(
+            {newTrack(QStringLiteral("42"))}, newSettings(tempDir.path()));
+    pReply->Done(true);
+
+    EXPECT_TRUE(pReply->WasAborted());
+    ASSERT_GE(spy.count(), 3);
+    EXPECT_EQ(lastResult(spy).cacheState, RestLibraryCacheState::Failed);
+    EXPECT_TRUE(QDir(tempDir.path())
+                        .entryList(QDir::Files | QDir::NoDotAndDotDot)
+                        .isEmpty());
 }
 
 TEST(RestLibraryCacheManagerTest, IgnoresTemporaryAndUnrelatedFilesDuringPruning) {

@@ -41,10 +41,14 @@ class MockNetworkReply : public QNetworkReply {
     // Use these to set expectations.
     void SetData(const QByteArray& data);
     void SetRequest(const QNetworkRequest& request);
+    void SetHeader(QNetworkRequest::KnownHeaders header, const QVariant& value);
     virtual void setAttribute(QNetworkRequest::Attribute code, const QVariant& value);
+    void EmitMetaDataChanged();
+    void EmitReadyRead();
 
     // Call this when you are ready for the reply signals.
     void Done(bool emitReadyRead = false);
+    void Fail(QNetworkReply::NetworkError error, const QString& errorString);
     bool WasAborted() const {
         return m_aborted;
     }
