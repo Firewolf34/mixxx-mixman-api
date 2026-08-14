@@ -14,6 +14,7 @@ UPDATE_LOCK="${STATE_ROOT}/auto-update.lock"
 DEPLOY_LOCK="${STATE_ROOT}/deploy.lock"
 ROLLBACK_ROOT="${CACHE_ROOT}/repo-rollback"
 USER_REPO="${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/repo"
+SMOKE_TIMEOUT_SECONDS="${MIXXX_DECK_SMOKE_TIMEOUT_SECONDS:-90}"
 
 die() {
     echo "Error: $*" >&2
@@ -49,6 +50,24 @@ installed_source_sha() {
     flatpak info --user "${APP_ID}" 2>/dev/null |
         sed -nE 's/^[[:space:]]*Subject:[[:space:]]*Built from ([0-9a-f]{40}).*$/\1/p' |
         head -n 1
+}
+
+installed_build_matches() {
+    local expected_commit="$1"
+    local expected_source="$2"
+    [[ "$(installed_commit || true)" == "${expected_commit}" ]] &&
+        [[ "$(installed_source_sha || true)" == "${expected_source}" ]]
+}
+
+previous_status_blocks_commit() {
+    local commit="$1"
+    [[ -r "${STATUS_FILE}" ]] || return 1
+    jq -e --arg commit "${commit}" '
+        .schema_version == 1 and
+        .result == "rollback-failed" and
+        .installed_commit == $commit and
+        .available_commit == $commit
+    ' "${STATUS_FILE}" >/dev/null 2>&1
 }
 
 available_commit() {
@@ -130,21 +149,61 @@ snapshot_installed_commit() {
 
 rollback_commit() {
     local old_commit="$1"
-    local snapshot_dir="$2"
-    echo "Automatic validation failed; restoring ${old_commit}." >&2
-    if flatpak update --user --app --no-pull --commit="${old_commit}" \
-            --noninteractive -y "${APP_ID}"; then
-        return
+    local old_source="$2"
+    local snapshot_dir="$3"
+    local bundle="${snapshot_dir}/Mixxx.flatpak"
+    local checksum="${snapshot_dir}/Mixxx.flatpak.sha256"
+
+    echo "Automatic update failed; restoring ${old_commit}." >&2
+    flatpak update --user --app --no-pull --commit="${old_commit}" \
+        --noninteractive -y "${APP_ID}" || true
+    if installed_build_matches "${old_commit}" "${old_source}"; then
+        echo "Restored previous Mixxx commit from the local Flatpak repository." >&2
+        return 0
+    fi
+
+    echo "Commit rollback did not restore the previous build; using the cached bundle." >&2
+    if [[ ! -s "${bundle}" || ! -s "${checksum}" ]] ||
+            [[ "$(sha256sum "${bundle}" | awk '{print $1}')" != "$(<"${checksum}")" ]]; then
+        echo "Cached rollback bundle is missing or failed checksum verification." >&2
+        return 1
     fi
     flatpak install --user --bundle --reinstall --noninteractive -y \
-        "${snapshot_dir}/Mixxx.flatpak"
+        "${bundle}" || true
+    if installed_build_matches "${old_commit}" "${old_source}"; then
+        echo "Restored and verified the previous Mixxx build from its cached bundle." >&2
+        return 0
+    fi
+
+    echo "Rollback verification failed; the previous Mixxx build was not restored." >&2
+    return 1
+}
+
+record_failed_update() {
+    local reason="$1"
+    local old_commit="$2"
+    local old_source="$3"
+    local new_commit="$4"
+    local snapshot_dir="$5"
+    local current_commit
+
+    if rollback_commit "${old_commit}" "${old_source}" "${snapshot_dir}"; then
+        write_status rolled-back "${reason} The previous build was restored and verified." \
+            "${old_commit}" "${new_commit}" "${new_commit}"
+        return 0
+    fi
+
+    current_commit="$(installed_commit || true)"
+    write_status rollback-failed \
+        "${reason} Rollback verification failed; do not launch this build automatically." \
+        "${current_commit}" "${new_commit}" "${new_commit}"
 }
 
 smoke_installed_build() (
     local smoke_home
     smoke_home="$(mktemp -d)"
     trap 'rm -rf -- "${smoke_home}"' EXIT
-    timeout 30 flatpak run \
+    timeout "${SMOKE_TIMEOUT_SECONDS}" flatpak run \
         --command=mixxx \
         --env=QT_QPA_PLATFORM=offscreen \
         --env="HOME=${smoke_home}" \
@@ -173,6 +232,8 @@ auto_update() {
     require_command on_ac_power
     require_command sha256sum
     require_command timeout
+    [[ "${SMOKE_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||
+        die "MIXXX_DECK_SMOKE_TIMEOUT_SECONDS must be a positive integer."
     mkdir -p "${STATE_ROOT}" "${ROLLBACK_ROOT}"
 
     exec 8>"${UPDATE_LOCK}"
@@ -192,6 +253,10 @@ auto_update() {
     [[ "${new_source}" =~ ^[0-9a-f]{40}$ ]] || die "Available source provenance is invalid."
 
     if [[ "${old_commit}" == "${new_commit}" ]]; then
+        if previous_status_blocks_commit "${old_commit}"; then
+            echo "Error: the installed build previously failed validation and rollback; refusing to mark it up to date." >&2
+            return 1
+        fi
         write_status up-to-date "Installed build is current." \
             "${old_commit}" "${new_commit}"
         echo "Mixxx is up to date at ${new_source}."
@@ -229,17 +294,18 @@ auto_update() {
 
     snapshot_dir="$(snapshot_installed_commit "${old_source}" "${old_commit}")"
     if ! flatpak update --user --app --no-pull --noninteractive -y "${APP_ID}"; then
-        rollback_commit "${old_commit}" "${snapshot_dir}"
-        write_status rolled-back "Deployment failed and the previous commit was restored." \
-            "${old_commit}" "${new_commit}" "${new_commit}"
+        record_failed_update "Deployment failed." "${old_commit}" "${old_source}" \
+            "${new_commit}" "${snapshot_dir}"
         return 1
     fi
-    if [[ "$(installed_commit)" != "${new_commit}" ]] ||
-            [[ "$(installed_source_sha || true)" != "${new_source}" ]] ||
-            ! smoke_installed_build; then
-        rollback_commit "${old_commit}" "${snapshot_dir}"
-        write_status rolled-back "Validation failed and the previous commit was restored." \
-            "${old_commit}" "${new_commit}" "${new_commit}"
+    if ! installed_build_matches "${new_commit}" "${new_source}"; then
+        record_failed_update "Installed identity validation failed." \
+            "${old_commit}" "${old_source}" "${new_commit}" "${snapshot_dir}"
+        return 1
+    fi
+    if ! smoke_installed_build; then
+        record_failed_update "Headless smoke validation failed." \
+            "${old_commit}" "${old_source}" "${new_commit}" "${snapshot_dir}"
         return 1
     fi
 

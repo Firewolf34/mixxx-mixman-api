@@ -286,6 +286,9 @@ Before changing the deck pipeline, read:
   and fail closed on inspection errors. A battery or running-session deferral
   is a successful no-change check.
 - Snapshot a different installed user Flatpak before replacing it.
+- Automatic rollback must verify the installed commit and source SHA, fall back
+  to the checksum-verified snapshot bundle after a no-op commit rollback, and
+  persist `rollback-failed` rather than later reporting that build up to date.
 - Verify cached checksums before installation.
 - Verify installed source SHA after installation.
 - Protect current, previous, and staged bundles from pruning.

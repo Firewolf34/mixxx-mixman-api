@@ -38,9 +38,10 @@ case "$1" in
         ;;
     info)
         if [[ "$*" == *--show-commit* ]]; then
-            echo "${TEST_INSTALLED_COMMIT}"
+            cat "${TEST_INSTALLED_COMMIT_FILE}"
         else
-            echo "Subject: Built from ${TEST_INSTALLED_SOURCE}"
+            printf 'Subject: Built from '
+            cat "${TEST_INSTALLED_SOURCE_FILE}"
         fi
         ;;
     remote-info)
@@ -51,7 +52,41 @@ case "$1" in
         fi
         ;;
     update)
-        echo update >>"${TEST_COMMAND_LOG}"
+        echo "update $*" >>"${TEST_COMMAND_LOG}"
+        if [[ "$*" == *--commit=* ]]; then
+            case "${TEST_ROLLBACK_UPDATE:-noop}" in
+                restore)
+                    printf '%s\n' "${TEST_ROLLBACK_COMMIT}" >"${TEST_INSTALLED_COMMIT_FILE}"
+                    printf '%s\n' "${TEST_ROLLBACK_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
+                    ;;
+                noop)
+                    echo "Nothing to do."
+                    ;;
+                fail)
+                    exit 1
+                    ;;
+                *)
+                    exit 2
+                    ;;
+            esac
+        fi
+        ;;
+    install)
+        echo "install $*" >>"${TEST_COMMAND_LOG}"
+        case "${TEST_BUNDLE_INSTALL:-restore}" in
+            restore)
+                printf '%s\n' "${TEST_ROLLBACK_COMMIT}" >"${TEST_INSTALLED_COMMIT_FILE}"
+                printf '%s\n' "${TEST_ROLLBACK_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
+                ;;
+            noop)
+                ;;
+            fail)
+                exit 1
+                ;;
+            *)
+                exit 2
+                ;;
+        esac
         ;;
     *)
         echo "unexpected flatpak command: $*" >&2
@@ -71,12 +106,16 @@ export XDG_STATE_HOME="${TEMP_ROOT}/state"
 export XDG_CACHE_HOME="${TEMP_ROOT}/cache"
 export XDG_DATA_HOME="${TEMP_ROOT}/data"
 export TEST_COMMAND_LOG="${TEMP_ROOT}/commands.log"
+export TEST_INSTALLED_COMMIT_FILE="${TEMP_ROOT}/installed-commit"
+export TEST_INSTALLED_SOURCE_FILE="${TEMP_ROOT}/installed-source"
 export TEST_INSTALLED_COMMIT="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 export TEST_AVAILABLE_COMMIT="${TEST_INSTALLED_COMMIT}"
 export TEST_INSTALLED_SOURCE="1111111111111111111111111111111111111111"
 export TEST_AVAILABLE_SOURCE="${TEST_INSTALLED_SOURCE}"
 export TEST_AC_POWER=yes
 export TEST_PROCESS_STATE=idle
+printf '%s\n' "${TEST_INSTALLED_COMMIT}" >"${TEST_INSTALLED_COMMIT_FILE}"
+printf '%s\n' "${TEST_INSTALLED_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
 
 TEST_PROCESS_STATE=live bash -c \
     'export TEST_LIVE_PID=$$; source "$1"; is_mixxx_running' bash \
@@ -111,5 +150,55 @@ export TEST_LIVE_PID=$$
 jq -e '.result == "deferred-running" and .pending_commit != ""' \
     "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json" >/dev/null
 [[ ! -e "${TEST_COMMAND_LOG}" ]]
+
+source "${SCRIPT_DIR}/deck_flatpak_auto_update.sh"
+export TEST_ROLLBACK_COMMIT="${TEST_INSTALLED_COMMIT}"
+export TEST_ROLLBACK_SOURCE="${TEST_INSTALLED_SOURCE}"
+rollback_dir="${TEMP_ROOT}/rollback/${TEST_ROLLBACK_SOURCE}"
+mkdir -p "${rollback_dir}"
+printf 'verified rollback bundle\n' >"${rollback_dir}/Mixxx.flatpak"
+sha256sum "${rollback_dir}/Mixxx.flatpak" | awk '{print $1}' > \
+    "${rollback_dir}/Mixxx.flatpak.sha256"
+
+printf '%s\n' "${TEST_AVAILABLE_COMMIT}" >"${TEST_INSTALLED_COMMIT_FILE}"
+printf '%s\n' "${TEST_AVAILABLE_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
+export TEST_ROLLBACK_UPDATE=noop
+export TEST_BUNDLE_INSTALL=restore
+rollback_commit "${TEST_ROLLBACK_COMMIT}" "${TEST_ROLLBACK_SOURCE}" "${rollback_dir}"
+[[ "$(<"${TEST_INSTALLED_COMMIT_FILE}")" == "${TEST_ROLLBACK_COMMIT}" ]]
+[[ "$(<"${TEST_INSTALLED_SOURCE_FILE}")" == "${TEST_ROLLBACK_SOURCE}" ]]
+grep -q '^install ' "${TEST_COMMAND_LOG}"
+
+printf '%s\n' "${TEST_AVAILABLE_COMMIT}" >"${TEST_INSTALLED_COMMIT_FILE}"
+printf '%s\n' "${TEST_AVAILABLE_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
+export TEST_BUNDLE_INSTALL=noop
+if rollback_commit "${TEST_ROLLBACK_COMMIT}" "${TEST_ROLLBACK_SOURCE}" "${rollback_dir}"; then
+    echo "rollback unexpectedly succeeded without restoring the old build" >&2
+    exit 1
+fi
+
+jq -n \
+    --arg installed "${TEST_AVAILABLE_COMMIT}" \
+    --arg available "${TEST_AVAILABLE_COMMIT}" \
+    '{schema_version: 1, result: "rollback-failed",
+      installed_commit: $installed, available_commit: $available}' > \
+    "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json"
+export TEST_AVAILABLE_COMMIT
+export TEST_AVAILABLE_SOURCE
+if "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" auto-update; then
+    echo "rollback-failed state was incorrectly overwritten as up to date" >&2
+    exit 1
+fi
+jq -e '.result == "rollback-failed"' \
+    "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json" >/dev/null
+
+jq -n \
+    --arg installed "${TEST_ROLLBACK_COMMIT}" \
+    '{schema_version: 1, result: "rollback-failed",
+      installed_commit: $installed, available_commit: $installed}' > \
+    "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json"
+"${SCRIPT_DIR}/deck_flatpak_auto_update.sh" auto-update
+jq -e '.result == "up-to-date"' \
+    "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json" >/dev/null
 
 echo "Deck automatic-update state tests passed."

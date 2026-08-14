@@ -232,6 +232,12 @@ systemctl --user list-timers mixxx-deck-update.timer
 journalctl --user -u mixxx-deck-update.service
 ```
 
+The deck-side headless version check allows 90 seconds for slow cold starts.
+If deployment or validation fails, the updater verifies the restored commit and
+source SHA. A no-op commit rollback falls back to the checksum-verified cached
+bundle. If neither path restores the prior build, status remains
+`rollback-failed`; later checks must not relabel that installed build as current.
+
 ## Acceptance Checklist
 
 - Confirm the authoritative Forgejo Actions run finished **Success** for the

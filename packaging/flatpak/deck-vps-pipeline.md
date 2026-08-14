@@ -649,8 +649,12 @@ attempts the nonblocking exclusive deployment lock and checks again. A launch
 during download therefore leaves a verified pending update without changing
 the installed deployment. Activation exports the current build for rollback,
 deploys from the local Flatpak object cache, verifies the installed commit and
-source SHA, and runs `mixxx --version` offscreen with an isolated temporary
-home. Failure restores the previous commit. It never stops or restarts Mixxx.
+source SHA, and gives `mixxx --version` up to 90 seconds offscreen with an
+isolated temporary home. A failure first requests the previous commit from the
+local Flatpak repository, verifies the actual installed commit and source, then
+falls back to the checksum-verified cached bundle if the commit request was a
+no-op. An unverified rollback is recorded as `rollback-failed` and cannot be
+overwritten by a later `up-to-date` check. It never stops or restarts Mixxx.
 
 `loginctl enable-linger <deck-user>` is required once so the user timer and its
 service run without a graphical login. Status is written atomically under
