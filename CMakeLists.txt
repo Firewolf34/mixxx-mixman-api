@@ -2954,6 +2954,7 @@ if(BUILD_TESTING)
     src/test/rangelist_test.cpp
     src/test/readaheadmanager_test.cpp
     src/test/replaygaintest.cpp
+    src/test/restlibrarybrowserfeature_test.cpp
     src/test/restlibrarycachemanager_test.cpp
     src/test/restlibraryclient_test.cpp
     src/test/restlibrarymutationsequencer_test.cpp

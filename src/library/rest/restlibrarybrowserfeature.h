@@ -12,6 +12,9 @@
 #include "library/treeitemmodel.h"
 #include "util/parented_ptr.h"
 
+class RestLibraryBrowserFeatureTest;
+class TrackCollectionManager;
+
 namespace mixxx::library::rest {
 
 class DlgRestLibraryBrowser;
@@ -58,6 +61,14 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
             PlaylistDAO::AutoDJSendLoc location);
 
   private:
+    friend class ::RestLibraryBrowserFeatureTest;
+
+    RestLibraryBrowserFeature(
+            Library* pLibrary,
+            UserSettingsPointer pConfig,
+            RestLibraryBackend* pBackend,
+            TrackCollectionManager* pTrackCollectionManager);
+
     struct PlayerLoadIntent {
         QString remoteId;
         QString group;
@@ -103,6 +114,7 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     parented_ptr<QAction> m_pRefreshAction;
     DlgRestLibraryBrowser* m_pView = nullptr;
     RestLibraryBackend* const m_pBackend;
+    TrackCollectionManager* const m_pTrackCollectionManager;
     RestLibraryClient m_client;
     RestLibrarySettings m_refreshSettings;
     QList<RestLibraryTrack> m_stagingTracks;

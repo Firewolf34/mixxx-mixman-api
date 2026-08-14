@@ -28,14 +28,27 @@ RestLibraryBrowserFeature::RestLibraryBrowserFeature(
         Library* pLibrary,
         UserSettingsPointer pConfig,
         RestLibraryBackend* pBackend)
+        : RestLibraryBrowserFeature(
+                  pLibrary,
+                  std::move(pConfig),
+                  pBackend,
+                  pLibrary->trackCollectionManager()) {
+}
+
+RestLibraryBrowserFeature::RestLibraryBrowserFeature(
+        Library* pLibrary,
+        UserSettingsPointer pConfig,
+        RestLibraryBackend* pBackend,
+        TrackCollectionManager* pTrackCollectionManager)
         : LibraryFeature(pLibrary, std::move(pConfig), QStringLiteral("computer")),
           m_pSidebarModel(make_parented<TreeItemModel>(this)),
           m_pTableModel(make_parented<RestLibraryTableModel>(
                   this,
-                  pLibrary->trackCollectionManager(),
+                  pTrackCollectionManager,
                   RestLibraryTableModel::Mode::Catalog)),
           m_pRefreshAction(make_parented<QAction>(tr("Refresh"), this)),
           m_pBackend(pBackend),
+          m_pTrackCollectionManager(pTrackCollectionManager),
           m_client(pBackend->networkAccessManager(), this),
           m_settingsIdentity(
                   settingsIdentity(RestLibrarySettings::fromConfig(m_pConfig))) {
@@ -363,7 +376,9 @@ void RestLibraryBrowserFeature::slotUnresolvedTracksAddToAutoDJ(
     }
     if (!tracksToCache.isEmpty()) {
         m_pBackend->cacheManager()->cacheTracks(
-                tracksToCache, settings);
+                tracksToCache,
+                settings,
+                RestLibraryCacheRequestOwner::BrowserAutoDJ);
         setStatusText(tr("Downloading %1 tracks for AutoDJ…")
                               .arg(tracksToCache.size()));
     }
@@ -382,7 +397,10 @@ void RestLibraryBrowserFeature::requestTrackCache(
         finishPendingLoads(remoteId);
         return;
     }
-    m_pBackend->cacheManager()->cacheTracks({track}, settings);
+    m_pBackend->cacheManager()->cacheTracks(
+            {track},
+            settings,
+            RestLibraryCacheRequestOwner::BrowserLoad);
     setStatusText(tr("Downloading %1 — %2…").arg(track.artist, track.title));
 }
 
@@ -433,9 +451,8 @@ void RestLibraryBrowserFeature::finishAutoDJIfReady() {
     const int failedCount =
             m_autoDJIntent.remoteIds.size() - trackIds.size();
     if (!trackIds.isEmpty()) {
-        m_pLibrary->trackCollectionManager()->unhideTracks(trackIds);
-        m_pLibrary->trackCollectionManager()
-                ->internalCollection()
+        m_pTrackCollectionManager->unhideTracks(trackIds);
+        m_pTrackCollectionManager->internalCollection()
                 ->getPlaylistDAO()
                 .addTracksToAutoDJQueue(trackIds, m_autoDJIntent.location);
     }
@@ -523,9 +540,13 @@ void RestLibraryBrowserFeature::updateLoadCapabilities(
 
 QString RestLibraryBrowserFeature::settingsIdentity(
         const RestLibrarySettings& settings) const {
-    const QUrl url = settings.baseUrl.adjusted(
-            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment |
-            QUrl::StripTrailingSlash);
+    QUrl url = settings.baseUrl.adjusted(
+            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment);
+    QString path = url.path();
+    while (path.endsWith(QLatin1Char('/'))) {
+        path.chop(1);
+    }
+    url.setPath(path);
     return url.toString(QUrl::FullyEncoded) + QLatin1Char('|') +
             settings.trackListPath + QLatin1Char('|') +
             (settings.useMixManDefaults ? QStringLiteral("mixman") : QStringLiteral("custom"));

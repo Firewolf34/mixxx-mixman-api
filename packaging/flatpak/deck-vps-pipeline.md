@@ -737,7 +737,9 @@ REST recommendation behavior, MixMan steering, and diagnostics.
 Exercise the separate REST Library catalog with multiple metadata pages and
 verify that browsing issues no audio requests. A deck or AutoDJ action must
 download only the requested tracks, and a failed catalog refresh must retain
-the prior complete in-memory snapshot.
+the prior complete in-memory snapshot. Explicit deck loads outrank ordered
+AutoDJ batches and recommendation prefetch; replacing recommendations may
+cancel only prefetch-only work.
 MixMan acceptance uses session contract v3: verify server-issued instance
 resume, generation-fenced playback publication, the limited Mixxx
 recommendation projection, and both configured-bearer and explicitly

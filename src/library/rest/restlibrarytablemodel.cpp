@@ -116,8 +116,12 @@ void RestLibraryTableModel::setTracks(QList<RestLibraryTrack> tracks) {
             pTrack->setComment(remoteTrack.comment);
             pTrack->setTrackNumber(remoteTrack.trackNumber);
             pTrack->setKeyText(remoteTrack.keyText);
+            pTrack->setAudioProperties(
+                    mixxx::audio::ChannelCount::stereo(),
+                    mixxx::audio::SampleRate(44100),
+                    mixxx::audio::Bitrate(),
+                    mixxx::Duration::fromSeconds(remoteTrack.durationSeconds));
             pTrack->trySetBpm(remoteTrack.bpm);
-            pTrack->setDuration(remoteTrack.durationSeconds);
             pTrack->setRating(remoteTrack.rating);
             pTrack->resetPlayCounter(remoteTrack.playCount);
             pTrack->setYear(remoteTrack.releaseDate.isValid()
@@ -343,7 +347,9 @@ TrackPointer RestLibraryTableModel::materializeTrack(const QString& remoteId) co
         pTrack->setComment(remoteTrack.comment);
         pTrack->setTrackNumber(remoteTrack.trackNumber);
         pTrack->setKeyText(remoteTrack.keyText);
-        pTrack->trySetBpm(remoteTrack.bpm);
+        if (pTrack->getSampleRate().isValid()) {
+            pTrack->trySetBpm(remoteTrack.bpm);
+        }
         pTrack->setDuration(remoteTrack.durationSeconds);
         pTrack->setRating(remoteTrack.rating);
         pTrack->setYear(remoteTrack.releaseDate.isValid()

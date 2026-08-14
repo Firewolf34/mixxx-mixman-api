@@ -250,7 +250,9 @@ journalctl --user -u mixxx-deck-update.service
   typed sorting work without audio requests, manual refresh retains the prior
   catalog on failure, and audio downloads begin only after a deck, preview,
   sampler, or AutoDJ action. Verify AutoDJ selection order and failed-download
-  reporting.
+  reporting. While recommendation prefetch is queued, request a different deck
+  track and confirm that it starts next without cancelling any shared browser
+  or AutoDJ download.
 - For MixMan v3, verify both a configured bearer-token deployment and an
   explicitly auth-disabled trusted-LAN deployment. Confirm the same stable room
   is resumed after restarting Mixxx, recommendation controls use the

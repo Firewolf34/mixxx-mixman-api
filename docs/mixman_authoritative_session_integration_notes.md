@@ -84,9 +84,12 @@ audio or artwork.
 Deck, preview, sampler, and AutoDJ actions download only the selected tracks to
 the configured cache. Cache identity includes the normalized MixMan server URL
 and remote track ID; ambiguous legacy ID-only cache entries are ignored and
-left for normal pruning. Catalog reads remain outside session lease authority,
-while a materialized track's playback is observed by the existing v3 session
-integration.
+left for normal pruning. Explicit deck loads take priority over ordered AutoDJ
+batches, which take priority over recommendation prefetch. Replacing a
+recommendation set cancels only prefetch ownership; a shared browser request
+keeps the same deduplicated download alive. Catalog reads remain outside
+session lease authority, while a materialized track's playback is observed by
+the existing v3 session integration.
 
 ## Connection test
 

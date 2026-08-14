@@ -1066,6 +1066,8 @@ QStringList RestLibraryFeature::recentRemoteIdsForRequest(const QString& remoteI
 
 void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& tracks) {
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    m_pCacheManager->cancelRequests(
+            RestLibraryCacheRequestOwner::RecommendationPrefetch);
     m_pTableModel->setTracks(tracks);
     m_cacheStates.clear();
     m_recommendationCount = tracks.size();
@@ -1096,7 +1098,10 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
     for (int i = 0; i < cacheLimit; ++i) {
         tracksToCache.append(tracks.at(i));
     }
-    m_pCacheManager->cacheTracks(tracksToCache, settings);
+    m_pCacheManager->cacheTracks(
+            tracksToCache,
+            settings,
+            RestLibraryCacheRequestOwner::RecommendationPrefetch);
 }
 
 void RestLibraryFeature::ensureMixManSession(const RestLibrarySettings& settings) {

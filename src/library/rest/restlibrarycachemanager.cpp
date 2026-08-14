@@ -95,6 +95,27 @@ QString errorTextFromResponse(const QByteArray& body) {
     return {};
 }
 
+int requestPriority(RestLibraryCacheRequestOwner owner) {
+    switch (owner) {
+    case RestLibraryCacheRequestOwner::BrowserLoad:
+        return 2;
+    case RestLibraryCacheRequestOwner::BrowserAutoDJ:
+        return 1;
+    case RestLibraryCacheRequestOwner::RecommendationPrefetch:
+        return 0;
+    }
+    DEBUG_ASSERT(false);
+    return 0;
+}
+
+int requestPriority(const QSet<RestLibraryCacheRequestOwner>& owners) {
+    int priority = 0;
+    for (const auto owner : owners) {
+        priority = std::max(priority, requestPriority(owner));
+    }
+    return priority;
+}
+
 } // namespace
 
 RestLibraryCacheManager::RestLibraryCacheManager(
@@ -146,7 +167,8 @@ void RestLibraryCacheManager::reconcileTracks(
 
 void RestLibraryCacheManager::cacheTracks(
         const QList<RestLibraryTrack>& tracks,
-        const RestLibrarySettings& settings) {
+        const RestLibrarySettings& settings,
+        RestLibraryCacheRequestOwner owner) {
     if (!settings.hasAudioDownloadConfigured() || !m_pNetworkAccessManager) {
         return;
     }
@@ -173,20 +195,81 @@ void RestLibraryCacheManager::cacheTracks(
     for (const RestLibraryTrack& track : tracks) {
         const QString requestKey = cacheFileStem(settings, track.remoteId);
         if (track.remoteId.isEmpty() ||
-                m_knownPendingRequestKeys.contains(requestKey) ||
                 !existingCachedFilePath(settings, track.remoteId).isEmpty()) {
             continue;
         }
-        m_downloadQueue.enqueue(PendingDownload{track, settings, requestKey});
-        m_knownPendingRequestKeys.insert(requestKey, true);
+        if (ActiveDownload* pActive = activeDownloadForKey(requestKey)) {
+            pActive->owners.insert(owner);
+            continue;
+        }
+        bool alreadyPending = false;
+        for (qsizetype i = 0; i < m_downloadQueue.size(); ++i) {
+            if (m_downloadQueue.at(i).requestKey != requestKey) {
+                continue;
+            }
+            alreadyPending = true;
+            if (!m_downloadQueue.at(i).owners.contains(owner)) {
+                PendingDownload promoted = m_downloadQueue.takeAt(i);
+                promoted.owners.insert(owner);
+                enqueuePendingDownload(std::move(promoted));
+            }
+            break;
+        }
+        if (alreadyPending) {
+            continue;
+        }
+        enqueuePendingDownload(PendingDownload{
+                track,
+                settings,
+                requestKey,
+                QSet<RestLibraryCacheRequestOwner>{owner}});
         emitState(settings, track.remoteId, RestLibraryCacheState::Missing);
+    }
+    startNextDownloads();
+}
+
+void RestLibraryCacheManager::cancelRequests(
+        RestLibraryCacheRequestOwner owner) {
+    QList<std::pair<RestLibrarySettings, QString>> cancelledDownloads;
+    QList<PendingDownload> retainedDownloads;
+    retainedDownloads.reserve(m_downloadQueue.size());
+    for (PendingDownload& pending : m_downloadQueue) {
+        pending.owners.remove(owner);
+        if (!pending.owners.isEmpty()) {
+            retainedDownloads.append(std::move(pending));
+        }
+    }
+    m_downloadQueue.clear();
+    for (PendingDownload& pending : retainedDownloads) {
+        enqueuePendingDownload(std::move(pending));
+    }
+
+    for (auto it = m_activeDownloads.begin(); it != m_activeDownloads.end();) {
+        it->owners.remove(owner);
+        if (!it->owners.isEmpty()) {
+            ++it;
+            continue;
+        }
+        const RestLibrarySettings settings = it->settings;
+        const QString remoteId = it->track.remoteId;
+        if (it->reply) {
+            disconnect(it->reply, nullptr, this, nullptr);
+            it->reply->abort();
+            it->reply->deleteLater();
+        }
+        cleanupActiveDownload(&*it);
+        QFile::remove(it->tempFilePath);
+        it = m_activeDownloads.erase(it);
+        cancelledDownloads.append({settings, remoteId});
+    }
+    for (const auto& [settings, remoteId] : cancelledDownloads) {
+        emitState(settings, remoteId, RestLibraryCacheState::Missing);
     }
     startNextDownloads();
 }
 
 void RestLibraryCacheManager::abortAll() {
     m_downloadQueue.clear();
-    m_knownPendingRequestKeys.clear();
     for (ActiveDownload& download : m_activeDownloads) {
         if (download.reply) {
             disconnect(download.reply, nullptr, this, nullptr);
@@ -201,9 +284,13 @@ void RestLibraryCacheManager::abortAll() {
 
 QString RestLibraryCacheManager::serverIdentity(
         const RestLibrarySettings& settings) {
-    const QUrl scopedUrl = settings.baseUrl.adjusted(
-            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment |
-            QUrl::StripTrailingSlash);
+    QUrl scopedUrl = settings.baseUrl.adjusted(
+            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment);
+    QString path = scopedUrl.path();
+    while (path.endsWith(QLatin1Char('/'))) {
+        path.chop(1);
+    }
+    scopedUrl.setPath(path);
     return scopedUrl.toString(QUrl::FullyEncoded);
 }
 
@@ -315,9 +402,32 @@ QNetworkRequest RestLibraryCacheManager::newDownloadRequest(
 void RestLibraryCacheManager::startNextDownloads() {
     while (!m_downloadQueue.isEmpty() &&
             m_activeDownloads.size() <
-                    m_downloadQueue.head().settings.maxConcurrentDownloads) {
-        startDownload(m_downloadQueue.dequeue());
+                    m_downloadQueue.constFirst().settings.maxConcurrentDownloads) {
+        startDownload(m_downloadQueue.takeFirst());
     }
+}
+
+void RestLibraryCacheManager::enqueuePendingDownload(
+        PendingDownload pendingDownload) {
+    const int priority = requestPriority(pendingDownload.owners);
+    auto insertBefore = m_downloadQueue.end();
+    for (auto it = m_downloadQueue.begin(); it != m_downloadQueue.end(); ++it) {
+        if (requestPriority(it->owners) < priority) {
+            insertBefore = it;
+            break;
+        }
+    }
+    m_downloadQueue.insert(insertBefore, std::move(pendingDownload));
+}
+
+RestLibraryCacheManager::ActiveDownload*
+RestLibraryCacheManager::activeDownloadForKey(const QString& requestKey) {
+    for (ActiveDownload& active : m_activeDownloads) {
+        if (active.requestKey == requestKey) {
+            return &active;
+        }
+    }
+    return nullptr;
 }
 
 void RestLibraryCacheManager::startDownload(PendingDownload pendingDownload) {
@@ -330,7 +440,6 @@ void RestLibraryCacheManager::startDownload(PendingDownload pendingDownload) {
 
     QFile* pFile = m_cacheFileFactory(tempFilePath, this);
     if (!pFile) {
-        m_knownPendingRequestKeys.remove(pendingDownload.requestKey);
         emitState(
                 settings,
                 track.remoteId,
@@ -342,7 +451,6 @@ void RestLibraryCacheManager::startDownload(PendingDownload pendingDownload) {
     }
     if (!pFile->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         pFile->deleteLater();
-        m_knownPendingRequestKeys.remove(pendingDownload.requestKey);
         emitState(
                 settings,
                 track.remoteId,
@@ -360,6 +468,7 @@ void RestLibraryCacheManager::startDownload(PendingDownload pendingDownload) {
             track,
             settings,
             pendingDownload.requestKey,
+            pendingDownload.owners,
             QPointer<QNetworkReply>(pReply),
             pFile,
             tempFilePath,
@@ -491,7 +600,6 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
         QFile::remove(pDownload->tempFilePath);
         cleanupActiveDownload(pDownload);
         removeActiveDownload(requestKey);
-        m_knownPendingRequestKeys.remove(requestKey);
         emitState(downloadSettings,
                 remoteId,
                 RestLibraryCacheState::Failed,
@@ -511,7 +619,6 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
         QFile::remove(pDownload->tempFilePath);
         cleanupActiveDownload(pDownload);
         removeActiveDownload(requestKey);
-        m_knownPendingRequestKeys.remove(requestKey);
         emitState(downloadSettings,
                 remoteId,
                 RestLibraryCacheState::Failed,
@@ -526,7 +633,6 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
         QFile::remove(pDownload->tempFilePath);
         cleanupActiveDownload(pDownload);
         removeActiveDownload(requestKey);
-        m_knownPendingRequestKeys.remove(requestKey);
         emitState(downloadSettings,
                 remoteId,
                 RestLibraryCacheState::Failed,
@@ -541,7 +647,6 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
         QFile::remove(finalFilePath);
         cleanupActiveDownload(pDownload);
         removeActiveDownload(requestKey);
-        m_knownPendingRequestKeys.remove(requestKey);
         emitState(downloadSettings,
                 remoteId,
                 RestLibraryCacheState::Failed,
@@ -553,7 +658,6 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
 
     cleanupActiveDownload(pDownload);
     removeActiveDownload(requestKey);
-    m_knownPendingRequestKeys.remove(requestKey);
     pruneCacheSize(downloadSettings, finalFilePath);
     emitState(downloadSettings,
             remoteId,

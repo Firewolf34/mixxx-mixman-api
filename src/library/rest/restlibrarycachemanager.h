@@ -8,7 +8,7 @@
 #include <QNetworkReply>
 #include <QObject>
 #include <QPointer>
-#include <QQueue>
+#include <QSet>
 #include <QString>
 
 #include "library/rest/restlibrarymixman.h"
@@ -21,6 +21,12 @@ class QNetworkAccessManager;
 class QNetworkRequest;
 
 namespace mixxx::library::rest {
+
+enum class RestLibraryCacheRequestOwner {
+    RecommendationPrefetch,
+    BrowserAutoDJ,
+    BrowserLoad,
+};
 
 struct RestLibraryCacheResult {
     QString remoteId;
@@ -50,7 +56,10 @@ class RestLibraryCacheManager final : public QObject {
             const RestLibrarySettings& settings);
     void cacheTracks(
             const QList<RestLibraryTrack>& tracks,
-            const RestLibrarySettings& settings);
+            const RestLibrarySettings& settings,
+            RestLibraryCacheRequestOwner owner =
+                    RestLibraryCacheRequestOwner::RecommendationPrefetch);
+    void cancelRequests(RestLibraryCacheRequestOwner owner);
     void abortAll();
 
     static QString serverIdentity(const RestLibrarySettings& settings);
@@ -79,12 +88,14 @@ class RestLibraryCacheManager final : public QObject {
         RestLibraryTrack track;
         RestLibrarySettings settings;
         QString requestKey;
+        QSet<RestLibraryCacheRequestOwner> owners;
     };
 
     struct ActiveDownload {
         RestLibraryTrack track;
         RestLibrarySettings settings;
         QString requestKey;
+        QSet<RestLibraryCacheRequestOwner> owners;
         QPointer<QNetworkReply> reply;
         QFile* pFile = nullptr;
         QString tempFilePath;
@@ -100,6 +111,8 @@ class RestLibraryCacheManager final : public QObject {
             const RestLibrarySettings& settings) const;
     void startNextDownloads();
     void startDownload(PendingDownload pendingDownload);
+    void enqueuePendingDownload(PendingDownload pendingDownload);
+    ActiveDownload* activeDownloadForKey(const QString& requestKey);
     void consumeReplyBytes(QNetworkReply* pReply);
     void finishDownload(QNetworkReply* pReply);
     ActiveDownload* activeDownloadForReply(QNetworkReply* pReply);
@@ -146,9 +159,8 @@ class RestLibraryCacheManager final : public QObject {
 
     QPointer<QNetworkAccessManager> m_pNetworkAccessManager;
     CacheFileFactory m_cacheFileFactory;
-    QQueue<PendingDownload> m_downloadQueue;
+    QList<PendingDownload> m_downloadQueue;
     QList<ActiveDownload> m_activeDownloads;
-    QHash<QString, bool> m_knownPendingRequestKeys;
     QHash<QString, QString> m_remoteIdByCacheStem;
     QHash<QString, QString> m_serverIdentityByCacheStem;
 };

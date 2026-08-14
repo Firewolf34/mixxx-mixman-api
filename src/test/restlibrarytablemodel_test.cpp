@@ -71,10 +71,12 @@ TEST_F(RestLibraryTableModelTest, ReadyRowsExposeLocalTrackLocation) {
     file.close();
 
     RestLibraryTableModel model(nullptr, trackCollectionManager());
-    model.setTracks({newTrack(
+    RestLibraryTrack remoteTrack = newTrack(
             QStringLiteral("1"),
             QStringLiteral("Beta"),
-            QStringLiteral("Second"))});
+            QStringLiteral("Second"));
+    remoteTrack.bpm = 128.0;
+    model.setTracks({remoteTrack});
 
     model.updateTrackCacheState({
             QStringLiteral("1"),
@@ -148,10 +150,12 @@ TEST_F(RestLibraryTableModelTest, CatalogUsesMixxxSearchOperatorsAndNumericSort)
     RestLibraryTrack slow = newTrack(
             QStringLiteral("1"), QStringLiteral("Beta"), QStringLiteral("Second"));
     slow.bpm = 90.0;
+    slow.durationSeconds = 180.0;
     slow.genre = QStringLiteral("House");
     RestLibraryTrack fast = newTrack(
             QStringLiteral("2"), QStringLiteral("Alpha"), QStringLiteral("First"));
     fast.bpm = 132.0;
+    fast.durationSeconds = 180.0;
     fast.genre = QStringLiteral("Techno");
     model.setTracks({slow, fast});
 
