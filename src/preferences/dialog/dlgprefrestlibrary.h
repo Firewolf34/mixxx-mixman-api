@@ -33,6 +33,7 @@ class DlgPrefRestLibrary : public DlgPreferencePage {
     void slotBrowseCacheDirectory();
     void slotUpdateCacheControls(bool enabled);
     void slotUpdateMixManDefaultsControls(bool enabled);
+    void slotBaseUrlChanged(const QString& baseUrl);
     void slotUpdateValidationState();
     void slotTestConnection();
     void slotCancelConnectionTest();
@@ -65,6 +66,7 @@ class DlgPrefRestLibrary : public DlgPreferencePage {
     mixxx::library::rest::RestLibraryCredentialStore* m_pCredentialStore;
     QNetworkAccessManager m_networkAccessManager;
     mixxx::library::rest::RestLibraryClient m_connectionTestClient;
+    QString m_loadedBearerTokenKeychainAccount;
     bool m_connectionTestRunning = false;
     bool m_connectionTestHasResults = false;
     bool m_connectionTestStale = false;

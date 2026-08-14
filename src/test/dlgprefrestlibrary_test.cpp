@@ -203,6 +203,28 @@ TEST_F(DlgPrefRestLibraryTest, ResetToDefaultsRestoresDefaultValues) {
     EXPECT_TRUE(config()->getValue(restConfig::kUseMixManDefaultsKey, false));
 }
 
+TEST_F(DlgPrefRestLibraryTest, ChangingBaseUrlClearsLoadedBearerToken) {
+    const QUrl oldUrl(QStringLiteral("https://old.example.test/api"));
+    const QUrl newUrl(QStringLiteral("https://new.example.test/api"));
+    const QString oldAccount = mixxx::library::rest::bearerTokenAccountForUrl(oldUrl);
+    const QString newAccount = mixxx::library::rest::bearerTokenAccountForUrl(newUrl);
+    credentialStore.secrets.insert(oldAccount, QStringLiteral("old-server-token"));
+    config()->setValue(restConfig::kEnabledKey, true);
+    config()->setValue(restConfig::kBaseUrlKey, oldUrl.toString());
+
+    DlgPrefRestLibrary page(nullptr, config(), &credentialStore);
+    auto* pBaseUrl = requireChild<QLineEdit>(&page, "lineEditBaseUrl");
+    auto* pToken = requireChild<QLineEdit>(&page, "lineEditBearerToken");
+
+    ASSERT_EQ(pToken->text(), QStringLiteral("old-server-token"));
+    pBaseUrl->setText(newUrl.toString());
+
+    EXPECT_TRUE(pToken->text().isEmpty());
+    page.slotApply();
+    EXPECT_EQ(credentialStore.secrets.value(oldAccount), QStringLiteral("old-server-token"));
+    EXPECT_FALSE(credentialStore.secrets.contains(newAccount));
+}
+
 TEST_F(DlgPrefRestLibraryTest, CacheControlsFollowCacheEnabledCheckbox) {
     DlgPrefRestLibrary page(nullptr, config(), &credentialStore);
 

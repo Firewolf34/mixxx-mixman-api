@@ -118,7 +118,10 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(
     };
     connect(m_pUi->checkBoxEnabled, &QCheckBox::toggled, this, updateValidation);
     connect(m_pUi->checkBoxUseMixManDefaults, &QCheckBox::toggled, this, updateValidation);
-    connect(m_pUi->lineEditBaseUrl, &QLineEdit::textChanged, this, updateValidation);
+    connect(m_pUi->lineEditBaseUrl,
+            &QLineEdit::textChanged,
+            this,
+            &DlgPrefRestLibrary::slotBaseUrlChanged);
     connect(m_pUi->lineEditBearerToken, &QLineEdit::textChanged, this, updateValidation);
     connect(m_pUi->lineEditMixManSessionId, &QLineEdit::textChanged, this, updateValidation);
     connect(m_pUi->lineEditTrackListPath, &QLineEdit::textChanged, this, updateValidation);
@@ -192,6 +195,7 @@ void DlgPrefRestLibrary::slotUpdate() {
     const RestLibrarySettings settings =
             RestLibrarySettings::fromConfig(m_pConfig, m_pCredentialStore);
 
+    m_loadedBearerTokenKeychainAccount = settings.bearerTokenKeychainAccount;
     m_pUi->checkBoxEnabled->setChecked(settings.enabled);
     m_pUi->lineEditBaseUrl->setText(m_pConfig->getValueString(restConfig::kBaseUrlKey));
     m_pUi->lineEditBearerToken->setText(settings.bearerToken);
@@ -296,6 +300,19 @@ void DlgPrefRestLibrary::slotUpdateMixManDefaultsControls(bool enabled) {
     m_pUi->lineEditRecommendationPathTemplate->setEnabled(!enabled);
     m_pUi->labelAudioDownloadPathTemplate->setEnabled(!enabled);
     m_pUi->lineEditAudioDownloadPathTemplate->setEnabled(!enabled);
+}
+
+void DlgPrefRestLibrary::slotBaseUrlChanged(const QString& baseUrl) {
+    const QString account = mixxx::library::rest::bearerTokenAccountForUrl(
+            QUrl(baseUrl.trimmed()));
+    if (!m_loadedBearerTokenKeychainAccount.isEmpty() &&
+            account != m_loadedBearerTokenKeychainAccount) {
+        // Never carry a token loaded for one configured server into another
+        // credential scope. A new server requires an intentional token entry.
+        m_pUi->lineEditBearerToken->clear();
+    }
+    slotUpdateValidationState();
+    slotMarkConnectionTestStale();
 }
 
 void DlgPrefRestLibrary::slotUpdateValidationState() {

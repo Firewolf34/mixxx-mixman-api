@@ -23,6 +23,10 @@ and all REST endpoints, redirects, and authenticated requests are restricted to
 the configured base origin. Auth-disabled HTTP remains available for an
 explicitly trusted LAN deployment.
 
+Changing the configured REST base URL clears the displayed bearer token. The
+previous keychain entry stays scoped to its former server; entering a token for
+the new server is always an explicit user action.
+
 The optional Session ID preference selects a stable room. When blank, Mixxx
 generates and remembers a `mixxx-<uuid>` ID before connecting. Registration is
 attempted directly; `404` causes creation of that exact room followed by a
