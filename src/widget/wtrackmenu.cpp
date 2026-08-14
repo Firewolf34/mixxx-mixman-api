@@ -2011,6 +2011,15 @@ void WTrackMenu::loadSelectionToGroup(const QString& group,
 #endif
     TrackPointer pTrack = getFirstTrackPointer();
     if (!pTrack) {
+        if (m_pTrackModel && !m_trackIndexList.isEmpty()) {
+#ifdef __STEM__
+            emit unresolvedTrackLoadToPlayerRequested(
+                    m_trackIndexList.constFirst(), group, stemMask, play);
+#else
+            emit unresolvedTrackLoadToPlayerRequested(
+                    m_trackIndexList.constFirst(), group, play);
+#endif
+        }
         return;
     }
 
@@ -2835,7 +2844,9 @@ void WTrackMenu::slotAddToAutoDJReplace() {
 
 void WTrackMenu::addToAutoDJ(PlaylistDAO::AutoDJSendLoc loc) {
     const TrackIdList trackIds = getTrackIds();
-    if (trackIds.empty()) {
+    const bool hasUnresolvedTracks =
+            m_pTrackModel && trackIds.size() != m_trackIndexList.size();
+    if (trackIds.empty() && !hasUnresolvedTracks) {
         qWarning() << "No tracks selected for AutoDJ";
         return;
     }
@@ -2868,6 +2879,11 @@ void WTrackMenu::addToAutoDJ(PlaylistDAO::AutoDJSendLoc loc) {
         if (notAgainCB.isChecked()) {
             s_confirmForAutoDjReplace = false;
         }
+    }
+
+    if (hasUnresolvedTracks) {
+        emit unresolvedTracksAddToAutoDJRequested(m_trackIndexList, loc);
+        return;
     }
 
     // TODO(XXX): Care whether the append succeeded.

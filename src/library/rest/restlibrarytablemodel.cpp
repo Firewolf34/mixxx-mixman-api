@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include <QDir>
 #include <QUrl>
 
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
+#include "library/searchquery.h"
+#include "library/searchqueryparser.h"
 #include "moc_restlibrarytablemodel.cpp"
 #include "track/track.h"
 #include "track/trackref.h"
@@ -67,18 +70,64 @@ QStringList searchableFields(const RestLibraryTrack& track) {
 
 RestLibraryTableModel::RestLibraryTableModel(
         QObject* parent,
-        TrackCollectionManager* pTrackCollectionManager)
-        : TrackModel(
+        TrackCollectionManager* pTrackCollectionManager,
+        Mode mode)
+        : QAbstractTableModel(parent),
+          TrackModel(
                   pTrackCollectionManager->internalCollection()->database(),
                   "mixxx.db.model.restlibrary"),
-          QAbstractTableModel(parent),
-          m_pTrackCollectionManager(pTrackCollectionManager) {
+          m_pTrackCollectionManager(pTrackCollectionManager),
+          m_mode(mode) {
+    if (m_mode == Mode::Catalog) {
+        m_pSearchQueryParser = std::make_unique<SearchQueryParser>(
+                pTrackCollectionManager->internalCollection(),
+                QStringList{
+                        QStringLiteral("artist"),
+                        QStringLiteral("album_artist"),
+                        QStringLiteral("album"),
+                        QStringLiteral("title"),
+                        QStringLiteral("genre"),
+                        QStringLiteral("composer"),
+                        QStringLiteral("comment"),
+                        QStringLiteral("tracknumber"),
+                        QStringLiteral("key"),
+                        QStringLiteral("bpm"),
+                        QStringLiteral("duration"),
+                        QStringLiteral("rating"),
+                        QStringLiteral("filetype")});
+    }
     setDefaultSort(ColumnArtist, Qt::AscendingOrder);
 }
+
+RestLibraryTableModel::~RestLibraryTableModel() = default;
 
 void RestLibraryTableModel::setTracks(QList<RestLibraryTrack> tracks) {
     beginResetModel();
     m_tracks = std::move(tracks);
+    m_searchTracks.clear();
+    if (m_mode == Mode::Catalog) {
+        for (const RestLibraryTrack& remoteTrack : std::as_const(m_tracks)) {
+            TrackPointer pTrack = Track::newTemporary();
+            pTrack->setArtist(remoteTrack.artist);
+            pTrack->setTitle(remoteTrack.title);
+            pTrack->setAlbum(remoteTrack.album);
+            pTrack->updateGenre(remoteTrack.genre);
+            pTrack->setComposer(remoteTrack.composer);
+            pTrack->setComment(remoteTrack.comment);
+            pTrack->setTrackNumber(remoteTrack.trackNumber);
+            pTrack->setKeyText(remoteTrack.keyText);
+            pTrack->trySetBpm(remoteTrack.bpm);
+            pTrack->setDuration(remoteTrack.durationSeconds);
+            pTrack->setRating(remoteTrack.rating);
+            pTrack->resetPlayCounter(remoteTrack.playCount);
+            pTrack->setYear(remoteTrack.releaseDate.isValid()
+                            ? remoteTrack.releaseDate.toString(Qt::ISODate)
+                            : QString());
+            pTrack->setType(remoteTrack.audioFileExtension);
+            m_searchTracks.insert(remoteTrack.remoteId, std::move(pTrack));
+        }
+        m_pSearchQuery = m_pSearchQueryParser->parseQuery(m_currentSearch, {});
+    }
     rebuildVisibleRows();
     endResetModel();
 }
@@ -201,6 +250,22 @@ QVariant RestLibraryTableModel::headerData(
             return tr("Duration");
         case ColumnRating:
             return tr("Rating");
+        case ColumnComposer:
+            return tr("Composer");
+        case ColumnComment:
+            return tr("Comment");
+        case ColumnTrackNumber:
+            return tr("Track #");
+        case ColumnYear:
+            return tr("Year");
+        case ColumnType:
+            return tr("Type");
+        case ColumnPlayCount:
+            return tr("Played");
+        case ColumnFavour:
+            return tr("Favour");
+        case ColumnEnergy:
+            return tr("Energy");
         case ColumnSource:
             return tr("Source");
         case ColumnRemoteId:
@@ -218,6 +283,9 @@ QVariant RestLibraryTableModel::headerData(
         case ColumnKey:
         case ColumnDuration:
         case ColumnRating:
+        case ColumnPlayCount:
+        case ColumnFavour:
+        case ColumnEnergy:
             return 70;
         case ColumnRemoteId:
             return 110;
@@ -248,11 +316,43 @@ void RestLibraryTableModel::sort(int column, Qt::SortOrder order) {
 }
 
 TrackPointer RestLibraryTableModel::getTrack(const QModelIndex& index) const {
-    const QString location = getTrackLocation(index);
-    if (location.isEmpty()) {
+    const RestLibraryTrack* pRemoteTrack = trackForIndex(index);
+    if (!pRemoteTrack) {
         return {};
     }
-    return m_pTrackCollectionManager->getOrAddTrack(TrackRef::fromFilePath(location));
+    return materializeTrack(pRemoteTrack->remoteId);
+}
+
+TrackPointer RestLibraryTableModel::materializeTrack(const QString& remoteId) const {
+    const RestLibraryTrack remoteTrack = trackForRemoteId(remoteId);
+    if (remoteTrack.remoteId.isEmpty() ||
+            remoteTrack.cacheState != RestLibraryCacheState::Ready ||
+            remoteTrack.cachedFilePath.isEmpty()) {
+        return {};
+    }
+    const QString location = QDir::fromNativeSeparators(remoteTrack.cachedFilePath);
+    bool alreadyInLibrary = false;
+    TrackPointer pTrack = m_pTrackCollectionManager->getOrAddTrack(
+            TrackRef::fromFilePath(location), &alreadyInLibrary);
+    if (pTrack && !alreadyInLibrary) {
+        pTrack->setArtist(remoteTrack.artist);
+        pTrack->setTitle(remoteTrack.title);
+        pTrack->setAlbum(remoteTrack.album);
+        pTrack->updateGenre(remoteTrack.genre);
+        pTrack->setComposer(remoteTrack.composer);
+        pTrack->setComment(remoteTrack.comment);
+        pTrack->setTrackNumber(remoteTrack.trackNumber);
+        pTrack->setKeyText(remoteTrack.keyText);
+        pTrack->trySetBpm(remoteTrack.bpm);
+        pTrack->setDuration(remoteTrack.durationSeconds);
+        pTrack->setRating(remoteTrack.rating);
+        pTrack->setYear(remoteTrack.releaseDate.isValid()
+                        ? remoteTrack.releaseDate.toString(Qt::ISODate)
+                        : QString());
+        pTrack->setType(remoteTrack.audioFileExtension);
+        m_pTrackCollectionManager->saveTrack(pTrack);
+    }
+    return pTrack;
 }
 
 TrackPointer RestLibraryTableModel::getTrackByRef(const TrackRef& trackRef) const {
@@ -305,6 +405,9 @@ const QVector<int> RestLibraryTableModel::getTrackRows(TrackId trackId) const {
 void RestLibraryTableModel::search(const QString& searchText) {
     beginResetModel();
     m_currentSearch = searchText;
+    if (m_pSearchQueryParser) {
+        m_pSearchQuery = m_pSearchQueryParser->parseQuery(searchText, {});
+    }
     rebuildVisibleRows();
     endResetModel();
 }
@@ -314,11 +417,17 @@ const QString RestLibraryTableModel::currentSearch() const {
 }
 
 bool RestLibraryTableModel::isColumnInternal(int column) {
-    return column == ColumnRemoteId;
+    return column == ColumnRemoteId ||
+            (m_mode == Mode::Catalog && column == ColumnQuality);
 }
 
 bool RestLibraryTableModel::isColumnHiddenByDefault(int column) {
-    return column == ColumnRemoteId || column == ColumnSource;
+    return column == ColumnRemoteId || column == ColumnSource ||
+            column == ColumnComposer || column == ColumnComment ||
+            column == ColumnTrackNumber || column == ColumnYear ||
+            column == ColumnType || column == ColumnPlayCount ||
+            column == ColumnFavour || column == ColumnEnergy ||
+            (m_mode == Mode::Catalog && column == ColumnQuality);
 }
 
 TrackModel::Capabilities RestLibraryTableModel::getCapabilities() const {
@@ -350,6 +459,18 @@ TrackModel::SortColumnId RestLibraryTableModel::sortColumnIdFromColumnIndex(int 
         return SortColumnId::Duration;
     case ColumnRating:
         return SortColumnId::Rating;
+    case ColumnComposer:
+        return SortColumnId::Composer;
+    case ColumnComment:
+        return SortColumnId::Comment;
+    case ColumnTrackNumber:
+        return SortColumnId::TrackNumber;
+    case ColumnYear:
+        return SortColumnId::Year;
+    case ColumnType:
+        return SortColumnId::FileType;
+    case ColumnPlayCount:
+        return SortColumnId::TimesPlayed;
     default:
         return SortColumnId::Invalid;
     }
@@ -373,6 +494,18 @@ int RestLibraryTableModel::columnIndexFromSortColumnId(SortColumnId sortColumn) 
         return ColumnDuration;
     case SortColumnId::Rating:
         return ColumnRating;
+    case SortColumnId::Composer:
+        return ColumnComposer;
+    case SortColumnId::Comment:
+        return ColumnComment;
+    case SortColumnId::TrackNumber:
+        return ColumnTrackNumber;
+    case SortColumnId::Year:
+        return ColumnYear;
+    case SortColumnId::FileType:
+        return ColumnType;
+    case SortColumnId::TimesPlayed:
+        return ColumnPlayCount;
     default:
         return -1;
     }
@@ -406,6 +539,30 @@ int RestLibraryTableModel::fieldIndex(const QString& fieldName) const {
     if (fieldName == QStringLiteral("rating")) {
         return ColumnRating;
     }
+    if (fieldName == QStringLiteral("composer")) {
+        return ColumnComposer;
+    }
+    if (fieldName == QStringLiteral("comment")) {
+        return ColumnComment;
+    }
+    if (fieldName == QStringLiteral("tracknumber")) {
+        return ColumnTrackNumber;
+    }
+    if (fieldName == QStringLiteral("year")) {
+        return ColumnYear;
+    }
+    if (fieldName == QStringLiteral("filetype")) {
+        return ColumnType;
+    }
+    if (fieldName == QStringLiteral("timesplayed")) {
+        return ColumnPlayCount;
+    }
+    if (fieldName == QStringLiteral("favour")) {
+        return ColumnFavour;
+    }
+    if (fieldName == QStringLiteral("energy")) {
+        return ColumnEnergy;
+    }
     if (fieldName == QStringLiteral("remote_id")) {
         return ColumnRemoteId;
     }
@@ -413,7 +570,9 @@ int RestLibraryTableModel::fieldIndex(const QString& fieldName) const {
 }
 
 QString RestLibraryTableModel::modelKey(bool noSearch) const {
-    QString key = QStringLiteral("rest-library");
+    QString key = m_mode == Mode::Catalog
+            ? QStringLiteral("rest-library-browser")
+            : QStringLiteral("rest-library-recommendations");
     if (!noSearch && !m_currentSearch.isEmpty()) {
         key += QStringLiteral(":") + m_currentSearch;
     }
@@ -445,6 +604,32 @@ const RestLibraryTrack* RestLibraryTableModel::trackForIndex(const QModelIndex& 
     return &m_tracks.at(m_visibleRows.at(index.row()));
 }
 
+QString RestLibraryTableModel::remoteIdForIndex(const QModelIndex& index) const {
+    const RestLibraryTrack* pTrack = trackForIndex(index);
+    return pTrack ? pTrack->remoteId : QString();
+}
+
+int RestLibraryTableModel::visibleRowForRemoteId(const QString& remoteId) const {
+    if (remoteId.isEmpty()) {
+        return -1;
+    }
+    for (int visibleRow = 0; visibleRow < m_visibleRows.size(); ++visibleRow) {
+        if (m_tracks.at(m_visibleRows.at(visibleRow)).remoteId == remoteId) {
+            return visibleRow;
+        }
+    }
+    return -1;
+}
+
+RestLibraryTrack RestLibraryTableModel::trackForRemoteId(const QString& remoteId) const {
+    for (const RestLibraryTrack& track : m_tracks) {
+        if (track.remoteId == remoteId) {
+            return track;
+        }
+    }
+    return {};
+}
+
 QVariant RestLibraryTableModel::valueForColumn(
         const RestLibraryTrack& track,
         int column) const {
@@ -470,6 +655,24 @@ QVariant RestLibraryTableModel::valueForColumn(
         return durationText(track.durationSeconds);
     case ColumnRating:
         return track.rating > 0 ? QVariant(track.rating) : QVariant();
+    case ColumnComposer:
+        return track.composer;
+    case ColumnComment:
+        return track.comment;
+    case ColumnTrackNumber:
+        return track.trackNumber;
+    case ColumnYear:
+        return track.releaseDate.isValid()
+                ? QVariant(track.releaseDate.toString(Qt::ISODate))
+                : QVariant();
+    case ColumnType:
+        return track.audioFileExtension;
+    case ColumnPlayCount:
+        return track.playCount > 0 ? QVariant(track.playCount) : QVariant();
+    case ColumnFavour:
+        return track.favour > 0.0 ? QVariant(track.favour) : QVariant();
+    case ColumnEnergy:
+        return track.energy > 0.0 ? QVariant(track.energy) : QVariant();
     case ColumnSource:
         return track.sourceLabel;
     case ColumnRemoteId:
@@ -487,6 +690,13 @@ void RestLibraryTableModel::rebuildVisibleRows() {
             m_visibleRows.push_back(i);
             continue;
         }
+        if (m_mode == Mode::Catalog && m_pSearchQuery) {
+            const TrackPointer pTrack = m_searchTracks.value(m_tracks.at(i).remoteId);
+            if (pTrack && m_pSearchQuery->match(pTrack)) {
+                m_visibleRows.push_back(i);
+            }
+            continue;
+        }
         const QStringList fields = searchableFields(m_tracks.at(i));
         for (const QString& field : fields) {
             if (field.contains(searchText, Qt::CaseInsensitive)) {
@@ -497,11 +707,54 @@ void RestLibraryTableModel::rebuildVisibleRows() {
     }
 
     std::sort(m_visibleRows.begin(), m_visibleRows.end(), [this](int lhs, int rhs) {
-        const QVariant leftValue = valueForColumn(m_tracks.at(lhs), m_sortColumn);
-        const QVariant rightValue = valueForColumn(m_tracks.at(rhs), m_sortColumn);
-        const int compare = QString::localeAwareCompare(
-                leftValue.toString(),
-                rightValue.toString());
+        const RestLibraryTrack& leftTrack = m_tracks.at(lhs);
+        const RestLibraryTrack& rightTrack = m_tracks.at(rhs);
+        int compare = 0;
+        switch (m_sortColumn) {
+        case ColumnQuality:
+            compare = leftTrack.quality < rightTrack.quality
+                    ? -1
+                    : leftTrack.quality > rightTrack.quality ? 1 : 0;
+            break;
+        case ColumnBpm:
+            compare = leftTrack.bpm < rightTrack.bpm
+                    ? -1
+                    : leftTrack.bpm > rightTrack.bpm ? 1 : 0;
+            break;
+        case ColumnDuration:
+            compare = leftTrack.durationSeconds < rightTrack.durationSeconds
+                    ? -1
+                    : leftTrack.durationSeconds > rightTrack.durationSeconds ? 1 : 0;
+            break;
+        case ColumnRating:
+            compare = leftTrack.rating - rightTrack.rating;
+            break;
+        case ColumnPlayCount:
+            compare = leftTrack.playCount - rightTrack.playCount;
+            break;
+        case ColumnFavour:
+            compare = leftTrack.favour < rightTrack.favour
+                    ? -1
+                    : leftTrack.favour > rightTrack.favour ? 1 : 0;
+            break;
+        case ColumnEnergy:
+            compare = leftTrack.energy < rightTrack.energy
+                    ? -1
+                    : leftTrack.energy > rightTrack.energy ? 1 : 0;
+            break;
+        case ColumnCacheState:
+            compare = static_cast<int>(leftTrack.cacheState) -
+                    static_cast<int>(rightTrack.cacheState);
+            break;
+        default:
+            compare = QString::localeAwareCompare(
+                    valueForColumn(leftTrack, m_sortColumn).toString(),
+                    valueForColumn(rightTrack, m_sortColumn).toString());
+            break;
+        }
+        if (compare == 0) {
+            compare = QString::localeAwareCompare(leftTrack.remoteId, rightTrack.remoteId);
+        }
         if (m_sortOrder == Qt::AscendingOrder) {
             return compare < 0;
         }

@@ -3,12 +3,12 @@
 #include <QAction>
 #include <QHash>
 #include <QJsonObject>
-#include <QNetworkAccessManager>
 #include <QStringList>
 #include <QTimer>
 
 #include "library/libraryfeature.h"
 #include "library/rest/restlibrarycachemanager.h"
+#include "library/rest/restlibrarybackend.h"
 #include "library/rest/restlibraryclient.h"
 #include "library/rest/restlibrarymutationsequencer.h"
 #include "library/rest/restlibrarytablemodel.h"
@@ -26,7 +26,8 @@ class RestLibraryFeature final : public LibraryFeature {
   public:
     RestLibraryFeature(
             Library* pLibrary,
-            UserSettingsPointer pConfig);
+            UserSettingsPointer pConfig,
+            RestLibraryBackend* pBackend);
     ~RestLibraryFeature() override;
 
     QVariant title() override;
@@ -123,9 +124,9 @@ class RestLibraryFeature final : public LibraryFeature {
     parented_ptr<RestLibraryTableModel> m_pTableModel;
     parented_ptr<QAction> m_pRefreshAction;
     DlgRestLibrary* m_pRestLibraryView = nullptr;
-    QNetworkAccessManager m_networkAccessManager;
+    RestLibraryBackend* const m_pBackend;
     RestLibraryClient m_client;
-    RestLibraryCacheManager m_cacheManager;
+    RestLibraryCacheManager* const m_pCacheManager;
     RestLibraryDiagnostics m_diagnostics;
     RestLibrarySession m_mixManSession;
     RestLibrarySettings m_mixManSessionSettings;

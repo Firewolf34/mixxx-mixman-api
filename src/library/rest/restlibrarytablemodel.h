@@ -1,14 +1,19 @@
 #pragma once
 
 #include <QAbstractTableModel>
+#include <QHash>
 #include <QList>
 #include <QVector>
+#include <memory>
 
 #include "library/rest/restlibrarycachemanager.h"
 #include "library/rest/restlibrarytrack.h"
 #include "library/trackmodel.h"
+#include "track/track_decl.h"
 
 class TrackCollectionManager;
+class QueryNode;
+class SearchQueryParser;
 
 namespace mixxx::library::rest {
 
@@ -16,14 +21,27 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
     Q_OBJECT
 
   public:
+    enum class Mode {
+        Recommendations,
+        Catalog,
+    };
+
     explicit RestLibraryTableModel(
             QObject* parent,
-            TrackCollectionManager* pTrackCollectionManager);
-    ~RestLibraryTableModel() override = default;
+            TrackCollectionManager* pTrackCollectionManager,
+            Mode mode = Mode::Recommendations);
+    ~RestLibraryTableModel() override;
 
     void setTracks(QList<RestLibraryTrack> tracks);
     void setCacheLoadCapabilitiesEnabled(bool enabled);
     void updateTrackCacheState(const RestLibraryCacheResult& result);
+    QString remoteIdForIndex(const QModelIndex& index) const;
+    int visibleRowForRemoteId(const QString& remoteId) const;
+    RestLibraryTrack trackForRemoteId(const QString& remoteId) const;
+    TrackPointer materializeTrack(const QString& remoteId) const;
+    int trackCount() const {
+        return m_tracks.size();
+    }
 
     int rowCount(const QModelIndex& parent = QModelIndex()) const override;
     int columnCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -68,6 +86,14 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
         ColumnKey,
         ColumnDuration,
         ColumnRating,
+        ColumnComposer,
+        ColumnComment,
+        ColumnTrackNumber,
+        ColumnYear,
+        ColumnType,
+        ColumnPlayCount,
+        ColumnFavour,
+        ColumnEnergy,
         ColumnSource,
         ColumnRemoteId,
         ColumnCount,
@@ -78,7 +104,11 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
     void rebuildVisibleRows();
 
     TrackCollectionManager* const m_pTrackCollectionManager;
+    const Mode m_mode;
+    std::unique_ptr<SearchQueryParser> m_pSearchQueryParser;
+    std::unique_ptr<QueryNode> m_pSearchQuery;
     QList<RestLibraryTrack> m_tracks;
+    QHash<QString, TrackPointer> m_searchTracks;
     QVector<int> m_visibleRows;
     QString m_currentSearch;
     int m_sortColumn = ColumnArtist;

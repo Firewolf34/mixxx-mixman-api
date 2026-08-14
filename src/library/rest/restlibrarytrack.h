@@ -33,6 +33,9 @@ struct RestLibraryTrack {
     double bpm = 0.0;
     double durationSeconds = 0.0;
     int rating = 0;
+    int playCount = 0;
+    double favour = 0.0;
+    double energy = 0.0;
     QString sourceLabel;
     QUrl sourceUrl;
     QUrl artworkUrl;
@@ -60,6 +63,12 @@ struct RestLibraryTrack {
     RestLibraryCacheState cacheState = RestLibraryCacheState::Missing;
 };
 
+struct RestLibraryCatalogPage {
+    QList<RestLibraryTrack> tracks;
+    QString nextCursor;
+};
+
 } // namespace mixxx::library::rest
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryTrack)
 Q_DECLARE_METATYPE(QList<mixxx::library::rest::RestLibraryTrack>)
+Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryCatalogPage)

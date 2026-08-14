@@ -126,6 +126,21 @@ class WTrackTableView : public WLibraryTableView {
     void trackPlayedColorChanged(QColor col);
     void trackMissingColorChanged(QColor col);
     void dropIndicatorColorChanged(QColor col);
+    void unresolvedTrackLoadRequested(const QModelIndex& index);
+#ifdef __STEM__
+    void unresolvedTrackLoadToPlayerRequested(const QModelIndex& index,
+            const QString& group,
+            mixxx::StemChannelSelection stemMask,
+            bool play);
+#else
+    void unresolvedTrackLoadToPlayerRequested(
+            const QModelIndex& index,
+            const QString& group,
+            bool play);
+#endif
+    void unresolvedTracksAddToAutoDJRequested(
+            const QModelIndexList& indices,
+            PlaylistDAO::AutoDJSendLoc location);
 
   public slots:
     void loadTrackModel(QAbstractItemModel* model, bool restoreState = false);

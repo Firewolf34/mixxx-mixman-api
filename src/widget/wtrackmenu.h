@@ -127,6 +127,20 @@ class WTrackMenu : public QMenu {
             const QString& group,
             bool play = false);
 #endif
+#ifdef __STEM__
+    void unresolvedTrackLoadToPlayerRequested(const QModelIndex& index,
+            const QString& group,
+            mixxx::StemChannelSelection stemMask,
+            bool play);
+#else
+    void unresolvedTrackLoadToPlayerRequested(
+            const QModelIndex& index,
+            const QString& group,
+            bool play);
+#endif
+    void unresolvedTracksAddToAutoDJRequested(
+            const QModelIndexList& indices,
+            PlaylistDAO::AutoDJSendLoc location);
     void trackMenuVisible(bool visible);
     void saveCurrentViewState();
     void restoreCurrentViewStateOrIndex();

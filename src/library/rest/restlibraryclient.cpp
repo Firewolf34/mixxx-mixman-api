@@ -254,7 +254,57 @@ RestLibraryClient::RestLibraryClient(
             "mixxx::library::rest::RestLibrarySessionRegistration");
     qRegisterMetaType<QList<RestLibraryPolicyPreset>>(
             "QList<mixxx::library::rest::RestLibraryPolicyPreset>");
+    qRegisterMetaType<RestLibraryCatalogPage>(
+            "mixxx::library::rest::RestLibraryCatalogPage");
     qRegisterMetaType<RestLibraryPolicyPath>("mixxx::library::rest::RestLibraryPolicyPath");
+}
+
+void RestLibraryClient::fetchTrackCatalogPage(
+        const RestLibrarySettings& settings,
+        const QString& cursor) {
+    cancelTrackCatalogRequest();
+    const int requestGeneration = ++m_trackCatalogRequestGeneration;
+    m_settings = settings;
+    if (!m_pNetworkAccessManager || !settings.isConfigured()) {
+        emit trackCatalogFetchFailed(tr("REST Library is not configured."));
+        return;
+    }
+
+    QNetworkRequest request = newRequest(settings, settings.trackListPath, 0);
+    QUrl url = request.url();
+    QUrlQuery query(url);
+    query.removeAllQueryItems(QStringLiteral("include_details"));
+    query.addQueryItem(QStringLiteral("include_details"), QStringLiteral("true"));
+    query.removeAllQueryItems(QStringLiteral("limit"));
+    query.addQueryItem(QStringLiteral("limit"), QString::number(settings.pageSize));
+    query.removeAllQueryItems(QStringLiteral("offset"));
+    query.removeAllQueryItems(QStringLiteral("cursor"));
+    if (!cursor.isEmpty()) {
+        query.addQueryItem(QStringLiteral("cursor"), cursor);
+    }
+    url.setQuery(query);
+
+    request.setUrl(url);
+    QNetworkReply* pReply = m_pNetworkAccessManager->get(request);
+    monitorMetadataReply(pReply);
+    pReply->setProperty(kRequestGenerationProperty, requestGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    m_pTrackCatalogReply = pReply;
+    connect(pReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotTrackCatalogFinished);
+}
+
+void RestLibraryClient::cancelTrackCatalogRequest() {
+    ++m_trackCatalogRequestGeneration;
+    if (m_pTrackCatalogReply) {
+        m_metadataResponseBodies.remove(m_pTrackCatalogReply);
+        disconnect(m_pTrackCatalogReply, nullptr, this, nullptr);
+        m_pTrackCatalogReply->abort();
+        m_pTrackCatalogReply->deleteLater();
+        m_pTrackCatalogReply.clear();
+    }
 }
 
 void RestLibraryClient::fetchTracks(const RestLibrarySettings& settings) {
@@ -1944,6 +1994,60 @@ void RestLibraryClient::slotTrackListFinished() {
     startDetailRequests(context.generation, remoteIds);
 }
 
+void RestLibraryClient::slotTrackCatalogFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        emit trackCatalogFetchFailed(tr("REST catalog request failed."));
+        return;
+    }
+    const bool staleReply =
+            pReply->property(kRequestGenerationProperty).toInt() !=
+            m_trackCatalogRequestGeneration;
+    if (m_pTrackCatalogReply == pReply) {
+        m_pTrackCatalogReply.clear();
+    }
+    pReply->deleteLater();
+    if (staleReply) {
+        return;
+    }
+
+    const QByteArray responseBody = takeMetadataReplyBody(pReply);
+    const int statusCode = statusCodeFromReply(*pReply);
+    if (pReply->error() != QNetworkReply::NoError || !isSuccessStatus(statusCode)) {
+        const auto diagnostic = diagnosticForReply(
+                *pReply,
+                responseBody,
+                tr("Track catalog"),
+                QStringLiteral("GET"),
+                tr("MixMan hydrated track catalog request failed."),
+                false);
+        emit requestDiagnosticUpdated(diagnostic);
+        emit trackCatalogFetchFailed(diagnostic.summary);
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
+    bool valid = parseError.error == QJsonParseError::NoError;
+    RestLibraryCatalogPage page;
+    if (valid) {
+        page = parseTrackCatalogPage(document, &valid);
+    }
+    if (!valid) {
+        emitReplyDiagnostic(
+                *pReply,
+                responseBody,
+                tr("Track catalog"),
+                QStringLiteral("GET"),
+                tr("MixMan hydrated track catalog response was invalid."),
+                false);
+        emit trackCatalogFetchFailed(
+                tr("MixMan hydrated track catalog response was invalid."));
+        return;
+    }
+    emit trackCatalogPageFetched(page);
+}
+
 void RestLibraryClient::startDetailRequests(int requestGeneration, const QStringList& remoteIds) {
     if (!m_pNetworkAccessManager) {
         auto batchIt = m_trackBatches.find(requestGeneration);
@@ -2646,6 +2750,17 @@ RestLibraryTrack RestLibraryClient::parseTrackObjectForTesting(
     return parseTrackObject(object);
 }
 
+RestLibraryCatalogPage RestLibraryClient::parseTrackCatalogPageForTesting(
+        const QJsonDocument& document,
+        bool* pValid) {
+    bool valid = false;
+    RestLibraryCatalogPage page = parseTrackCatalogPage(document, &valid);
+    if (pValid) {
+        *pValid = valid;
+    }
+    return page;
+}
+
 RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocumentForTesting(
         const QJsonDocument& document) {
     return parsePolicyPathDocument(document);
@@ -2763,13 +2878,17 @@ RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) 
     track.moveType = readString(object, {"resolved_move_type", "move_type"});
     track.color = readString(object, {"color", "colour"});
     track.region = readString(object, {"region", "region_id"});
+    track.playCount = static_cast<int>(readDouble(object, {"play_count"}));
+    track.favour = readDouble(object, {"favour"});
+    track.energy = readDouble(object, {"energy"});
 
     const QString releaseDate = readString(object, {"release_date", "date"});
     if (!releaseDate.isEmpty()) {
         track.releaseDate = QDate::fromString(releaseDate.left(10), Qt::ISODate);
     }
 
-    const QString sourceUrl = readString(object, {"permalink", "source_url", "url"});
+    const QString sourceUrl = readString(
+            object, {"permalink", "permalink_url", "source_url", "url"});
     if (!sourceUrl.isEmpty()) {
         track.sourceUrl = QUrl(sourceUrl);
     }
@@ -2778,6 +2897,48 @@ RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) 
         track.artworkUrl = QUrl(artworkUrl);
     }
     return track;
+}
+
+RestLibraryCatalogPage RestLibraryClient::parseTrackCatalogPage(
+        const QJsonDocument& document,
+        bool* pValid) {
+    RestLibraryCatalogPage page;
+    bool valid = document.isObject();
+    if (valid) {
+        const QJsonObject root = document.object();
+        const QJsonValue itemsValue = root.value(QStringLiteral("items"));
+        const QJsonValue cursorValue = root.value(QStringLiteral("next_cursor"));
+        valid = root.contains(QStringLiteral("next_cursor")) &&
+                itemsValue.isArray() &&
+                (cursorValue.isNull() || cursorValue.isUndefined() || cursorValue.isString());
+        if (valid) {
+            const QJsonArray items = itemsValue.toArray();
+            page.tracks.reserve(items.size());
+            for (const QJsonValue& value : items) {
+                if (!value.isObject()) {
+                    valid = false;
+                    break;
+                }
+                RestLibraryTrack track = parseTrackObject(value.toObject());
+                if (track.remoteId.isEmpty()) {
+                    valid = false;
+                    break;
+                }
+                page.tracks.append(std::move(track));
+            }
+            if (cursorValue.isString()) {
+                page.nextCursor = cursorValue.toString();
+                valid = !page.nextCursor.trimmed().isEmpty();
+            }
+        }
+    }
+    if (!valid) {
+        page = {};
+    }
+    if (pValid) {
+        *pValid = valid;
+    }
+    return page;
 }
 
 RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocument(const QJsonDocument& document) {
@@ -3240,7 +3401,7 @@ double RestLibraryClient::readDouble(
 }
 
 int RestLibraryClient::readRating(const QJsonObject& object) {
-    const double rating = readDouble(object, {"rating"});
+    const double rating = readDouble(object, {"rating", "dj_rating"});
     if (rating <= 0.0) {
         return 0;
     }

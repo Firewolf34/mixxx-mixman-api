@@ -59,7 +59,9 @@ RestLibraryCacheResult lastResult(const QSignalSpy& spy) {
 
 QString cacheFilePath(const QString& cachePath, const QString& remoteId) {
     return QDir(cachePath).filePath(
-            RestLibraryCacheManager::cacheFileStemForTesting(remoteId) + QStringLiteral(".mp3"));
+            RestLibraryCacheManager::cacheFileStemForTesting(
+                    QUrl(QStringLiteral("http://example.invalid")), remoteId) +
+            QStringLiteral(".mp3"));
 }
 
 void writeCacheFile(
@@ -77,14 +79,21 @@ void writeCacheFile(
 
 TEST(RestLibraryCacheManagerTest, BuildsStableCacheStemWithoutRemoteIdLeak) {
     const QString first = RestLibraryCacheManager::cacheFileStemForTesting(
+            QUrl(QStringLiteral("https://mixman.invalid")),
             QStringLiteral("remote-track-1"));
     const QString second = RestLibraryCacheManager::cacheFileStemForTesting(
+            QUrl(QStringLiteral("https://mixman.invalid/")),
             QStringLiteral("remote-track-1"));
     const QString other = RestLibraryCacheManager::cacheFileStemForTesting(
+            QUrl(QStringLiteral("https://mixman.invalid")),
             QStringLiteral("remote-track-2"));
+    const QString otherServer = RestLibraryCacheManager::cacheFileStemForTesting(
+            QUrl(QStringLiteral("https://other.invalid")),
+            QStringLiteral("remote-track-1"));
 
     EXPECT_EQ(first, second);
     EXPECT_NE(first, other);
+    EXPECT_NE(first, otherServer);
     EXPECT_FALSE(first.contains(QStringLiteral("remote")));
 }
 
@@ -110,6 +119,7 @@ TEST(RestLibraryCacheManagerTest, ReconcilesExistingCachedFile) {
     const QString remoteId = QStringLiteral("42");
     const QString filePath = QDir(tempDir.path())
                                      .filePath(RestLibraryCacheManager::cacheFileStemForTesting(
+                                                       QUrl(QStringLiteral("http://example.invalid")),
                                                        remoteId) +
                                              QStringLiteral(".mp3"));
     QFile file(filePath);
@@ -129,6 +139,27 @@ TEST(RestLibraryCacheManagerTest, ReconcilesExistingCachedFile) {
     EXPECT_EQ(result.remoteId, remoteId);
     EXPECT_EQ(result.cacheState, RestLibraryCacheState::Ready);
     EXPECT_EQ(result.cachedFilePath, QDir::fromNativeSeparators(filePath));
+}
+
+TEST(RestLibraryCacheManagerTest, IgnoresAmbiguousLegacyCacheFile) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString remoteId = QStringLiteral("42");
+    QFile legacyFile(QDir(tempDir.path())
+                             .filePath(RestLibraryCacheManager::cacheFileStemForTesting(
+                                               remoteId) +
+                                     QStringLiteral(".mp3")));
+    ASSERT_TRUE(legacyFile.open(QIODevice::WriteOnly));
+    legacyFile.write("legacy-audio");
+    legacyFile.close();
+
+    RestLibraryCacheManager manager(nullptr);
+    QSignalSpy spy(&manager, &RestLibraryCacheManager::trackCacheStateChanged);
+
+    manager.reconcileTracks({newTrack(remoteId)}, newSettings(tempDir.path()));
+
+    EXPECT_EQ(spy.count(), 0);
+    EXPECT_TRUE(QFile::exists(legacyFile.fileName()));
 }
 
 TEST(RestLibraryCacheManagerTest, ExpiresOldCachedFileAndReportsStale) {
@@ -205,6 +236,69 @@ TEST(RestLibraryCacheManagerTest, DownloadsAudioToFinalCacheFile) {
     EXPECT_EQ(result.cacheState, RestLibraryCacheState::Ready);
     EXPECT_TRUE(QFile::exists(result.cachedFilePath));
     EXPECT_TRUE(result.cachedFilePath.endsWith(QStringLiteral(".mp3")));
+    EXPECT_EQ(result.serverIdentity, QStringLiteral("http://example.invalid"));
+}
+
+TEST(RestLibraryCacheManagerTest, TerminalSignalMayAbortManagerReentrantly) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MockNetworkAccessManager network;
+    RestLibraryCacheManager manager(&network);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-audio/42"),
+            {},
+            200,
+            QByteArrayLiteral("audio bytes"));
+    QObject::connect(&manager,
+            &RestLibraryCacheManager::trackCacheStateChanged,
+            &manager,
+            [&manager](const RestLibraryCacheResult& result) {
+                if (result.cacheState == RestLibraryCacheState::Ready) {
+                    manager.abortAll();
+                }
+            });
+
+    manager.cacheTracks({newTrack(QStringLiteral("42"))}, newSettings(tempDir.path()));
+    pReply->Done(true);
+
+    EXPECT_TRUE(QFile::exists(cacheFilePath(tempDir.path(), QStringLiteral("42"))));
+}
+
+TEST(RestLibraryCacheManagerTest, EvictionSignalMayAbortManagerReentrantly) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    writeCacheFile(
+            tempDir.path(),
+            QStringLiteral("1"),
+            700 * 1024,
+            QDateTime::currentDateTimeUtc().addSecs(-20));
+
+    MockNetworkAccessManager network;
+    RestLibraryCacheManager manager(&network);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-audio/2"),
+            {},
+            200,
+            QByteArray(700 * 1024, 'a'));
+    QObject::connect(&manager,
+            &RestLibraryCacheManager::trackCacheStateChanged,
+            &manager,
+            [&manager](const RestLibraryCacheResult& result) {
+                if (result.cacheState == RestLibraryCacheState::Stale) {
+                    manager.abortAll();
+                }
+            });
+    RestLibrarySettings settings = newSettings(tempDir.path());
+    settings.cacheMaxMegabytes = 1;
+
+    manager.cacheTracks(
+            {newTrack(QStringLiteral("1")), newTrack(QStringLiteral("2"))},
+            settings);
+    pReply->Done(true);
+
+    EXPECT_FALSE(QFile::exists(cacheFilePath(tempDir.path(), QStringLiteral("1"))));
+    EXPECT_TRUE(QFile::exists(cacheFilePath(tempDir.path(), QStringLiteral("2"))));
 }
 
 TEST(RestLibraryCacheManagerTest, AudioDownloadUsesSecureSameOriginBearerRequest) {

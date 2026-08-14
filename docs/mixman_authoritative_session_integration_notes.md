@@ -73,6 +73,21 @@ body ceiling, enforced while streaming. Audio cache downloads reject an
 oversized declared length before writing, enforce the configured limit across
 chunked reads, and discard temporary files after short or failed writes.
 
+## Catalog browser boundary
+
+The separate REST Library pane reads MixMan's hydrated, cursor-paginated track
+catalog on first activation and explicit refresh. Metadata stays in process
+memory and a refresh replaces the displayed snapshot only after every page has
+loaded successfully. Browsing, search, sort, and selection never download
+audio or artwork.
+
+Deck, preview, sampler, and AutoDJ actions download only the selected tracks to
+the configured cache. Cache identity includes the normalized MixMan server URL
+and remote track ID; ambiguous legacy ID-only cache entries are ignored and
+left for normal pruning. Catalog reads remain outside session lease authority,
+while a materialized track's playback is observed by the existing v3 session
+integration.
+
 ## Connection test
 
 The optional v3 session-permission test deliberately creates a unique durable

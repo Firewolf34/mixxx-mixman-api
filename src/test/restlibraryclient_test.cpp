@@ -13,6 +13,7 @@
 namespace {
 
 using mixxx::library::rest::RestLibraryClient;
+using mixxx::library::rest::RestLibraryCatalogPage;
 using mixxx::library::rest::RestLibraryRequestDiagnostic;
 using mixxx::library::rest::RestLibrarySettings;
 
@@ -143,6 +144,54 @@ TEST(RestLibraryClientTest, ParsesObjectWrappedTrackList) {
     EXPECT_EQ(tracks.at(0).genre, QStringLiteral("House"));
     EXPECT_DOUBLE_EQ(tracks.at(0).bpm, 124.5);
     EXPECT_EQ(tracks.at(0).rating, 4);
+}
+
+TEST(RestLibraryClientTest, ParsesHydratedCatalogPage) {
+    bool valid = false;
+    const auto page = RestLibraryClient::parseTrackCatalogPageForTesting(
+            QJsonDocument::fromJson(R"json({
+                "items": [{
+                    "id": 7,
+                    "title": "Catalog Track",
+                    "artist": "Ada",
+                    "dj_rating": 4.4,
+                    "play_count": 9,
+                    "favour": 0.75,
+                    "energy": 0.6
+                }],
+                "next_cursor": "cursor-2"
+            })json"),
+            &valid);
+
+    ASSERT_TRUE(valid);
+    ASSERT_EQ(page.tracks.size(), 1);
+    EXPECT_EQ(page.tracks.constFirst().remoteId, QStringLiteral("7"));
+    EXPECT_EQ(page.tracks.constFirst().rating, 4);
+    EXPECT_EQ(page.tracks.constFirst().playCount, 9);
+    EXPECT_DOUBLE_EQ(page.tracks.constFirst().favour, 0.75);
+    EXPECT_DOUBLE_EQ(page.tracks.constFirst().energy, 0.6);
+    EXPECT_EQ(page.nextCursor, QStringLiteral("cursor-2"));
+}
+
+TEST(RestLibraryClientTest, RejectsMalformedHydratedCatalogPage) {
+    bool valid = true;
+    const auto page = RestLibraryClient::parseTrackCatalogPageForTesting(
+            QJsonDocument::fromJson(
+                    R"json({"items":[{"title":"Missing ID"}],"next_cursor":null})json"),
+            &valid);
+
+    EXPECT_FALSE(valid);
+    EXPECT_TRUE(page.tracks.isEmpty());
+}
+
+TEST(RestLibraryClientTest, RejectsHydratedCatalogPageWithoutCursorMember) {
+    bool valid = true;
+    const auto page = RestLibraryClient::parseTrackCatalogPageForTesting(
+            QJsonDocument::fromJson(R"json({"items":[{"id":7}]})json"),
+            &valid);
+
+    EXPECT_FALSE(valid);
+    EXPECT_TRUE(page.tracks.isEmpty());
 }
 
 TEST(RestLibraryClientTest, ParsesTrackObjectFallbackFields) {
@@ -490,6 +539,45 @@ TEST(RestLibraryClientTest, DeclaredOversizedMetadataResponseIsRejectedEarly) {
 
     EXPECT_TRUE(pReply->WasAborted());
     EXPECT_EQ(failedSpy.count(), 1);
+}
+
+TEST(RestLibraryClientTest, FetchesHydratedTrackCatalogPage) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::trackCatalogPageFetched);
+    QSignalSpy failedSpy(&client, &RestLibraryClient::trackCatalogFetchFailed);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-list"),
+            {{"include_details", "true"}, {"limit", "5"}, {"cursor", "cursor-1"}},
+            200,
+            R"json({"items":[{"id":7,"title":"Mock Track"}],"next_cursor":null})json");
+
+    client.fetchTrackCatalogPage(newSettings(), QStringLiteral("cursor-1"));
+    pReply->Done(true);
+
+    ASSERT_EQ(fetchedSpy.count(), 1);
+    EXPECT_EQ(failedSpy.count(), 0);
+    const auto page = qvariant_cast<RestLibraryCatalogPage>(fetchedSpy.takeFirst().at(0));
+    ASSERT_EQ(page.tracks.size(), 1);
+    EXPECT_EQ(page.tracks.constFirst().remoteId, QStringLiteral("7"));
+    EXPECT_TRUE(page.nextCursor.isEmpty());
+}
+
+TEST(RestLibraryClientTest, CancelingCatalogRequestReleasesBufferedMetadata) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    MockNetworkReply* pReply = network.ExpectGet(
+            QStringLiteral("/configured-list"),
+            {{"include_details", "true"}, {"limit", "5"}},
+            200,
+            R"json({"items":[],"next_cursor":null})json");
+
+    client.fetchTrackCatalogPage(newSettings(), {});
+    ASSERT_EQ(client.bufferedMetadataReplyCountForTesting(), 1);
+    client.cancelTrackCatalogRequest();
+
+    EXPECT_TRUE(pReply->WasAborted());
+    EXPECT_EQ(client.bufferedMetadataReplyCountForTesting(), 0);
 }
 
 TEST(RestLibraryClientTest, IgnoresStaleTrackListReplyAfterNewerRequest) {

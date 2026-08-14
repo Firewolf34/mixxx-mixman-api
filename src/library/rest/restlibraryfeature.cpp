@@ -104,15 +104,17 @@ QString conciseDiagnosticText(const RestLibraryRequestDiagnostic& diagnostic) {
 
 RestLibraryFeature::RestLibraryFeature(
         Library* pLibrary,
-        UserSettingsPointer pConfig)
+        UserSettingsPointer pConfig,
+        RestLibraryBackend* pBackend)
         : LibraryFeature(pLibrary, std::move(pConfig), QStringLiteral("computer")),
           m_pSidebarModel(make_parented<TreeItemModel>(this)),
           m_pTableModel(make_parented<RestLibraryTableModel>(
                   this,
                   pLibrary->trackCollectionManager())),
           m_pRefreshAction(make_parented<QAction>(tr("Refresh"), this)),
-          m_client(&m_networkAccessManager, this),
-          m_cacheManager(&m_networkAccessManager, this) {
+          m_pBackend(pBackend),
+          m_client(pBackend->networkAccessManager(), this),
+          m_pCacheManager(pBackend->cacheManager()) {
     m_sessionHeartbeatTimer.setInterval(kSessionHeartbeatIntervalMillis);
     m_sessionHeartbeatTimer.setSingleShot(false);
     connect(&m_sessionHeartbeatTimer,
@@ -201,11 +203,11 @@ RestLibraryFeature::RestLibraryFeature(
             &RestLibraryClient::fetchFailed,
             this,
             &RestLibraryFeature::slotFetchFailed);
-    connect(&m_cacheManager,
+    connect(m_pCacheManager,
             &RestLibraryCacheManager::trackCacheStateChanged,
             this,
             &RestLibraryFeature::slotTrackCacheStateChanged);
-    connect(&m_cacheManager,
+    connect(m_pCacheManager,
             &RestLibraryCacheManager::requestDiagnosticUpdated,
             this,
             &RestLibraryFeature::slotRequestDiagnosticUpdated);
@@ -378,7 +380,6 @@ void RestLibraryFeature::refreshForTrack(
     refreshMixManControls(settings);
     if (!settings.isConfigured()) {
         resetMixManSessionState();
-        m_cacheManager.abortAll();
         m_pTableModel->setCacheLoadCapabilitiesEnabled(false);
         clearRecommendations();
         m_lastRequestedTrackLocation.clear();
@@ -388,7 +389,6 @@ void RestLibraryFeature::refreshForTrack(
         return;
     }
 
-    m_cacheManager.abortAll();
     m_pTableModel->setCacheLoadCapabilitiesEnabled(
             settings.hasAudioDownloadConfigured());
     if (settings.useMixManDefaults) {
@@ -1088,7 +1088,7 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
         return;
     }
 
-    m_cacheManager.reconcileTracks(tracks, settings);
+    m_pCacheManager->reconcileTracks(tracks, settings);
 
     QList<RestLibraryTrack> tracksToCache;
     const int cacheLimit = std::min(settings.recommendationLimit, static_cast<int>(tracks.size()));
@@ -1096,7 +1096,7 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
     for (int i = 0; i < cacheLimit; ++i) {
         tracksToCache.append(tracks.at(i));
     }
-    m_cacheManager.cacheTracks(tracksToCache, settings);
+    m_pCacheManager->cacheTracks(tracksToCache, settings);
 }
 
 void RestLibraryFeature::ensureMixManSession(const RestLibrarySettings& settings) {
@@ -1621,6 +1621,10 @@ void RestLibraryFeature::slotFetchFailed(const QString& message) {
 }
 
 void RestLibraryFeature::slotTrackCacheStateChanged(const RestLibraryCacheResult& result) {
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    if (result.serverIdentity != RestLibraryCacheManager::serverIdentity(settings)) {
+        return;
+    }
     if (result.cacheState == RestLibraryCacheState::Ready &&
             !result.cachedFilePath.trimmed().isEmpty()) {
         m_cachedPathToRemoteId.insert(

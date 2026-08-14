@@ -22,6 +22,8 @@
 #include "library/recording/recordingfeature.h"
 #include "library/rekordbox/rekordboxfeature.h"
 #include "library/rest/restlibraryfeature.h"
+#include "library/rest/restlibrarybackend.h"
+#include "library/rest/restlibrarybrowserfeature.h"
 #include "library/rhythmbox/rhythmboxfeature.h"
 #include "library/serato/seratofeature.h"
 #include "library/sidebarmodel.h"
@@ -96,10 +98,19 @@ Library::Library(
             Qt::DirectConnection /* signal-to-signal */);
 #endif
 
+    m_pRestLibraryBackend =
+            make_parented<mixxx::library::rest::RestLibraryBackend>(this);
     m_pRestLibraryFeature = make_parented<mixxx::library::rest::RestLibraryFeature>(
             this,
-            m_pConfig);
+            m_pConfig,
+            m_pRestLibraryBackend);
     addFeature(m_pRestLibraryFeature);
+    m_pRestLibraryBrowserFeature =
+            make_parented<mixxx::library::rest::RestLibraryBrowserFeature>(
+                    this,
+                    m_pConfig,
+                    m_pRestLibraryBackend);
+    addFeature(m_pRestLibraryBrowserFeature);
 
     m_pAutoDJFeature = make_parented<AutoDJFeature>(this, m_pConfig, pPlayerManager);
     addFeature(m_pAutoDJFeature);

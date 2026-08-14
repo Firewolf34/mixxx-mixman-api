@@ -122,22 +122,24 @@ RestLibraryCacheManager::~RestLibraryCacheManager() {
 void RestLibraryCacheManager::reconcileTracks(
         const QList<RestLibraryTrack>& tracks,
         const RestLibrarySettings& settings) {
-    m_settings = settings;
-    if (!m_settings.hasAudioDownloadConfigured()) {
+    if (!settings.hasAudioDownloadConfigured()) {
         return;
     }
 
-    rememberTrackCacheStems(tracks);
-    pruneExpiredCachedFiles(tracks);
-    pruneCacheSize();
+    rememberTrackCacheStems(tracks, settings);
+    pruneExpiredCachedFiles(tracks, settings);
+    pruneCacheSize(settings);
 
     for (const RestLibraryTrack& track : tracks) {
         if (track.remoteId.isEmpty()) {
             continue;
         }
-        const QString cachedFilePath = existingCachedFilePath(track.remoteId);
+        const QString cachedFilePath = existingCachedFilePath(settings, track.remoteId);
         if (!cachedFilePath.isEmpty()) {
-            emitState(track.remoteId, RestLibraryCacheState::Ready, cachedFilePath);
+            emitState(settings,
+                    track.remoteId,
+                    RestLibraryCacheState::Ready,
+                    cachedFilePath);
         }
     }
 }
@@ -145,17 +147,17 @@ void RestLibraryCacheManager::reconcileTracks(
 void RestLibraryCacheManager::cacheTracks(
         const QList<RestLibraryTrack>& tracks,
         const RestLibrarySettings& settings) {
-    m_settings = settings;
-    if (!m_settings.hasAudioDownloadConfigured() || !m_pNetworkAccessManager) {
+    if (!settings.hasAudioDownloadConfigured() || !m_pNetworkAccessManager) {
         return;
     }
 
-    rememberTrackCacheStems(tracks);
-    QDir cacheDir(m_settings.cacheDirectoryPath);
+    rememberTrackCacheStems(tracks, settings);
+    QDir cacheDir(settings.cacheDirectoryPath);
     if (!cacheDir.exists() && !cacheDir.mkpath(QStringLiteral("."))) {
         for (const RestLibraryTrack& track : tracks) {
             if (!track.remoteId.isEmpty()) {
                 emitState(
+                        settings,
                         track.remoteId,
                         RestLibraryCacheState::Failed,
                         {},
@@ -165,25 +167,26 @@ void RestLibraryCacheManager::cacheTracks(
         return;
     }
 
-    pruneExpiredCachedFiles(tracks);
-    pruneCacheSize();
+    pruneExpiredCachedFiles(tracks, settings);
+    pruneCacheSize(settings);
 
     for (const RestLibraryTrack& track : tracks) {
+        const QString requestKey = cacheFileStem(settings, track.remoteId);
         if (track.remoteId.isEmpty() ||
-                m_knownPendingRemoteIds.contains(track.remoteId) ||
-                !existingCachedFilePath(track.remoteId).isEmpty()) {
+                m_knownPendingRequestKeys.contains(requestKey) ||
+                !existingCachedFilePath(settings, track.remoteId).isEmpty()) {
             continue;
         }
-        m_downloadQueue.enqueue(track);
-        m_knownPendingRemoteIds.insert(track.remoteId, true);
-        emitState(track.remoteId, RestLibraryCacheState::Missing);
+        m_downloadQueue.enqueue(PendingDownload{track, settings, requestKey});
+        m_knownPendingRequestKeys.insert(requestKey, true);
+        emitState(settings, track.remoteId, RestLibraryCacheState::Missing);
     }
     startNextDownloads();
 }
 
 void RestLibraryCacheManager::abortAll() {
     m_downloadQueue.clear();
-    m_knownPendingRemoteIds.clear();
+    m_knownPendingRequestKeys.clear();
     for (ActiveDownload& download : m_activeDownloads) {
         if (download.reply) {
             disconnect(download.reply, nullptr, this, nullptr);
@@ -196,8 +199,24 @@ void RestLibraryCacheManager::abortAll() {
     m_activeDownloads.clear();
 }
 
+QString RestLibraryCacheManager::serverIdentity(
+        const RestLibrarySettings& settings) {
+    const QUrl scopedUrl = settings.baseUrl.adjusted(
+            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment |
+            QUrl::StripTrailingSlash);
+    return scopedUrl.toString(QUrl::FullyEncoded);
+}
+
 QString RestLibraryCacheManager::cacheFileStemForTesting(const QString& remoteId) {
-    return cacheFileStem(remoteId);
+    return legacyCacheFileStem(remoteId);
+}
+
+QString RestLibraryCacheManager::cacheFileStemForTesting(
+        const QUrl& baseUrl,
+        const QString& remoteId) {
+    RestLibrarySettings settings;
+    settings.baseUrl = baseUrl;
+    return cacheFileStem(settings, remoteId);
 }
 
 QString RestLibraryCacheManager::extensionFromContentTypeForTesting(
@@ -209,7 +228,7 @@ QString RestLibraryCacheManager::existingCachedFilePathForTesting(
         const QString& cacheDirectoryPath,
         const QString& remoteId) {
     QDir cacheDir(cacheDirectoryPath);
-    const QString stem = cacheFileStem(remoteId);
+    const QString stem = legacyCacheFileStem(remoteId);
     const QStringList matches = cacheDir.entryList(
             QStringList{stem + QStringLiteral(".*")},
             QDir::Files,
@@ -272,19 +291,20 @@ void RestLibraryCacheManager::slotDownloadFinished() {
 }
 
 QNetworkRequest RestLibraryCacheManager::newDownloadRequest(
-        const RestLibraryTrack& track) const {
+        const RestLibraryTrack& track,
+        const RestLibrarySettings& settings) const {
     QNetworkRequest request(urlWithPathTemplate(
-            m_settings,
-            m_settings.audioDownloadPathTemplate,
+            settings,
+            settings.audioDownloadPathTemplate,
             track.remoteId));
     request.setAttribute(
             QNetworkRequest::RedirectPolicyAttribute,
             QNetworkRequest::SameOriginRedirectPolicy);
     request.setTransferTimeout(kDownloadTimeoutMillis);
-    if (m_settings.maySendBearerTokenTo(request.url())) {
+    if (settings.maySendBearerTokenTo(request.url())) {
         request.setRawHeader(
                 "Authorization",
-                QByteArray("Bearer ") + m_settings.bearerToken.toUtf8());
+                QByteArray("Bearer ") + settings.bearerToken.toUtf8());
     }
     kLogger.info()
             << "REST library audio download request"
@@ -294,21 +314,25 @@ QNetworkRequest RestLibraryCacheManager::newDownloadRequest(
 
 void RestLibraryCacheManager::startNextDownloads() {
     while (!m_downloadQueue.isEmpty() &&
-            m_activeDownloads.size() < m_settings.maxConcurrentDownloads) {
+            m_activeDownloads.size() <
+                    m_downloadQueue.head().settings.maxConcurrentDownloads) {
         startDownload(m_downloadQueue.dequeue());
     }
 }
 
-void RestLibraryCacheManager::startDownload(const RestLibraryTrack& track) {
-    QDir cacheDir(m_settings.cacheDirectoryPath);
+void RestLibraryCacheManager::startDownload(PendingDownload pendingDownload) {
+    const RestLibraryTrack& track = pendingDownload.track;
+    const RestLibrarySettings& settings = pendingDownload.settings;
+    QDir cacheDir(settings.cacheDirectoryPath);
     const QString tempFilePath = cacheDir.filePath(
-            cacheFileStem(track.remoteId) + QStringLiteral(".download"));
+            cacheFileStem(settings, track.remoteId) + QStringLiteral(".download"));
     QFile::remove(tempFilePath);
 
     QFile* pFile = m_cacheFileFactory(tempFilePath, this);
     if (!pFile) {
-        m_knownPendingRemoteIds.remove(track.remoteId);
+        m_knownPendingRequestKeys.remove(pendingDownload.requestKey);
         emitState(
+                settings,
                 track.remoteId,
                 RestLibraryCacheState::Failed,
                 {},
@@ -318,8 +342,9 @@ void RestLibraryCacheManager::startDownload(const RestLibraryTrack& track) {
     }
     if (!pFile->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         pFile->deleteLater();
-        m_knownPendingRemoteIds.remove(track.remoteId);
+        m_knownPendingRequestKeys.remove(pendingDownload.requestKey);
         emitState(
+                settings,
                 track.remoteId,
                 RestLibraryCacheState::Failed,
                 {},
@@ -328,16 +353,22 @@ void RestLibraryCacheManager::startDownload(const RestLibraryTrack& track) {
         return;
     }
 
-    QNetworkReply* pReply = m_pNetworkAccessManager->get(newDownloadRequest(track));
+    QNetworkReply* pReply =
+            m_pNetworkAccessManager->get(newDownloadRequest(track, settings));
     pReply->setParent(this);
     m_activeDownloads.push_back(ActiveDownload{
             track,
-            m_settings,
+            settings,
+            pendingDownload.requestKey,
             QPointer<QNetworkReply>(pReply),
             pFile,
             tempFilePath,
-            0});
-    emitState(track.remoteId, RestLibraryCacheState::Downloading);
+            0,
+            {},
+            {},
+            false,
+            false});
+    emitState(settings, track.remoteId, RestLibraryCacheState::Downloading);
 
     connect(pReply, &QNetworkReply::readyRead, this, &RestLibraryCacheManager::slotReadyRead);
     connect(pReply, &QNetworkReply::metaDataChanged, this, [this, pReply] {
@@ -381,6 +412,8 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
     }
 
     const QString remoteId = pDownload->track.remoteId;
+    const QString requestKey = pDownload->requestKey;
+    const RestLibrarySettings downloadSettings = pDownload->settings;
     if (pReply) {
         const QByteArray remainingBytes = pReply->readAll();
         const qsizetype remainingDiagnosticBytes =
@@ -456,16 +489,16 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
             kLogger.warning() << "REST library audio download failed without a reply";
         }
         QFile::remove(pDownload->tempFilePath);
-        emitState(
+        cleanupActiveDownload(pDownload);
+        removeActiveDownload(requestKey);
+        m_knownPendingRequestKeys.remove(requestKey);
+        emitState(downloadSettings,
                 remoteId,
                 RestLibraryCacheState::Failed,
                 {},
                 failureSummary,
                 statusCode,
                 networkError);
-        cleanupActiveDownload(pDownload);
-        removeActiveDownload(remoteId);
-        m_knownPendingRemoteIds.remove(remoteId);
         startNextDownloads();
         return;
     }
@@ -476,14 +509,14 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
             *pReply);
     if (finalFilePath.isEmpty()) {
         QFile::remove(pDownload->tempFilePath);
-        emitState(
+        cleanupActiveDownload(pDownload);
+        removeActiveDownload(requestKey);
+        m_knownPendingRequestKeys.remove(requestKey);
+        emitState(downloadSettings,
                 remoteId,
                 RestLibraryCacheState::Failed,
                 {},
                 tr("Audio file type could not be determined."));
-        cleanupActiveDownload(pDownload);
-        removeActiveDownload(remoteId);
-        m_knownPendingRemoteIds.remove(remoteId);
         startNextDownloads();
         return;
     }
@@ -491,14 +524,14 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
     QFile::remove(finalFilePath);
     if (!QFile::rename(pDownload->tempFilePath, finalFilePath)) {
         QFile::remove(pDownload->tempFilePath);
-        emitState(
+        cleanupActiveDownload(pDownload);
+        removeActiveDownload(requestKey);
+        m_knownPendingRequestKeys.remove(requestKey);
+        emitState(downloadSettings,
                 remoteId,
                 RestLibraryCacheState::Failed,
                 {},
                 tr("Cached audio file could not be finalized."));
-        cleanupActiveDownload(pDownload);
-        removeActiveDownload(remoteId);
-        m_knownPendingRemoteIds.remove(remoteId);
         startNextDownloads();
         return;
     }
@@ -506,32 +539,37 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
     if (QFileInfo(finalFilePath).size() >
             static_cast<qint64>(pDownload->settings.cacheMaxMegabytes) * kBytesPerMegabyte) {
         QFile::remove(finalFilePath);
-        emitState(
+        cleanupActiveDownload(pDownload);
+        removeActiveDownload(requestKey);
+        m_knownPendingRequestKeys.remove(requestKey);
+        emitState(downloadSettings,
                 remoteId,
                 RestLibraryCacheState::Failed,
                 {},
                 tr("Cached audio file exceeds the cache size limit."));
-        cleanupActiveDownload(pDownload);
-        removeActiveDownload(remoteId);
-        m_knownPendingRemoteIds.remove(remoteId);
         startNextDownloads();
         return;
     }
 
-    pruneCacheSize(finalFilePath);
-    emitState(remoteId, RestLibraryCacheState::Ready, finalFilePath);
     cleanupActiveDownload(pDownload);
-    removeActiveDownload(remoteId);
-    m_knownPendingRemoteIds.remove(remoteId);
+    removeActiveDownload(requestKey);
+    m_knownPendingRequestKeys.remove(requestKey);
+    pruneCacheSize(downloadSettings, finalFilePath);
+    emitState(downloadSettings,
+            remoteId,
+            RestLibraryCacheState::Ready,
+            finalFilePath);
     startNextDownloads();
 }
 
 void RestLibraryCacheManager::rememberTrackCacheStems(
-        const QList<RestLibraryTrack>& tracks) {
+        const QList<RestLibraryTrack>& tracks,
+        const RestLibrarySettings& settings) {
     for (const RestLibraryTrack& track : tracks) {
         if (!track.remoteId.isEmpty()) {
-            m_remoteIdByCacheStem.insert(cacheFileStem(track.remoteId),
-                    track.remoteId);
+            const QString stem = cacheFileStem(settings, track.remoteId);
+            m_remoteIdByCacheStem.insert(stem, track.remoteId);
+            m_serverIdentityByCacheStem.insert(stem, serverIdentity(settings));
         }
     }
 }
@@ -549,17 +587,20 @@ RestLibraryCacheManager::ActiveDownload* RestLibraryCacheManager::activeDownload
     return nullptr;
 }
 
-void RestLibraryCacheManager::pruneExpiredCachedFiles(const QList<RestLibraryTrack>& tracks) {
+void RestLibraryCacheManager::pruneExpiredCachedFiles(
+        const QList<RestLibraryTrack>& tracks,
+        const RestLibrarySettings& settings) {
     const QDateTime cutoff =
-            QDateTime::currentDateTimeUtc().addDays(-m_settings.cacheMaxAgeDays);
+            QDateTime::currentDateTimeUtc().addDays(-settings.cacheMaxAgeDays);
     QHash<QString, QString> remoteIdByCacheStem;
     for (const RestLibraryTrack& track : tracks) {
         if (!track.remoteId.isEmpty()) {
-            remoteIdByCacheStem.insert(cacheFileStem(track.remoteId), track.remoteId);
+            remoteIdByCacheStem.insert(
+                    cacheFileStem(settings, track.remoteId), track.remoteId);
         }
     }
 
-    for (const QFileInfo& fileInfo : cachedFileInfos()) {
+    for (const QFileInfo& fileInfo : cachedFileInfos(settings)) {
         if (fileInfo.lastModified().toUTC() >= cutoff) {
             continue;
         }
@@ -567,20 +608,22 @@ void RestLibraryCacheManager::pruneExpiredCachedFiles(const QList<RestLibraryTra
         QFile::remove(filePath);
         const QString remoteId = remoteIdByCacheStem.value(fileInfo.completeBaseName());
         if (!remoteId.isEmpty()) {
-            emitState(remoteId, RestLibraryCacheState::Stale);
+            emitState(settings, remoteId, RestLibraryCacheState::Stale);
         }
     }
 }
 
-void RestLibraryCacheManager::pruneCacheSize(const QString& preservedFilePath) {
-    QList<QFileInfo> fileInfos = cachedFileInfos();
+void RestLibraryCacheManager::pruneCacheSize(
+        const RestLibrarySettings& settings,
+        const QString& preservedFilePath) {
+    QList<QFileInfo> fileInfos = cachedFileInfos(settings);
     qint64 totalBytes = 0;
     for (const QFileInfo& fileInfo : fileInfos) {
         totalBytes += fileInfo.size();
     }
 
     const qint64 maxBytes =
-            static_cast<qint64>(m_settings.cacheMaxMegabytes) * kBytesPerMegabyte;
+            static_cast<qint64>(settings.cacheMaxMegabytes) * kBytesPerMegabyte;
     if (totalBytes <= maxBytes) {
         return;
     }
@@ -600,8 +643,10 @@ void RestLibraryCacheManager::pruneCacheSize(const QString& preservedFilePath) {
             totalBytes -= fileInfo.size();
             const QString remoteId =
                     m_remoteIdByCacheStem.value(fileInfo.completeBaseName());
-            if (!remoteId.isEmpty()) {
-                emitState(remoteId, RestLibraryCacheState::Stale);
+            if (!remoteId.isEmpty() &&
+                    m_serverIdentityByCacheStem.value(fileInfo.completeBaseName()) ==
+                            serverIdentity(settings)) {
+                emitState(settings, remoteId, RestLibraryCacheState::Stale);
             }
         }
         if (totalBytes <= maxBytes) {
@@ -610,8 +655,9 @@ void RestLibraryCacheManager::pruneCacheSize(const QString& preservedFilePath) {
     }
 }
 
-QList<QFileInfo> RestLibraryCacheManager::cachedFileInfos() const {
-    const QDir cacheDir(m_settings.cacheDirectoryPath);
+QList<QFileInfo> RestLibraryCacheManager::cachedFileInfos(
+        const RestLibrarySettings& settings) const {
+    const QDir cacheDir(settings.cacheDirectoryPath);
     const QFileInfoList entries = cacheDir.entryInfoList(
             QDir::Files | QDir::NoDotAndDotDot,
             QDir::Name);
@@ -625,8 +671,21 @@ QList<QFileInfo> RestLibraryCacheManager::cachedFileInfos() const {
     return result;
 }
 
-QString RestLibraryCacheManager::existingCachedFilePath(const QString& remoteId) const {
-    return existingCachedFilePathForTesting(m_settings.cacheDirectoryPath, remoteId);
+QString RestLibraryCacheManager::existingCachedFilePath(
+        const RestLibrarySettings& settings,
+        const QString& remoteId) const {
+    QDir cacheDir(settings.cacheDirectoryPath);
+    const QString stem = cacheFileStem(settings, remoteId);
+    const QStringList matches = cacheDir.entryList(
+            QStringList{stem + QStringLiteral(".*")},
+            QDir::Files,
+            QDir::Name);
+    for (const QString& match : matches) {
+        if (!match.endsWith(QStringLiteral(".download"))) {
+            return QDir::fromNativeSeparators(cacheDir.filePath(match));
+        }
+    }
+    return {};
 }
 
 QString RestLibraryCacheManager::finalCachedFilePath(
@@ -649,12 +708,13 @@ QString RestLibraryCacheManager::finalCachedFilePath(
         return {};
     }
     return QDir::fromNativeSeparators(QDir(settings.cacheDirectoryPath)
-                                              .filePath(cacheFileStem(track.remoteId) +
+                                              .filePath(cacheFileStem(settings, track.remoteId) +
                                                       QStringLiteral(".") +
                                                       extension));
 }
 
 void RestLibraryCacheManager::emitState(
+        const RestLibrarySettings& settings,
         const QString& remoteId,
         RestLibraryCacheState cacheState,
         const QString& cachedFilePath,
@@ -667,7 +727,8 @@ void RestLibraryCacheManager::emitState(
             QDir::fromNativeSeparators(cachedFilePath),
             errorText,
             statusCode,
-            networkError});
+            networkError,
+            serverIdentity(settings)});
 }
 
 void RestLibraryCacheManager::cleanupActiveDownload(ActiveDownload* pDownload) {
@@ -679,19 +740,29 @@ void RestLibraryCacheManager::cleanupActiveDownload(ActiveDownload* pDownload) {
     pDownload->pFile = nullptr;
 }
 
-void RestLibraryCacheManager::removeActiveDownload(const QString& remoteId) {
+void RestLibraryCacheManager::removeActiveDownload(const QString& requestKey) {
     for (auto it = m_activeDownloads.begin(); it != m_activeDownloads.end(); ++it) {
-        if (it->track.remoteId == remoteId) {
+        if (it->requestKey == requestKey) {
             m_activeDownloads.erase(it);
             return;
         }
     }
 }
 
-QString RestLibraryCacheManager::cacheFileStem(const QString& remoteId) {
+QString RestLibraryCacheManager::legacyCacheFileStem(const QString& remoteId) {
     const QByteArray hash = QCryptographicHash::hash(
             remoteId.toUtf8(),
             QCryptographicHash::Sha256).toHex();
+    return QString::fromLatin1(hash.left(kCacheHashLength));
+}
+
+QString RestLibraryCacheManager::cacheFileStem(
+        const RestLibrarySettings& settings,
+        const QString& remoteId) {
+    const QByteArray identity =
+            serverIdentity(settings).toUtf8() + '\0' + remoteId.toUtf8();
+    const QByteArray hash =
+            QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex();
     return QString::fromLatin1(hash.left(kCacheHashLength));
 }
 

@@ -29,6 +29,7 @@ struct RestLibraryCacheResult {
     QString errorText;
     int statusCode = 0;
     int networkError = 0;
+    QString serverIdentity;
 };
 
 class RestLibraryCacheManager final : public QObject {
@@ -52,7 +53,12 @@ class RestLibraryCacheManager final : public QObject {
             const RestLibrarySettings& settings);
     void abortAll();
 
+    static QString serverIdentity(const RestLibrarySettings& settings);
+
     static QString cacheFileStemForTesting(const QString& remoteId);
+    static QString cacheFileStemForTesting(
+            const QUrl& baseUrl,
+            const QString& remoteId);
     static QString extensionFromContentTypeForTesting(const QByteArray& contentType);
     static QString existingCachedFilePathForTesting(
             const QString& cacheDirectoryPath,
@@ -69,9 +75,16 @@ class RestLibraryCacheManager final : public QObject {
     void slotDownloadFinished();
 
   private:
+    struct PendingDownload {
+        RestLibraryTrack track;
+        RestLibrarySettings settings;
+        QString requestKey;
+    };
+
     struct ActiveDownload {
         RestLibraryTrack track;
         RestLibrarySettings settings;
+        QString requestKey;
         QPointer<QNetworkReply> reply;
         QFile* pFile = nullptr;
         QString tempFilePath;
@@ -82,22 +95,33 @@ class RestLibraryCacheManager final : public QObject {
         bool sizeLimitExceeded = false;
     };
 
-    QNetworkRequest newDownloadRequest(const RestLibraryTrack& track) const;
+    QNetworkRequest newDownloadRequest(
+            const RestLibraryTrack& track,
+            const RestLibrarySettings& settings) const;
     void startNextDownloads();
-    void startDownload(const RestLibraryTrack& track);
+    void startDownload(PendingDownload pendingDownload);
     void consumeReplyBytes(QNetworkReply* pReply);
     void finishDownload(QNetworkReply* pReply);
     ActiveDownload* activeDownloadForReply(QNetworkReply* pReply);
-    void rememberTrackCacheStems(const QList<RestLibraryTrack>& tracks);
-    void pruneExpiredCachedFiles(const QList<RestLibraryTrack>& tracks);
-    void pruneCacheSize(const QString& preservedFilePath = {});
-    QList<QFileInfo> cachedFileInfos() const;
-    QString existingCachedFilePath(const QString& remoteId) const;
+    void rememberTrackCacheStems(
+            const QList<RestLibraryTrack>& tracks,
+            const RestLibrarySettings& settings);
+    void pruneExpiredCachedFiles(
+            const QList<RestLibraryTrack>& tracks,
+            const RestLibrarySettings& settings);
+    void pruneCacheSize(
+            const RestLibrarySettings& settings,
+            const QString& preservedFilePath = {});
+    QList<QFileInfo> cachedFileInfos(const RestLibrarySettings& settings) const;
+    QString existingCachedFilePath(
+            const RestLibrarySettings& settings,
+            const QString& remoteId) const;
     QString finalCachedFilePath(
             const RestLibrarySettings& settings,
             const RestLibraryTrack& track,
             const QNetworkReply& reply) const;
     void emitState(
+            const RestLibrarySettings& settings,
             const QString& remoteId,
             RestLibraryCacheState cacheState,
             const QString& cachedFilePath = {},
@@ -105,9 +129,12 @@ class RestLibraryCacheManager final : public QObject {
             int statusCode = 0,
             int networkError = 0);
     void cleanupActiveDownload(ActiveDownload* pDownload);
-    void removeActiveDownload(const QString& remoteId);
+    void removeActiveDownload(const QString& requestKey);
 
-    static QString cacheFileStem(const QString& remoteId);
+    static QString legacyCacheFileStem(const QString& remoteId);
+    static QString cacheFileStem(
+            const RestLibrarySettings& settings,
+            const QString& remoteId);
     static bool isCacheFileName(const QString& fileName);
     static QString normalizedExtension(QString extension);
     static QString extensionFromContentDisposition(const QByteArray& contentDisposition);
@@ -119,11 +146,11 @@ class RestLibraryCacheManager final : public QObject {
 
     QPointer<QNetworkAccessManager> m_pNetworkAccessManager;
     CacheFileFactory m_cacheFileFactory;
-    RestLibrarySettings m_settings;
-    QQueue<RestLibraryTrack> m_downloadQueue;
+    QQueue<PendingDownload> m_downloadQueue;
     QList<ActiveDownload> m_activeDownloads;
-    QHash<QString, bool> m_knownPendingRemoteIds;
+    QHash<QString, bool> m_knownPendingRequestKeys;
     QHash<QString, QString> m_remoteIdByCacheStem;
+    QHash<QString, QString> m_serverIdentityByCacheStem;
 };
 
 } // namespace mixxx::library::rest

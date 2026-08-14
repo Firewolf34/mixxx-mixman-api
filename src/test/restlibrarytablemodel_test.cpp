@@ -80,6 +80,9 @@ TEST_F(RestLibraryTableModelTest, ReadyRowsExposeLocalTrackLocation) {
             QStringLiteral("1"),
             RestLibraryCacheState::Ready,
             filePath,
+            {},
+            0,
+            0,
             {}});
 
     EXPECT_EQ(
@@ -114,7 +117,8 @@ TEST_F(RestLibraryTableModelTest, CacheFailureTooltipIncludesStatusContext) {
             {},
             QStringLiteral("Authentication failed"),
             401,
-            0});
+            0,
+            {}});
 
     const QString tooltip = model.data(model.index(0, 0), Qt::ToolTipRole).toString();
     EXPECT_TRUE(tooltip.contains(QStringLiteral("Authentication failed")));
@@ -134,4 +138,50 @@ TEST_F(RestLibraryTableModelTest, SearchFiltersVisibleRows) {
     EXPECT_EQ(
             model.data(model.index(0, model.fieldIndex(QStringLiteral("artist")))).toString(),
             QStringLiteral("Alpha"));
+}
+
+TEST_F(RestLibraryTableModelTest, CatalogUsesMixxxSearchOperatorsAndNumericSort) {
+    RestLibraryTableModel model(
+            nullptr,
+            trackCollectionManager(),
+            RestLibraryTableModel::Mode::Catalog);
+    RestLibraryTrack slow = newTrack(
+            QStringLiteral("1"), QStringLiteral("Beta"), QStringLiteral("Second"));
+    slow.bpm = 90.0;
+    slow.genre = QStringLiteral("House");
+    RestLibraryTrack fast = newTrack(
+            QStringLiteral("2"), QStringLiteral("Alpha"), QStringLiteral("First"));
+    fast.bpm = 132.0;
+    fast.genre = QStringLiteral("Techno");
+    model.setTracks({slow, fast});
+
+    model.search(QStringLiteral("artist:alpha OR bpm:90"));
+    EXPECT_EQ(model.rowCount(), 2);
+
+    model.search(QStringLiteral("genre:house"));
+    ASSERT_EQ(model.rowCount(), 1);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("1"));
+
+    model.search({});
+    const int bpmColumn = model.fieldIndex(QStringLiteral("bpm"));
+    model.sort(bpmColumn, Qt::AscendingOrder);
+    ASSERT_EQ(model.rowCount(), 2);
+    EXPECT_DOUBLE_EQ(model.data(model.index(0, bpmColumn)).toDouble(), 90.0);
+    EXPECT_DOUBLE_EQ(model.data(model.index(1, bpmColumn)).toDouble(), 132.0);
+    EXPECT_EQ(model.visibleRowForRemoteId(QStringLiteral("1")), 0);
+    EXPECT_EQ(model.visibleRowForRemoteId(QStringLiteral("2")), 1);
+    EXPECT_EQ(model.visibleRowForRemoteId(QStringLiteral("missing")), -1);
+}
+
+TEST_F(RestLibraryTableModelTest, CatalogLeavesLocalOnlySearchFieldsUnavailable) {
+    RestLibraryTableModel model(
+            nullptr,
+            trackCollectionManager(),
+            RestLibraryTableModel::Mode::Catalog);
+    model.setTracks({newTrack(
+            QStringLiteral("1"), QStringLiteral("Alpha"), QStringLiteral("First"))});
+
+    model.search(QStringLiteral("location:remote"));
+
+    EXPECT_EQ(model.rowCount(), 0);
 }

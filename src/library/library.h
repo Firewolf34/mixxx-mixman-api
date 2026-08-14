@@ -36,6 +36,8 @@ class WLibrary;
 class QAbstractItemModel;
 
 namespace mixxx::library::rest {
+class RestLibraryBackend;
+class RestLibraryBrowserFeature;
 class RestLibraryFeature;
 } // namespace mixxx::library::rest
 
@@ -202,6 +204,9 @@ class Library: public QObject {
     const static QString m_sTrackViewName;
     WLibrary* m_pLibraryWidget;
     parented_ptr<MixxxLibraryFeature> m_pMixxxLibraryFeature;
+    parented_ptr<mixxx::library::rest::RestLibraryBackend> m_pRestLibraryBackend;
+    parented_ptr<mixxx::library::rest::RestLibraryBrowserFeature>
+            m_pRestLibraryBrowserFeature;
     parented_ptr<AutoDJFeature> m_pAutoDJFeature;
     parented_ptr<mixxx::library::rest::RestLibraryFeature> m_pRestLibraryFeature;
     parented_ptr<PlaylistFeature> m_pPlaylistFeature;

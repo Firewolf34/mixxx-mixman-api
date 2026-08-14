@@ -29,6 +29,13 @@ class RestLibraryClient final : public QObject {
             QObject* parent = nullptr);
 
     void fetchTracks(const RestLibrarySettings& settings);
+    void fetchTrackCatalogPage(
+            const RestLibrarySettings& settings,
+            const QString& cursor = {});
+    void cancelTrackCatalogRequest();
+    int bufferedMetadataReplyCountForTesting() const {
+        return m_metadataResponseBodies.size();
+    }
     void lookupTrack(const RestLibrarySettings& settings, const TrackPointer& pTrack);
     void fetchRecommendations(
             const RestLibrarySettings& settings,
@@ -118,6 +125,9 @@ class RestLibraryClient final : public QObject {
             const QJsonDocument& document);
     static RestLibraryTrack parseTrackObjectForTesting(
             const QJsonObject& object);
+    static RestLibraryCatalogPage parseTrackCatalogPageForTesting(
+            const QJsonDocument& document,
+            bool* pValid = nullptr);
     static RestLibraryPolicyPath parsePolicyPathDocumentForTesting(
             const QJsonDocument& document);
     static QList<RestLibraryPolicyPreset> parsePolicyPresetsDocumentForTesting(
@@ -133,6 +143,9 @@ class RestLibraryClient final : public QObject {
 
   signals:
     void tracksFetched(const QList<mixxx::library::rest::RestLibraryTrack>& tracks);
+    void trackCatalogPageFetched(
+            const mixxx::library::rest::RestLibraryCatalogPage& page);
+    void trackCatalogFetchFailed(const QString& message);
     void trackLookupSucceeded(const QString& remoteId);
     void trackLookupMissed(const QString& message);
     void recommendationsFetched(
@@ -160,6 +173,7 @@ class RestLibraryClient final : public QObject {
 
   private slots:
     void slotTrackListFinished();
+    void slotTrackCatalogFinished();
     void slotTrackDetailFinished();
     void slotHealthFinished();
     void slotIndexStatusFinished();
@@ -282,6 +296,9 @@ class RestLibraryClient final : public QObject {
             const QJsonDocument& document,
             QStringList* pRemoteIds);
     static RestLibraryTrack parseTrackObject(const QJsonObject& object);
+    static RestLibraryCatalogPage parseTrackCatalogPage(
+            const QJsonDocument& document,
+            bool* pValid);
     static RestLibraryPolicyPath parsePolicyPathDocument(const QJsonDocument& document);
     static QList<RestLibraryPolicyPreset> parsePolicyPresetsDocument(
             const QJsonDocument& document);
@@ -302,11 +319,13 @@ class RestLibraryClient final : public QObject {
     static int readRating(const QJsonObject& object);
 
     QPointer<QNetworkAccessManager> m_pNetworkAccessManager;
+    QPointer<QNetworkReply> m_pTrackCatalogReply;
     RestLibrarySettings m_settings;
     QHash<QNetworkReply*, RequestContext> m_requestContexts;
     QHash<QNetworkReply*, QByteArray> m_metadataResponseBodies;
     QHash<int, TrackRequestBatch> m_trackBatches;
     int m_trackListRequestGeneration = 0;
+    int m_trackCatalogRequestGeneration = 0;
     int m_policyPathRequestGeneration = 0;
     int m_mixManDiagnosticsRequestGeneration = 0;
     int m_policyPresetsRequestGeneration = 0;

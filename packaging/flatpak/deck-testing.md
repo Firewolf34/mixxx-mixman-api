@@ -246,6 +246,11 @@ journalctl --user -u mixxx-deck-update.service
 - Confirm decks and controllers are detected after reconnecting them.
 - Exercise the REST recommendation library, MixMan session steering, and
   request diagnostics.
+- Open REST Library and load a multi-page MixMan catalog. Confirm search and
+  typed sorting work without audio requests, manual refresh retains the prior
+  catalog on failure, and audio downloads begin only after a deck, preview,
+  sampler, or AutoDJ action. Verify AutoDJ selection order and failed-download
+  reporting.
 - For MixMan v3, verify both a configured bearer-token deployment and an
   explicitly auth-disabled trusted-LAN deployment. Confirm the same stable room
   is resumed after restarting Mixxx, recommendation controls use the

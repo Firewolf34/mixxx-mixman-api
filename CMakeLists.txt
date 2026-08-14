@@ -1465,6 +1465,9 @@ add_library(
   src/library/rekordbox/rekordboxfeature.cpp
   src/library/rest/dlgrestlibrary.cpp
   src/library/rest/dlgrestlibrary.ui
+  src/library/rest/dlgrestlibrarybrowser.cpp
+  src/library/rest/restlibrarybackend.cpp
+  src/library/rest/restlibrarybrowserfeature.cpp
   src/library/rest/restlibrarycachemanager.cpp
   src/library/rest/restlibraryclient.cpp
   src/library/rest/restlibrarymutationsequencer.cpp

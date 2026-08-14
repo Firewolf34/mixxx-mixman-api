@@ -399,6 +399,14 @@ void WTrackTableView::initTrackMenu() {
             &WTrackMenu::loadTrackToPlayer,
             this,
             &WLibraryTableView::loadTrackToPlayer);
+    connect(m_pTrackMenu.get(),
+            &WTrackMenu::unresolvedTrackLoadToPlayerRequested,
+            this,
+            &WTrackTableView::unresolvedTrackLoadToPlayerRequested);
+    connect(m_pTrackMenu.get(),
+            &WTrackMenu::unresolvedTracksAddToAutoDJRequested,
+            this,
+            &WTrackTableView::unresolvedTracksAddToAutoDJRequested);
 
     connect(m_pTrackMenu,
             &WTrackMenu::trackMenuVisible,
@@ -440,6 +448,8 @@ void WTrackTableView::slotMouseDoubleClicked(const QModelIndex& index) {
         TrackPointer pTrack = pTrackModel->getTrack(index);
         if (pTrack) {
             emit loadTrack(pTrack);
+        } else {
+            emit unresolvedTrackLoadRequested(index);
         }
     } else if (doubleClickAction == DlgPrefLibrary::TrackDoubleClickAction::AddToAutoDJBottom &&
             pTrackModel->hasCapabilities(
@@ -1507,6 +1517,12 @@ void WTrackTableView::loadSelectedTrackToGroup(const QString& group,
 #else
         emit loadTrackToPlayer(pTrack, group, play);
 #endif
+    } else if (pTrackModel) {
+#ifdef __STEM__
+        emit unresolvedTrackLoadToPlayerRequested(index, group, stemMask, play);
+#else
+        emit unresolvedTrackLoadToPlayerRequested(index, group, play);
+#endif
     }
 }
 
@@ -1637,8 +1653,9 @@ void WTrackTableView::addToAutoDJ(PlaylistDAO::AutoDJSendLoc loc) {
     }
 
     const QList<TrackId> trackIds = getSelectedTrackIds();
-    if (trackIds.isEmpty()) {
-        qWarning() << "No tracks selected for AutoDJ";
+    const QModelIndexList selectedRows = getSelectedRows();
+    if (trackIds.size() != selectedRows.size()) {
+        emit unresolvedTracksAddToAutoDJRequested(selectedRows, loc);
         return;
     }
 
