@@ -16,12 +16,14 @@
 #include "moc_restlibrarybrowserfeature.cpp"
 #include "preferences/dialog/dlgprefdeck.h"
 #include "track/track.h"
+#include "util/logger.h"
 #include "widget/wlibrary.h"
 
 namespace mixxx::library::rest {
 
 namespace {
 const QString kViewName = QStringLiteral("REST Library");
+const Logger kLogger("RestLibraryBrowserFeature");
 }
 
 RestLibraryBrowserFeature::RestLibraryBrowserFeature(
@@ -176,6 +178,7 @@ void RestLibraryBrowserFeature::slotRefresh() {
     m_stagingTracks.clear();
     m_stagingRemoteIds.clear();
     m_seenCursors.clear();
+    m_catalogLimits.reset(settings.maxCatalogPages, settings.maxCatalogTracks);
     m_refreshSettings = settings;
     m_refreshing = true;
     m_pRefreshAction->setEnabled(false);
@@ -191,6 +194,15 @@ void RestLibraryBrowserFeature::requestNextCatalogPage(const QString& cursor) {
     if (!cursor.isEmpty()) {
         m_seenCursors.insert(cursor);
     }
+    if (m_catalogLimits.requestNextPage() ==
+            RestLibraryCatalogLimits::Result::PageLimitReached) {
+        const QString message = tr(
+                "REST Library catalog refresh reached the configured maximum of %1 pages.")
+                                        .arg(m_catalogLimits.maxPages());
+        kLogger.warning() << message;
+        slotCatalogFetchFailed(message);
+        return;
+    }
     m_client.fetchTrackCatalogPage(m_refreshSettings, cursor);
 }
 
@@ -205,6 +217,15 @@ void RestLibraryBrowserFeature::slotCatalogPageFetched(
         } else {
             setStatusText(tr("Configure a MixMan REST Library connection in Preferences."));
         }
+        return;
+    }
+    if (m_catalogLimits.acceptPage(page.tracks, m_stagingRemoteIds) ==
+            RestLibraryCatalogLimits::Result::TrackLimitReached) {
+        const QString message = tr(
+                "REST Library catalog refresh reached the configured maximum of %1 tracks.")
+                                        .arg(m_catalogLimits.maxTracks());
+        kLogger.warning() << message;
+        slotCatalogFetchFailed(message);
         return;
     }
     for (const RestLibraryTrack& track : page.tracks) {
@@ -231,6 +252,9 @@ void RestLibraryBrowserFeature::slotCatalogPageFetched(
     m_pBackend->cacheManager()->reconcileTracks(completedTracks, currentSettings);
     m_stagingRemoteIds.clear();
     m_seenCursors.clear();
+    m_catalogLimits.reset(
+            currentSettings.maxCatalogPages,
+            currentSettings.maxCatalogTracks);
     m_catalogLoaded = true;
     m_refreshing = false;
     m_pRefreshAction->setEnabled(true);
@@ -254,6 +278,9 @@ void RestLibraryBrowserFeature::slotCatalogFetchFailed(const QString& message) {
     m_stagingTracks.clear();
     m_stagingRemoteIds.clear();
     m_seenCursors.clear();
+    m_catalogLimits.reset(
+            currentSettings.maxCatalogPages,
+            currentSettings.maxCatalogTracks);
     setStatusText(message.isEmpty() ? tr("REST Library catalog refresh failed.") : message);
 }
 
@@ -494,6 +521,7 @@ bool RestLibraryBrowserFeature::resetIfSettingsChanged(
     m_stagingTracks.clear();
     m_stagingRemoteIds.clear();
     m_seenCursors.clear();
+    m_catalogLimits.reset(settings.maxCatalogPages, settings.maxCatalogTracks);
     m_pTableModel->setTracks({});
     m_catalogLoaded = false;
     m_refreshing = false;

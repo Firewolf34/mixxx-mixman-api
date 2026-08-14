@@ -248,6 +248,13 @@ Before changing the deck pipeline, read:
   value, and ignore stale mutation completions. Keep JSON responses bounded to
   4 MiB after decompression with the 15-second transfer timeout; cache audio
   directly to temporary files and discard partial, failed, or oversized files.
+- Changing the REST credential scope must clear the displayed bearer token;
+  require explicit token entry for the new server and retain the old keychain
+  entry only under its old scope.
+- Clean MixMan shutdown may wait at most one second for instance disconnect;
+  abort on timeout and rely on server expiry. Catalog refreshes must enforce
+  configured positive page and unique-track limits, warn visibly when reached,
+  and retain the prior completed catalog.
 
 - Default manifest:
   `https://forge.polinaria.world/artifacts/latest.json`

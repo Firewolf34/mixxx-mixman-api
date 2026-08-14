@@ -252,7 +252,8 @@ journalctl --user -u mixxx-deck-update.service
   sampler, or AutoDJ action. Verify AutoDJ selection order and failed-download
   reporting. While recommendation prefetch is queued, request a different deck
   track and confirm that it starts next without cancelling any shared browser
-  or AutoDJ download.
+  or AutoDJ download. Set a small catalog page or track limit and confirm the
+  visible limit warning retains the prior completed catalog.
 - For MixMan v3, verify both a configured bearer-token deployment and an
   explicitly auth-disabled trusted-LAN deployment. Confirm the same stable room
   is resumed after restarting Mixxx, recommendation controls use the

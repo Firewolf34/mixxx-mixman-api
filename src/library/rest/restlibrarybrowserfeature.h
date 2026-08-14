@@ -7,6 +7,7 @@
 #include "library/dao/playlistdao.h"
 #include "library/libraryfeature.h"
 #include "library/rest/restlibrarybackend.h"
+#include "library/rest/restlibrarycataloglimits.h"
 #include "library/rest/restlibraryclient.h"
 #include "library/rest/restlibrarytablemodel.h"
 #include "library/treeitemmodel.h"
@@ -120,6 +121,7 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     QList<RestLibraryTrack> m_stagingTracks;
     QSet<QString> m_stagingRemoteIds;
     QSet<QString> m_seenCursors;
+    RestLibraryCatalogLimits m_catalogLimits;
     QString m_settingsIdentity;
     QString m_pendingDefaultLoadRemoteId;
     QHash<QString, PlayerLoadIntent> m_pendingPlayerLoads;

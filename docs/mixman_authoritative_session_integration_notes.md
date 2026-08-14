@@ -84,8 +84,10 @@ chunked reads, and discard temporary files after short or failed writes.
 The separate REST Library pane reads MixMan's hydrated, cursor-paginated track
 catalog on first activation and explicit refresh. Metadata stays in process
 memory and a refresh replaces the displayed snapshot only after every page has
-loaded successfully. Browsing, search, sort, and selection never download
-audio or artwork.
+loaded successfully. Configurable page and unique-track limits (defaulting to
+500 pages and 10,000 tracks) stop pathological pagination with a visible
+warning while retaining the prior completed snapshot. Browsing, search, sort,
+and selection never download audio or artwork.
 
 Deck, preview, sampler, and AutoDJ actions download only the selected tracks to
 the configured cache. Cache identity includes the normalized MixMan server URL

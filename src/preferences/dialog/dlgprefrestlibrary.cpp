@@ -1,5 +1,7 @@
 #include "preferences/dialog/dlgprefrestlibrary.h"
 
+#include <limits>
+
 #include <QCheckBox>
 #include <QDir>
 #include <QFileDialog>
@@ -73,6 +75,12 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(
     m_pUi->setupUi(this);
 
     m_pUi->spinBoxPageSize->setRange(restConfig::kMinPageSize, restConfig::kMaxPageSize);
+    m_pUi->spinBoxMaxCatalogPages->setRange(
+            restConfig::kMinCatalogLimit,
+            std::numeric_limits<int>::max());
+    m_pUi->spinBoxMaxCatalogTracks->setRange(
+            restConfig::kMinCatalogLimit,
+            std::numeric_limits<int>::max());
     m_pUi->spinBoxRecommendationLimit->setRange(
             restConfig::kMinRecommendationLimit,
             restConfig::kMaxRecommendationLimit);
@@ -145,6 +153,14 @@ DlgPrefRestLibrary::DlgPrefRestLibrary(
             QOverload<int>::of(&QSpinBox::valueChanged),
             this,
             updateValidation);
+    connect(m_pUi->spinBoxMaxCatalogPages,
+            QOverload<int>::of(&QSpinBox::valueChanged),
+            this,
+            updateValidation);
+    connect(m_pUi->spinBoxMaxCatalogTracks,
+            QOverload<int>::of(&QSpinBox::valueChanged),
+            this,
+            updateValidation);
     connect(m_pUi->spinBoxRecommendationLimit,
             QOverload<int>::of(&QSpinBox::valueChanged),
             this,
@@ -200,6 +216,8 @@ void DlgPrefRestLibrary::slotUpdate() {
     m_pUi->lineEditBaseUrl->setText(m_pConfig->getValueString(restConfig::kBaseUrlKey));
     m_pUi->lineEditBearerToken->setText(settings.bearerToken);
     m_pUi->spinBoxPageSize->setValue(settings.pageSize);
+    m_pUi->spinBoxMaxCatalogPages->setValue(settings.maxCatalogPages);
+    m_pUi->spinBoxMaxCatalogTracks->setValue(settings.maxCatalogTracks);
     m_pUi->checkBoxUseMixManDefaults->setChecked(settings.useMixManDefaults);
     m_pUi->lineEditMixManSessionId->setText(settings.mixManSessionId);
     m_pUi->spinBoxMixManPathDepth->setValue(settings.mixManPathDepth);
@@ -243,6 +261,8 @@ void DlgPrefRestLibrary::slotResetToDefaults() {
     m_pUi->lineEditBaseUrl->clear();
     m_pUi->lineEditBearerToken->clear();
     m_pUi->spinBoxPageSize->setValue(restConfig::kDefaultPageSize);
+    m_pUi->spinBoxMaxCatalogPages->setValue(restConfig::kDefaultMaxCatalogPages);
+    m_pUi->spinBoxMaxCatalogTracks->setValue(restConfig::kDefaultMaxCatalogTracks);
     m_pUi->checkBoxUseMixManDefaults->setChecked(restConfig::kDefaultUseMixManDefaults);
     m_pUi->lineEditMixManSessionId->clear();
     m_pUi->spinBoxMixManPathDepth->setValue(restConfig::kDefaultMixManPathDepth);
@@ -288,6 +308,10 @@ void DlgPrefRestLibrary::slotUpdateCacheControls(bool enabled) {
 }
 
 void DlgPrefRestLibrary::slotUpdateMixManDefaultsControls(bool enabled) {
+    m_pUi->labelMaxCatalogPages->setEnabled(enabled);
+    m_pUi->spinBoxMaxCatalogPages->setEnabled(enabled);
+    m_pUi->labelMaxCatalogTracks->setEnabled(enabled);
+    m_pUi->spinBoxMaxCatalogTracks->setEnabled(enabled);
     m_pUi->labelMixManSessionId->setEnabled(enabled);
     m_pUi->lineEditMixManSessionId->setEnabled(enabled);
     m_pUi->labelTrackListPath->setEnabled(!enabled);
@@ -521,6 +545,8 @@ RestLibrarySettings DlgPrefRestLibrary::settingsFromUi() const {
     settings.bearerTokenKeychainAccount =
             mixxx::library::rest::bearerTokenAccountForUrl(settings.baseUrl);
     settings.pageSize = m_pUi->spinBoxPageSize->value();
+    settings.maxCatalogPages = m_pUi->spinBoxMaxCatalogPages->value();
+    settings.maxCatalogTracks = m_pUi->spinBoxMaxCatalogTracks->value();
     settings.useMixManDefaults = m_pUi->checkBoxUseMixManDefaults->isChecked();
     settings.mixManSessionId = m_pUi->lineEditMixManSessionId->text().trimmed();
     settings.mixManPathDepth = m_pUi->spinBoxMixManPathDepth->value();
@@ -633,6 +659,12 @@ bool DlgPrefRestLibrary::writeSettings() {
             restConfig::kBearerTokenKeychainAccountKey,
             settings.bearerTokenKeychainAccount);
     m_pConfig->setValue(restConfig::kPageSizeKey, m_pUi->spinBoxPageSize->value());
+    m_pConfig->setValue(
+            restConfig::kMaxCatalogPagesKey,
+            m_pUi->spinBoxMaxCatalogPages->value());
+    m_pConfig->setValue(
+            restConfig::kMaxCatalogTracksKey,
+            m_pUi->spinBoxMaxCatalogTracks->value());
     m_pConfig->setValue(
             restConfig::kUseMixManDefaultsKey,
             m_pUi->checkBoxUseMixManDefaults->isChecked());

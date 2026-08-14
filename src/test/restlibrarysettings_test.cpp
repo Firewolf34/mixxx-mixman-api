@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include <QHash>
 
 #include "library/rest/restlibrarysettings.h"
@@ -60,6 +62,8 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     config()->setValue(restConfig::kCacheEnabledKey, false);
     config()->setValue(restConfig::kCacheDirectoryKey, QStringLiteral("C:/mixxx/rest-cache"));
     config()->setValue(restConfig::kPageSizeKey, 25);
+    config()->setValue(restConfig::kMaxCatalogPagesKey, 600);
+    config()->setValue(restConfig::kMaxCatalogTracksKey, 25000);
     config()->setValue(restConfig::kRecommendationLimitKey, 7);
     config()->setValue(restConfig::kMixManPathDepthKey, 8);
     config()->setValue(restConfig::kMixManPolicyPresetKey, QStringLiteral("explore"));
@@ -89,6 +93,8 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     EXPECT_EQ(settings.audioDownloadPathTemplate, QStringLiteral("/audio/%1"));
     EXPECT_EQ(settings.cacheDirectoryPath, QStringLiteral("C:/mixxx/rest-cache"));
     EXPECT_EQ(settings.pageSize, 25);
+    EXPECT_EQ(settings.maxCatalogPages, 600);
+    EXPECT_EQ(settings.maxCatalogTracks, 25000);
     EXPECT_EQ(settings.recommendationLimit, 7);
     EXPECT_EQ(settings.mixManPathDepth, 8);
     EXPECT_EQ(settings.mixManPolicyPreset, QStringLiteral("explore"));
@@ -118,6 +124,8 @@ TEST_F(RestLibrarySettingsTest, UsesDefaultsAndFallbackCacheDirectory) {
     EXPECT_EQ(settings.recommendationPathTemplate, restConfig::mixManRecommendationPathTemplate());
     EXPECT_EQ(settings.audioDownloadPathTemplate, restConfig::mixManAudioDownloadPathTemplate());
     EXPECT_EQ(settings.pageSize, restConfig::kDefaultPageSize);
+    EXPECT_EQ(settings.maxCatalogPages, restConfig::kDefaultMaxCatalogPages);
+    EXPECT_EQ(settings.maxCatalogTracks, restConfig::kDefaultMaxCatalogTracks);
     EXPECT_EQ(settings.recommendationLimit, restConfig::kDefaultRecommendationLimit);
     EXPECT_EQ(settings.mixManPathDepth, restConfig::kDefaultMixManPathDepth);
     EXPECT_EQ(settings.mixManPolicyPreset, QStringLiteral("dj_assist"));
@@ -142,6 +150,8 @@ TEST_F(RestLibrarySettingsTest, GeneratesValidStableMixManSessionId) {
 
 TEST_F(RestLibrarySettingsTest, ClampsNumericValues) {
     config()->setValue(restConfig::kPageSizeKey, restConfig::kMaxPageSize + 1);
+    config()->setValue(restConfig::kMaxCatalogPagesKey, restConfig::kMinCatalogLimit - 1);
+    config()->setValue(restConfig::kMaxCatalogTracksKey, std::numeric_limits<int>::max());
     config()->setValue(
             restConfig::kRecommendationLimitKey,
             restConfig::kMinRecommendationLimit - 1);
@@ -163,6 +173,8 @@ TEST_F(RestLibrarySettingsTest, ClampsNumericValues) {
     const RestLibrarySettings settings = readSettings();
 
     EXPECT_EQ(settings.pageSize, restConfig::kMaxPageSize);
+    EXPECT_EQ(settings.maxCatalogPages, restConfig::kMinCatalogLimit);
+    EXPECT_EQ(settings.maxCatalogTracks, std::numeric_limits<int>::max());
     EXPECT_EQ(settings.recommendationLimit, restConfig::kMinRecommendationLimit);
     EXPECT_EQ(settings.mixManPathDepth, restConfig::kMaxMixManPathDepth);
     EXPECT_EQ(settings.mixManTargetEnergy, restConfig::kMinMixManTargetEnergy);

@@ -343,6 +343,16 @@ RestLibrarySettings RestLibrarySettings::fromConfig(
             pConfig->getValue<int>(config::kPageSizeKey, config::kDefaultPageSize),
             config::kMinPageSize,
             config::kMaxPageSize);
+    settings.maxCatalogPages = std::max(
+            config::kMinCatalogLimit,
+            pConfig->getValue<int>(
+                    config::kMaxCatalogPagesKey,
+                    config::kDefaultMaxCatalogPages));
+    settings.maxCatalogTracks = std::max(
+            config::kMinCatalogLimit,
+            pConfig->getValue<int>(
+                    config::kMaxCatalogTracksKey,
+                    config::kDefaultMaxCatalogTracks));
     settings.recommendationLimit = std::clamp(
             pConfig->getValue<int>(
                     config::kRecommendationLimitKey,

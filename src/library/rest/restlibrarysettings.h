@@ -60,6 +60,12 @@ inline const ConfigKey kMaxConcurrentDownloadsKey(
         QStringLiteral("[RestLibrary]"),
         QStringLiteral("MaxConcurrentDownloads"));
 inline const ConfigKey kPageSizeKey(QStringLiteral("[RestLibrary]"), QStringLiteral("PageSize"));
+inline const ConfigKey kMaxCatalogPagesKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MaxCatalogPages"));
+inline const ConfigKey kMaxCatalogTracksKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MaxCatalogTracks"));
 inline const ConfigKey kRecommendationLimitKey(
         QStringLiteral("[RestLibrary]"),
         QStringLiteral("RecommendationLimit"));
@@ -107,6 +113,9 @@ constexpr bool kDefaultMixManAdminApprovedOnly = true;
 constexpr int kDefaultPageSize = 50;
 constexpr int kMinPageSize = 1;
 constexpr int kMaxPageSize = 200;
+constexpr int kDefaultMaxCatalogPages = 500;
+constexpr int kDefaultMaxCatalogTracks = 10000;
+constexpr int kMinCatalogLimit = 1;
 constexpr int kDefaultRecommendationLimit = 10;
 constexpr int kMinRecommendationLimit = 1;
 constexpr int kMaxRecommendationLimit = 20;
@@ -189,6 +198,8 @@ class RestLibrarySettings final {
     QString mixManPolicyPreset;
     QString mixManTargetColor;
     int pageSize = config::kDefaultPageSize;
+    int maxCatalogPages = config::kDefaultMaxCatalogPages;
+    int maxCatalogTracks = config::kDefaultMaxCatalogTracks;
     int recommendationLimit = config::kDefaultRecommendationLimit;
     int mixManPathDepth = config::kDefaultMixManPathDepth;
     int mixManTargetEnergy = config::kDefaultMixManTargetEnergy;

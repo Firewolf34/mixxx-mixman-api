@@ -66,6 +66,8 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     config()->setValue(restConfig::kCacheEnabledKey, true);
     config()->setValue(restConfig::kCacheDirectoryKey, QStringLiteral("C:/cache"));
     config()->setValue(restConfig::kPageSizeKey, 30);
+    config()->setValue(restConfig::kMaxCatalogPagesKey, 700);
+    config()->setValue(restConfig::kMaxCatalogTracksKey, 20000);
     config()->setValue(restConfig::kCacheMaxMegabytesKey, 512);
     config()->setValue(restConfig::kCacheMaxAgeDaysKey, 10);
     config()->setValue(restConfig::kMaxConcurrentDownloadsKey, 3);
@@ -87,6 +89,8 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     auto* pAudioDownload = requireChild<QLineEdit>(&page, "lineEditAudioDownloadPathTemplate");
     auto* pCacheDirectory = requireChild<QLineEdit>(&page, "lineEditCacheDirectory");
     auto* pPageSize = requireChild<QSpinBox>(&page, "spinBoxPageSize");
+    auto* pMaxCatalogPages = requireChild<QSpinBox>(&page, "spinBoxMaxCatalogPages");
+    auto* pMaxCatalogTracks = requireChild<QSpinBox>(&page, "spinBoxMaxCatalogTracks");
     auto* pRecommendationLimit = requireChild<QSpinBox>(&page, "spinBoxRecommendationLimit");
     auto* pCacheMaxMegabytes = requireChild<QSpinBox>(&page, "spinBoxCacheMaxMegabytes");
     auto* pCacheMaxAgeDays = requireChild<QSpinBox>(&page, "spinBoxCacheMaxAgeDays");
@@ -108,6 +112,8 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     EXPECT_EQ(pAudioDownload->text(), QStringLiteral("/old/%1/audio"));
     EXPECT_EQ(pCacheDirectory->text(), QStringLiteral("C:/cache"));
     EXPECT_EQ(pPageSize->value(), 30);
+    EXPECT_EQ(pMaxCatalogPages->value(), 700);
+    EXPECT_EQ(pMaxCatalogTracks->value(), 20000);
     EXPECT_EQ(pCacheMaxMegabytes->value(), 512);
     EXPECT_EQ(pCacheMaxAgeDays->value(), 10);
     EXPECT_EQ(pMaxConcurrentDownloads->value(), 3);
@@ -125,6 +131,8 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     pAudioDownload->setText(QStringLiteral("/tracks/%1/audio"));
     pCacheDirectory->setText(QStringLiteral("D:\\rest-cache"));
     pPageSize->setValue(40);
+    pMaxCatalogPages->setValue(800);
+    pMaxCatalogTracks->setValue(30000);
     pRecommendationLimit->setValue(8);
     pCacheMaxMegabytes->setValue(1024);
     pCacheMaxAgeDays->setValue(20);
@@ -161,6 +169,8 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
             config()->getValueString(restConfig::kCacheDirectoryKey),
             QDir::fromNativeSeparators(QStringLiteral("D:\\rest-cache")));
     EXPECT_EQ(config()->getValue(restConfig::kPageSizeKey, 0), 40);
+    EXPECT_EQ(config()->getValue(restConfig::kMaxCatalogPagesKey, 0), 800);
+    EXPECT_EQ(config()->getValue(restConfig::kMaxCatalogTracksKey, 0), 30000);
     EXPECT_EQ(config()->getValue(restConfig::kRecommendationLimitKey, 0), 8);
     EXPECT_EQ(config()->getValue(restConfig::kCacheMaxMegabytesKey, 0), 1024);
     EXPECT_EQ(config()->getValue(restConfig::kCacheMaxAgeDaysKey, 0), 20);
@@ -177,6 +187,12 @@ TEST_F(DlgPrefRestLibraryTest, ResetToDefaultsRestoresDefaultValues) {
     EXPECT_EQ(
             requireChild<QSpinBox>(&page, "spinBoxPageSize")->value(),
             restConfig::kDefaultPageSize);
+    EXPECT_EQ(
+            requireChild<QSpinBox>(&page, "spinBoxMaxCatalogPages")->value(),
+            restConfig::kDefaultMaxCatalogPages);
+    EXPECT_EQ(
+            requireChild<QSpinBox>(&page, "spinBoxMaxCatalogTracks")->value(),
+            restConfig::kDefaultMaxCatalogTracks);
     EXPECT_EQ(
             requireChild<QSpinBox>(&page, "spinBoxRecommendationLimit")->value(),
             restConfig::kDefaultRecommendationLimit);
@@ -197,6 +213,12 @@ TEST_F(DlgPrefRestLibraryTest, ResetToDefaultsRestoresDefaultValues) {
 
     EXPECT_FALSE(config()->getValue(restConfig::kEnabledKey, true));
     EXPECT_EQ(config()->getValue(restConfig::kPageSizeKey, 0), restConfig::kDefaultPageSize);
+    EXPECT_EQ(
+            config()->getValue(restConfig::kMaxCatalogPagesKey, 0),
+            restConfig::kDefaultMaxCatalogPages);
+    EXPECT_EQ(
+            config()->getValue(restConfig::kMaxCatalogTracksKey, 0),
+            restConfig::kDefaultMaxCatalogTracks);
     EXPECT_EQ(
             config()->getValue(restConfig::kRecommendationLimitKey, 0),
             restConfig::kDefaultRecommendationLimit);

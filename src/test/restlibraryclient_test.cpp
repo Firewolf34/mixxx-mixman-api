@@ -7,6 +7,7 @@
 #include <QStringList>
 
 #include "library/rest/restlibraryclient.h"
+#include "library/rest/restlibrarycataloglimits.h"
 #include "test/mock_networkaccessmanager.h"
 #include "track/track.h"
 
@@ -171,6 +172,37 @@ TEST(RestLibraryClientTest, ParsesHydratedCatalogPage) {
     EXPECT_DOUBLE_EQ(page.tracks.constFirst().favour, 0.75);
     EXPECT_DOUBLE_EQ(page.tracks.constFirst().energy, 0.6);
     EXPECT_EQ(page.nextCursor, QStringLiteral("cursor-2"));
+}
+
+TEST(RestLibraryCatalogLimitsTest, StopsBeforeRequestingMoreThanConfiguredPages) {
+    mixxx::library::rest::RestLibraryCatalogLimits limits;
+    limits.reset(2, 10);
+
+    EXPECT_EQ(limits.requestNextPage(),
+            mixxx::library::rest::RestLibraryCatalogLimits::Result::Allowed);
+    EXPECT_EQ(limits.requestNextPage(),
+            mixxx::library::rest::RestLibraryCatalogLimits::Result::Allowed);
+    EXPECT_EQ(limits.requestNextPage(),
+            mixxx::library::rest::RestLibraryCatalogLimits::Result::PageLimitReached);
+}
+
+TEST(RestLibraryCatalogLimitsTest, RejectsPageThatWouldExceedUniqueTrackLimit) {
+    mixxx::library::rest::RestLibraryCatalogLimits limits;
+    limits.reset(10, 2);
+    QSet<QString> existingRemoteIds{QStringLiteral("1")};
+    mixxx::library::rest::RestLibraryTrack firstTrack;
+    firstTrack.remoteId = QStringLiteral("1");
+    mixxx::library::rest::RestLibraryTrack secondTrack;
+    secondTrack.remoteId = QStringLiteral("2");
+    mixxx::library::rest::RestLibraryTrack thirdTrack;
+    thirdTrack.remoteId = QStringLiteral("3");
+    const QList<mixxx::library::rest::RestLibraryTrack> pageTracks{
+            firstTrack,
+            secondTrack,
+            thirdTrack};
+
+    EXPECT_EQ(limits.acceptPage(pageTracks, existingRemoteIds),
+            mixxx::library::rest::RestLibraryCatalogLimits::Result::TrackLimitReached);
 }
 
 TEST(RestLibraryClientTest, RejectsMalformedHydratedCatalogPage) {
