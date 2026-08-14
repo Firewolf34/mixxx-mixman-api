@@ -57,7 +57,7 @@ class RestLibraryClient final : public QObject {
             const QString& sessionId,
             const RestLibrarySessionCredentials& credentials = {},
             const QJsonObject& metadata = {});
-    void disconnectMixManSessionInstance(
+    QNetworkReply* disconnectMixManSessionInstance(
             const RestLibrarySettings& settings,
             const QString& sessionId,
             const QString& instanceId);

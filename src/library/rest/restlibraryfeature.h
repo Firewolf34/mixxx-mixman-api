@@ -36,6 +36,7 @@ class RestLibraryFeature final : public LibraryFeature {
     bool hasTrackTable() override {
         return true;
     }
+    void shutdown();
 
   public slots:
     void activate() override;
@@ -161,6 +162,7 @@ class RestLibraryFeature final : public LibraryFeature {
     bool m_playbackControlClaimPending = false;
     bool m_playbackControlReleasePending = false;
     bool m_playbackLeaseOwned = false;
+    bool m_shutdownStarted = false;
 
   signals:
     void statusTextChanged(const QString& statusText);

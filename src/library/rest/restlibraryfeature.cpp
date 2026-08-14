@@ -3,11 +3,14 @@
 #include <algorithm>
 
 #include <QDir>
+#include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMenu>
 #include <QNetworkReply>
+#include <QPointer>
 #include <QStringList>
+#include <QTimer>
 #include <QUrl>
 
 #include "controllers/keyboard/keyboardeventfilter.h"
@@ -43,6 +46,7 @@ const QString kPlaybackControlReleaseOperation =
 constexpr int kSessionHeartbeatIntervalMillis = 30000;
 constexpr int kDefaultPlaybackLeaseRenewIntervalMillis = 10000;
 constexpr int kDefaultPlaybackPauseGraceMillis = 15000;
+constexpr int kShutdownDisconnectTimeoutMillis = 1000;
 constexpr qsizetype kMaxRecentRemoteIds = 20;
 
 using MutationKind = RestLibraryMutationSequencer::Kind;
@@ -222,14 +226,43 @@ RestLibraryFeature::RestLibraryFeature(
 }
 
 RestLibraryFeature::~RestLibraryFeature() {
+    shutdown();
+}
+
+void RestLibraryFeature::shutdown() {
+    if (m_shutdownStarted) {
+        return;
+    }
+    m_shutdownStarted = true;
+    m_sessionHeartbeatTimer.stop();
+    m_playbackLeaseRenewTimer.stop();
+    m_playbackLeaseReleaseTimer.stop();
+    m_authorityReconcileTimer.stop();
+
     if (!m_mixManSession.id.isEmpty() &&
             !m_mixManRegistration.instance.instanceId.isEmpty()) {
-        m_client.disconnectMixManSessionInstance(
+        QPointer<QNetworkReply> pReply = m_client.disconnectMixManSessionInstance(
                 m_mixManSessionSettings.isConfigured()
                         ? m_mixManSessionSettings
                         : RestLibrarySettings::fromConfig(m_pConfig),
                 m_mixManSession.id,
                 m_mixManRegistration.instance.instanceId);
+        if (!pReply || pReply->isFinished()) {
+            return;
+        }
+
+        QEventLoop eventLoop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        timeout.setInterval(kShutdownDisconnectTimeoutMillis);
+        connect(pReply, &QNetworkReply::finished, &eventLoop, &QEventLoop::quit);
+        connect(&timeout, &QTimer::timeout, &eventLoop, &QEventLoop::quit);
+        timeout.start();
+        eventLoop.exec(QEventLoop::ExcludeUserInputEvents);
+        if (pReply && !pReply->isFinished()) {
+            kLogger.warning() << "Timed out waiting for MixMan session disconnect";
+            pReply->abort();
+        }
     }
 }
 

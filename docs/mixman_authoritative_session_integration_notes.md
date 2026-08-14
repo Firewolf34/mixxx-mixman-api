@@ -38,7 +38,9 @@ QtKeychain, scoped to server, room, application, and surface. A rejected resume
 is deleted and retried as a fresh instance. If secure storage is unavailable,
 the current process remains usable but no plaintext resume fallback is made.
 Clean shutdown and reconfiguration disconnect the instance; server expiry is
-the fallback for abrupt termination.
+the fallback for abrupt termination. Shutdown gives the disconnect request up
+to one second to complete before aborting it rather than delaying Mixxx exit
+indefinitely.
 
 ## Playback authority and ordering
 

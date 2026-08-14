@@ -663,13 +663,13 @@ void RestLibraryClient::startMixManSessionCreate(
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionCreateFinished);
 }
 
-void RestLibraryClient::disconnectMixManSessionInstance(
+QNetworkReply* RestLibraryClient::disconnectMixManSessionInstance(
         const RestLibrarySettings& settings,
         const QString& sessionId,
         const QString& instanceId) {
     m_settings = settings;
     if (!m_pNetworkAccessManager || sessionId.trimmed().isEmpty() || instanceId.trimmed().isEmpty()) {
-        return;
+        return nullptr;
     }
     QNetworkReply* pReply = m_pNetworkAccessManager->post(
             newJsonRequest(config::mixManSessionInstanceDisconnectPath(
@@ -681,6 +681,7 @@ void RestLibraryClient::disconnectMixManSessionInstance(
     pReply->setProperty(kRequestGenerationProperty, m_sessionRequestGeneration);
     pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryClient::slotSessionWriteFinished);
+    return pReply;
 }
 
 void RestLibraryClient::fetchMixManSession(

@@ -324,6 +324,9 @@ TrackAnalysisScheduler::Pointer Library::createTrackAnalysisScheduler(
 }
 
 void Library::stopPendingTasks() {
+    if (m_pRestLibraryFeature) {
+        m_pRestLibraryFeature->shutdown();
+    }
     if (m_pAnalysisFeature) {
         m_pAnalysisFeature->stopAnalysis();
     }

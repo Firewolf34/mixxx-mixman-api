@@ -682,6 +682,29 @@ TEST(RestLibraryClientTest, ReportsMalformedOrEmptyPayload) {
     EXPECT_EQ(failedSpy.count(), 1);
 }
 
+TEST(RestLibraryClientTest, DisconnectMixManSessionInstanceReturnsActiveReply) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    MockNetworkReply* pExpectedReply = network.ExpectPost(
+            QStringLiteral("/api/v3/sessions/session-1/instances/inst-test/disconnect"),
+            {},
+            {},
+            204,
+            {});
+
+    QNetworkReply* pReply = client.disconnectMixManSessionInstance(
+            newMixManSettings(), QStringLiteral("session-1"), QStringLiteral("inst-test"));
+
+    ASSERT_EQ(pReply, pExpectedReply);
+    EXPECT_FALSE(pReply->isFinished());
+    pExpectedReply->Done();
+    ASSERT_EQ(statusSpy.count(), 1);
+    EXPECT_TRUE(statusSpy.takeFirst().at(0)
+                        .value<mixxx::library::rest::RestLibrarySessionWriteStatus>()
+                        .success);
+}
+
 TEST(RestLibraryClientTest, TestsMixManConnectionSuccessfully) {
     MockNetworkAccessManager network;
     RestLibraryClient client(&network);
