@@ -2658,12 +2658,13 @@ void RestLibraryClient::slotSessionWriteFinished() {
             status.operation == kSessionPlaybackControlReleaseOperation ||
             status.operation == kSessionCandidateSelectOperation ||
             status.operation == kSessionPolicyRefreshOperation) {
-        const bool staleAuthoritativeReply =
-                pReply->property(kAuthoritativeGenerationProperty).toInt() !=
-                m_sessionAuthoritativeGeneration;
         QJsonParseError parseError;
         const QJsonDocument document = QJsonDocument::fromJson(responseBody, &parseError);
-        if (!staleAuthoritativeReply && parseError.error == QJsonParseError::NoError) {
+        // Successful mutations return a revisioned authoritative state. Do not
+        // discard it merely because a later read was started: that read may
+        // have observed the state before this mutation committed. Consumers
+        // compare server revisions before applying out-of-order responses.
+        if (parseError.error == QJsonParseError::NoError) {
             const RestLibrarySession session = parseSessionDocument(document);
             if (!session.id.isEmpty() || !session.authoritative.raw.isEmpty()) {
                 emit mixManSessionFetched(session);

@@ -1740,6 +1740,56 @@ TEST(RestLibraryClientTest, PublishesMixManSessionPlayback) {
     EXPECT_EQ(session.authoritative.policyPath.candidates.at(0).remoteId, QStringLiteral("9"));
 }
 
+TEST(RestLibraryClientTest, KeepsPlaybackStateWhenAReadStartsAfterTheWrite) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy fetchedSpy(&client, &RestLibraryClient::mixManSessionFetched);
+    MockNetworkReply* pPlaybackReply = network.ExpectPost(
+            QStringLiteral("/api/v3/sessions/session-1/playback"),
+            {},
+            {QStringLiteral("\"current_track_id\":8")},
+            200,
+            R"json({
+              "session": {"id": "session-1"},
+              "authoritative": {
+                "session_id": "session-1",
+                "revision": 3,
+                "candidates": [{"track_id": 9, "title": "Fresh"}]
+              }
+            })json");
+    MockNetworkReply* pFetchReply = network.ExpectGet(
+            QStringLiteral("/api/v3/sessions/session-1/state"),
+            {{QStringLiteral("instance_id"), QStringLiteral("inst-1")}},
+            200,
+            R"json({
+              "session": {"id": "session-1"},
+              "authoritative": {"session_id": "session-1", "revision": 2}
+            })json");
+    mixxx::library::rest::RestLibrarySessionPlayback playback;
+    playback.currentTrackId = QStringLiteral("8");
+
+    client.publishMixManSessionPlayback(
+            newMixManSettings(), QStringLiteral("session-1"), playback, 42);
+    client.fetchMixManSession(newMixManSettings(),
+            QStringLiteral("session-1"),
+            QStringLiteral("inst-1"));
+    pFetchReply->Done();
+    pPlaybackReply->Done();
+
+    ASSERT_EQ(fetchedSpy.count(), 2);
+    const auto oldSession =
+            qvariant_cast<mixxx::library::rest::RestLibrarySession>(
+                    fetchedSpy.takeFirst().at(0));
+    EXPECT_EQ(oldSession.authoritative.revision, 2);
+    const auto freshSession =
+            qvariant_cast<mixxx::library::rest::RestLibrarySession>(
+                    fetchedSpy.takeFirst().at(0));
+    EXPECT_EQ(freshSession.authoritative.revision, 3);
+    ASSERT_EQ(freshSession.authoritative.policyPath.candidates.size(), 1);
+    EXPECT_EQ(freshSession.authoritative.policyPath.candidates.at(0).remoteId,
+            QStringLiteral("9"));
+}
+
 TEST(RestLibraryClientTest, ClaimsMixManPlaybackControlAsMixxx) {
     MockNetworkAccessManager network;
     RestLibraryClient client(&network);

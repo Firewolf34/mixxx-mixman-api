@@ -26,6 +26,9 @@ TEST(DlgRestLibraryTest, ExposesLibraryViewContractAndSignals) {
     EXPECT_TRUE(hasSignal(metaObject, "targetColorChanged(bool,QString)"));
     EXPECT_TRUE(hasSignal(metaObject, "targetBpmChanged(bool,int)"));
     EXPECT_TRUE(hasSignal(metaObject, "rerollRequested()"));
+    EXPECT_TRUE(hasSignal(metaObject, "autoDJToggleRequested(bool)"));
+    EXPECT_TRUE(hasSignal(metaObject, "autoDJFadeNowRequested()"));
+    EXPECT_TRUE(hasSignal(metaObject, "autoDJSkipNextRequested()"));
     EXPECT_TRUE(hasSignal(metaObject, "loadTrack(TrackPointer)"));
     EXPECT_TRUE(hasSignal(metaObject, "trackSelected(TrackPointer)"));
 }

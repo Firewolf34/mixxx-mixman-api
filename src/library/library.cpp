@@ -100,10 +100,14 @@ Library::Library(
 
     m_pRestLibraryBackend =
             make_parented<mixxx::library::rest::RestLibraryBackend>(this);
+    // REST Recommendations reuses the single Auto DJ processor. Construct it
+    // first while preserving the existing sidebar order below.
+    m_pAutoDJFeature = make_parented<AutoDJFeature>(this, m_pConfig, pPlayerManager);
     m_pRestLibraryFeature = make_parented<mixxx::library::rest::RestLibraryFeature>(
             this,
             m_pConfig,
-            m_pRestLibraryBackend);
+            m_pRestLibraryBackend,
+            m_pAutoDJFeature->processor());
     addFeature(m_pRestLibraryFeature);
     m_pRestLibraryBrowserFeature =
             make_parented<mixxx::library::rest::RestLibraryBrowserFeature>(
@@ -112,7 +116,6 @@ Library::Library(
                     m_pRestLibraryBackend);
     addFeature(m_pRestLibraryBrowserFeature);
 
-    m_pAutoDJFeature = make_parented<AutoDJFeature>(this, m_pConfig, pPlayerManager);
     addFeature(m_pAutoDJFeature);
 
     m_pPlaylistFeature = make_parented<PlaylistFeature>(this, UserSettingsPointer(m_pConfig));

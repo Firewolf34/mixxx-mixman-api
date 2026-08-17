@@ -2957,6 +2957,7 @@ if(BUILD_TESTING)
     src/test/restlibrarybrowserfeature_test.cpp
     src/test/restlibrarycachemanager_test.cpp
     src/test/restlibraryclient_test.cpp
+    src/test/restlibraryfeature_test.cpp
     src/test/restlibrarymutationsequencer_test.cpp
     src/test/restlibrarysettings_test.cpp
     src/test/restlibrarytablemodel_test.cpp

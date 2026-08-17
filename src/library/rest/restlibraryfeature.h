@@ -3,6 +3,7 @@
 #include <QAction>
 #include <QHash>
 #include <QJsonObject>
+#include <QSet>
 #include <QStringList>
 #include <QTimer>
 
@@ -16,6 +17,10 @@
 #include "track/track_decl.h"
 #include "util/parented_ptr.h"
 
+class AutoDJProcessor;
+class RestLibraryFeatureTest;
+class TrackCollectionManager;
+
 namespace mixxx::library::rest {
 
 class DlgRestLibrary;
@@ -27,7 +32,8 @@ class RestLibraryFeature final : public LibraryFeature {
     RestLibraryFeature(
             Library* pLibrary,
             UserSettingsPointer pConfig,
-            RestLibraryBackend* pBackend);
+            RestLibraryBackend* pBackend,
+            AutoDJProcessor* pAutoDJProcessor);
     ~RestLibraryFeature() override;
 
     QVariant title() override;
@@ -78,6 +84,9 @@ class RestLibraryFeature final : public LibraryFeature {
     void slotTargetColorChanged(bool enabled, const QString& color);
     void slotTargetBpmChanged(bool enabled, int bpm);
     void slotRerollRequested();
+    void slotAutoDJToggleRequested(bool enable);
+    void slotAutoDJFadeNowRequested();
+    void slotAutoDJSkipNextRequested();
     void slotLoadTrackRequested(TrackPointer pTrack);
     void slotLoadTrackToPlayerRequested(TrackPointer pTrack, const QString& group, bool play);
     void slotFetchFailed(const QString& message);
@@ -85,6 +94,15 @@ class RestLibraryFeature final : public LibraryFeature {
             const mixxx::library::rest::RestLibraryCacheResult& result);
 
   private:
+    friend class ::RestLibraryFeatureTest;
+
+    RestLibraryFeature(
+            Library* pLibrary,
+            UserSettingsPointer pConfig,
+            RestLibraryBackend* pBackend,
+            AutoDJProcessor* pAutoDJProcessor,
+            TrackCollectionManager* pTrackCollectionManager);
+
     void refreshForTrack(const TrackPointer& pTrack, bool force, bool publishPlayback = true);
     void requestRecommendationsForRemoteId(
             const RestLibrarySettings& settings,
@@ -117,6 +135,9 @@ class RestLibraryFeature final : public LibraryFeature {
     void setPathSummary(const RestLibraryPolicyPath& policyPath);
     void setStatusText(const QString& statusText);
     void updateReadyStatus();
+    void queueRecommendationsForAutoDJ();
+    void finishRecommendationsAutoDJIfReady();
+    void cancelRecommendationsAutoDJ();
     void clearRecommendations();
     QString remoteIdForTrack(const TrackPointer& pTrack) const;
     static QString normalizedTrackLocation(const QString& location);
@@ -126,6 +147,8 @@ class RestLibraryFeature final : public LibraryFeature {
     parented_ptr<QAction> m_pRefreshAction;
     DlgRestLibrary* m_pRestLibraryView = nullptr;
     RestLibraryBackend* const m_pBackend;
+    AutoDJProcessor* const m_pAutoDJProcessor;
+    TrackCollectionManager* const m_pTrackCollectionManager;
     RestLibraryClient m_client;
     RestLibraryCacheManager* const m_pCacheManager;
     RestLibraryDiagnostics m_diagnostics;
@@ -141,6 +164,10 @@ class RestLibraryFeature final : public LibraryFeature {
     QTimer m_authorityReconcileTimer;
     QHash<QString, QString> m_cachedPathToRemoteId;
     QHash<QString, RestLibraryCacheState> m_cacheStates;
+    QStringList m_recommendationRemoteIds;
+    QStringList m_autoDJRemoteIds;
+    QSet<QString> m_autoDJPendingIds;
+    QSet<QString> m_autoDJFailedIds;
     QString m_lastRequestedTrackLocation;
     QString m_currentRemoteId;
     QString m_previousRemoteId;

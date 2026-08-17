@@ -28,7 +28,8 @@ DlgRestLibrary::DlgRestLibrary(
                   std::move(pConfig),
                   pLibrary,
                   parent->getTrackTableBackgroundColorOpacity())),
-          m_pTableModel(pTableModel) {
+          m_pTableModel(pTableModel),
+          m_showButtonText(parent->getShowButtonText()) {
     m_ui->setupUi(this);
 
     m_pTrackTableView->installEventFilter(pKeyboard);
@@ -117,6 +118,23 @@ DlgRestLibrary::DlgRestLibrary(
             &QPushButton::clicked,
             this,
             &DlgRestLibrary::rerollRequested);
+    connect(m_ui->pushButtonAutoDJ,
+            &QPushButton::clicked,
+            this,
+            &DlgRestLibrary::autoDJToggleRequested);
+    connect(m_ui->pushButtonFadeNow,
+            &QPushButton::clicked,
+            this,
+            &DlgRestLibrary::autoDJFadeNowRequested);
+    connect(m_ui->pushButtonSkipNext,
+            &QPushButton::clicked,
+            this,
+            &DlgRestLibrary::autoDJSkipNextRequested);
+
+    m_ui->pushButtonAutoDJ->setToolTip(tr(
+            "Replace the Auto DJ queue with these recommendations and enable Auto DJ"));
+    m_ui->pushButtonFadeNow->setToolTip(tr("Trigger the transition to the next track"));
+    m_ui->pushButtonSkipNext->setToolTip(tr("Skip the next track in the Auto DJ queue"));
 
     QBoxLayout* box = qobject_cast<QBoxLayout*>(layout());
     VERIFY_OR_DEBUG_ASSERT(box) {
@@ -133,6 +151,7 @@ DlgRestLibrary::DlgRestLibrary(
     m_ui->spinBoxTargetBpm->setEnabled(false);
     m_targetColor = QStringLiteral("#ffffff");
     updateTargetColorButton();
+    setAutoDJState(AutoDJProcessor::ADJ_DISABLED);
     setStatusText(tr("Select or play a track to load REST recommendations."));
 }
 
@@ -242,6 +261,34 @@ void DlgRestLibrary::setMixManTargets(
         m_ui->spinBoxTargetBpm->setValue(targetBpm);
     }
     m_ui->spinBoxTargetBpm->setEnabled(targetBpmEnabled);
+}
+
+void DlgRestLibrary::setAutoDJState(AutoDJProcessor::AutoDJState state) {
+    const bool enabled = state != AutoDJProcessor::ADJ_DISABLED;
+    const QSignalBlocker blocker(m_ui->pushButtonAutoDJ);
+    m_ui->pushButtonAutoDJ->setEnabled(true);
+    m_ui->pushButtonAutoDJ->setChecked(enabled);
+    m_ui->pushButtonAutoDJ->setToolTip(enabled
+                    ? tr("Disable Auto DJ")
+                    : tr("Replace the Auto DJ queue with these recommendations and enable Auto DJ"));
+    if (m_showButtonText) {
+        m_ui->pushButtonAutoDJ->setText(enabled ? tr("Disable") : tr("Enable"));
+        m_ui->pushButtonFadeNow->setText(tr("Fade"));
+        m_ui->pushButtonSkipNext->setText(tr("Skip"));
+    }
+    const bool fading = state == AutoDJProcessor::ADJ_LEFT_FADING ||
+            state == AutoDJProcessor::ADJ_RIGHT_FADING ||
+            state == AutoDJProcessor::ADJ_ENABLE_P1LOADED;
+    m_ui->pushButtonFadeNow->setEnabled(enabled && !fading);
+    m_ui->pushButtonSkipNext->setEnabled(enabled);
+}
+
+void DlgRestLibrary::setAutoDJPreparing(bool preparing) {
+    m_ui->pushButtonAutoDJ->setEnabled(!preparing);
+    m_ui->pushButtonAutoDJ->setChecked(preparing);
+    if (m_showButtonText && preparing) {
+        m_ui->pushButtonAutoDJ->setText(tr("Preparing…"));
+    }
 }
 
 void DlgRestLibrary::slotChooseTargetColor() {

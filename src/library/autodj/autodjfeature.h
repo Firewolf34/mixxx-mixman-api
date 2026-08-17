@@ -49,6 +49,10 @@ class AutoDJFeature : public LibraryFeature {
         return true;
     }
 
+    AutoDJProcessor* processor() const {
+        return m_pAutoDJProcessor;
+    }
+
   public slots:
     void activate() override;
 

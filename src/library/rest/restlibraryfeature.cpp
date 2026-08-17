@@ -1,6 +1,7 @@
 #include "library/rest/restlibraryfeature.h"
 
 #include <algorithm>
+#include <utility>
 
 #include <QDir>
 #include <QEventLoop>
@@ -14,10 +15,14 @@
 #include <QUrl>
 
 #include "controllers/keyboard/keyboardeventfilter.h"
+#include "library/autodj/autodjprocessor.h"
+#include "library/dao/playlistdao.h"
 #include "library/library.h"
 #include "library/rest/dlgrestlibrary.h"
 #include "library/rest/restlibrarysettings.h"
 #include "library/treeitem.h"
+#include "library/trackcollection.h"
+#include "library/trackcollectionmanager.h"
 #include "mixer/playermanager.h"
 #include "mixer/playerinfo.h"
 #include "moc_restlibraryfeature.cpp"
@@ -109,14 +114,31 @@ QString conciseDiagnosticText(const RestLibraryRequestDiagnostic& diagnostic) {
 RestLibraryFeature::RestLibraryFeature(
         Library* pLibrary,
         UserSettingsPointer pConfig,
-        RestLibraryBackend* pBackend)
+        RestLibraryBackend* pBackend,
+        AutoDJProcessor* pAutoDJProcessor)
+        : RestLibraryFeature(
+                  pLibrary,
+                  std::move(pConfig),
+                  pBackend,
+                  pAutoDJProcessor,
+                  pLibrary->trackCollectionManager()) {
+}
+
+RestLibraryFeature::RestLibraryFeature(
+        Library* pLibrary,
+        UserSettingsPointer pConfig,
+        RestLibraryBackend* pBackend,
+        AutoDJProcessor* pAutoDJProcessor,
+        TrackCollectionManager* pTrackCollectionManager)
         : LibraryFeature(pLibrary, std::move(pConfig), QStringLiteral("computer")),
           m_pSidebarModel(make_parented<TreeItemModel>(this)),
           m_pTableModel(make_parented<RestLibraryTableModel>(
                   this,
-                  pLibrary->trackCollectionManager())),
+                  pTrackCollectionManager)),
           m_pRefreshAction(make_parented<QAction>(tr("Refresh"), this)),
           m_pBackend(pBackend),
+          m_pAutoDJProcessor(pAutoDJProcessor),
+          m_pTrackCollectionManager(pTrackCollectionManager),
           m_client(pBackend->networkAccessManager(), this),
           m_pCacheManager(pBackend->cacheManager()) {
     m_sessionHeartbeatTimer.setInterval(kSessionHeartbeatIntervalMillis);
@@ -234,6 +256,7 @@ void RestLibraryFeature::shutdown() {
         return;
     }
     m_shutdownStarted = true;
+    cancelRecommendationsAutoDJ();
     m_sessionHeartbeatTimer.stop();
     m_playbackLeaseRenewTimer.stop();
     m_playbackLeaseReleaseTimer.stop();
@@ -326,6 +349,22 @@ void RestLibraryFeature::bindLibraryWidget(
             &DlgRestLibrary::rerollRequested,
             this,
             &RestLibraryFeature::slotRerollRequested);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::autoDJToggleRequested,
+            this,
+            &RestLibraryFeature::slotAutoDJToggleRequested);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::autoDJFadeNowRequested,
+            this,
+            &RestLibraryFeature::slotAutoDJFadeNowRequested);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::autoDJSkipNextRequested,
+            this,
+            &RestLibraryFeature::slotAutoDJSkipNextRequested);
+    connect(m_pAutoDJProcessor,
+            &AutoDJProcessor::autoDJStateChanged,
+            m_pRestLibraryView,
+            &DlgRestLibrary::setAutoDJState);
     connect(this,
             &RestLibraryFeature::statusTextChanged,
             m_pRestLibraryView,
@@ -334,6 +373,7 @@ void RestLibraryFeature::bindLibraryWidget(
     if (!m_statusText.isEmpty()) {
         emit statusTextChanged(m_statusText);
     }
+    m_pRestLibraryView->setAutoDJState(m_pAutoDJProcessor->getState());
     refreshMixManControls(RestLibrarySettings::fromConfig(m_pConfig));
 }
 
@@ -370,6 +410,9 @@ void RestLibraryFeature::slotCurrentPlayingTrackChanged(TrackPointer pTrack) {
         ensureMixManSession(settings);
         const QString remoteId = remoteIdForTrack(pTrack);
         if (!remoteId.isEmpty()) {
+            // Auto DJ loads tracks through its own playlist model, bypassing
+            // the recommendation table's load handlers.
+            selectMixManCandidateForTrack(pTrack);
             rememberRemoteId(remoteId);
             publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("playing"));
         }
@@ -465,9 +508,17 @@ void RestLibraryFeature::refreshForTrack(
         }
         if (settings.useMixManDefaults && !m_mixManSession.id.isEmpty()) {
             setStatusText(tr("Loading MixMan authoritative recommendations."));
-            m_client.fetchMixManSession(settings,
-                    m_mixManSession.id,
-                    m_mixManRegistration.instance.instanceId);
+            // Playback and snapshot writes return authoritative state. An
+            // immediate GET can complete before the write and supersede its
+            // fresher response in RestLibraryClient.
+            if (!publishPlayback &&
+                    !m_mutationSequencer.hasInFlight() &&
+                    !m_mutationSequencer.hasQueued(MutationKind::Playback) &&
+                    !m_mutationSequencer.hasQueued(MutationKind::Snapshot)) {
+                m_client.fetchMixManSession(settings,
+                        m_mixManSession.id,
+                        m_mixManRegistration.instance.instanceId);
+            }
         } else {
             requestRecommendationsForRemoteId(settings, remoteId);
         }
@@ -501,9 +552,7 @@ void RestLibraryFeature::slotTrackLookupSucceeded(const QString& remoteId) {
             remoteId,
             QStringLiteral("playing"));
     if (settings.useMixManDefaults && !m_mixManSession.id.isEmpty()) {
-        m_client.fetchMixManSession(settings,
-                m_mixManSession.id,
-                m_mixManRegistration.instance.instanceId);
+        setStatusText(tr("Loading MixMan authoritative recommendations."));
     } else {
         requestRecommendationsForRemoteId(settings, remoteId);
     }
@@ -643,9 +692,6 @@ void RestLibraryFeature::slotMixManSessionInstanceRegistered(
                 m_currentRemoteId,
                 currentPlayingDeck >= 0 ? QStringLiteral("playing")
                                         : QStringLiteral("loaded"));
-        m_client.fetchMixManSession(settings,
-                m_mixManSession.id,
-                m_mixManRegistration.instance.instanceId);
     }
     m_client.sendMixManSessionHeartbeat(
             settings,
@@ -683,9 +729,7 @@ void RestLibraryFeature::slotMixManSessionFetched(const RestLibrarySession& sess
         m_playbackLeaseOwned = false;
     }
     setPathSummary(m_authoritativeState.policyPath);
-    if (!m_authoritativeState.policyPath.candidates.isEmpty()) {
-        setRecommendationTracks(m_authoritativeState.policyPath.candidates);
-    }
+    setRecommendationTracks(m_authoritativeState.policyPath.candidates);
     if (!m_playbackLeaseOwned &&
             (m_mutationSequencer.hasQueued(MutationKind::Playback) ||
                     m_mutationSequencer.hasQueued(MutationKind::Snapshot) ||
@@ -960,13 +1004,12 @@ void RestLibraryFeature::slotAuthorityReconcile() {
         m_authorityReconcileTimer.stop();
         return;
     }
+    if (m_mutationSequencer.hasInFlight()) {
+        return;
+    }
     m_client.fetchMixManSession(settings,
             m_mixManSession.id,
             m_mixManRegistration.instance.instanceId);
-    if (m_authoritativeState.playbackLease.instanceId.isEmpty() ||
-            !m_authoritativeState.playbackLease.active) {
-        ensureMixManPlaybackControl(settings);
-    }
 }
 
 void RestLibraryFeature::slotPolicyPresetChanged(const QString& presetKey) {
@@ -1008,6 +1051,144 @@ void RestLibraryFeature::slotRerollRequested() {
         return;
     }
     requestMixManPolicyRefresh(settings);
+}
+
+void RestLibraryFeature::slotAutoDJToggleRequested(bool enable) {
+    if (!enable) {
+        cancelRecommendationsAutoDJ();
+        if (m_pAutoDJProcessor) {
+            m_pAutoDJProcessor->toggleAutoDJ(false);
+        }
+        return;
+    }
+    queueRecommendationsForAutoDJ();
+}
+
+void RestLibraryFeature::slotAutoDJFadeNowRequested() {
+    if (m_pAutoDJProcessor) {
+        m_pAutoDJProcessor->fadeNow();
+    }
+}
+
+void RestLibraryFeature::slotAutoDJSkipNextRequested() {
+    if (m_pAutoDJProcessor) {
+        m_pAutoDJProcessor->skipNext();
+    }
+}
+
+void RestLibraryFeature::queueRecommendationsForAutoDJ() {
+    if (!m_autoDJRemoteIds.isEmpty()) {
+        setStatusText(tr("Recommendations are already being prepared for Auto DJ."));
+        return;
+    }
+
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    QList<RestLibraryTrack> tracksToCache;
+    for (int row = 0; row < m_pTableModel->rowCount(); ++row) {
+        const QString remoteId = m_pTableModel->remoteIdForIndex(
+                m_pTableModel->index(row, 0));
+        if (remoteId.isEmpty() || m_autoDJRemoteIds.contains(remoteId)) {
+            continue;
+        }
+        m_autoDJRemoteIds.append(remoteId);
+        const RestLibraryTrack track = m_pTableModel->trackForRemoteId(remoteId);
+        if (track.cacheState != RestLibraryCacheState::Ready ||
+                track.cachedFilePath.isEmpty()) {
+            m_autoDJPendingIds.insert(remoteId);
+            tracksToCache.append(track);
+        }
+    }
+
+    if (m_autoDJRemoteIds.isEmpty()) {
+        setStatusText(tr("There are no recommendations to send to Auto DJ."));
+        if (m_pRestLibraryView && m_pAutoDJProcessor) {
+            m_pRestLibraryView->setAutoDJState(m_pAutoDJProcessor->getState());
+        }
+        return;
+    }
+    if (!tracksToCache.isEmpty() && !settings.hasAudioDownloadConfigured()) {
+        setStatusText(tr("Configure REST audio downloads before enabling Auto DJ."));
+        m_autoDJRemoteIds.clear();
+        m_autoDJPendingIds.clear();
+        if (m_pRestLibraryView && m_pAutoDJProcessor) {
+            m_pRestLibraryView->setAutoDJState(m_pAutoDJProcessor->getState());
+        }
+        return;
+    }
+
+    if (m_pRestLibraryView) {
+        m_pRestLibraryView->setAutoDJPreparing(true);
+    }
+    if (!tracksToCache.isEmpty()) {
+        m_pCacheManager->cacheTracks(
+                tracksToCache,
+                settings,
+                RestLibraryCacheRequestOwner::BrowserAutoDJ);
+        setStatusText(tr("Downloading %1 recommendations for Auto DJ…")
+                              .arg(tracksToCache.size()));
+    }
+    finishRecommendationsAutoDJIfReady();
+}
+
+void RestLibraryFeature::finishRecommendationsAutoDJIfReady() {
+    if (m_autoDJRemoteIds.isEmpty() || !m_autoDJPendingIds.isEmpty()) {
+        return;
+    }
+
+    QList<TrackId> trackIds;
+    for (const QString& remoteId : std::as_const(m_autoDJRemoteIds)) {
+        if (m_autoDJFailedIds.contains(remoteId)) {
+            continue;
+        }
+        const TrackPointer pTrack = m_pTableModel->materializeTrack(remoteId);
+        if (pTrack && pTrack->getId().isValid()) {
+            trackIds.append(pTrack->getId());
+        }
+    }
+    const int failedCount = m_autoDJRemoteIds.size() - trackIds.size();
+    m_autoDJRemoteIds.clear();
+    m_autoDJPendingIds.clear();
+    m_autoDJFailedIds.clear();
+    if (m_pRestLibraryView) {
+        m_pRestLibraryView->setAutoDJPreparing(false);
+    }
+
+    if (trackIds.isEmpty()) {
+        setStatusText(tr("No recommendations could be added to Auto DJ."));
+        if (m_pRestLibraryView && m_pAutoDJProcessor) {
+            m_pRestLibraryView->setAutoDJState(m_pAutoDJProcessor->getState());
+        }
+        return;
+    }
+
+    m_pTrackCollectionManager->unhideTracks(trackIds);
+    m_pTrackCollectionManager->internalCollection()
+            ->getPlaylistDAO()
+            .addTracksToAutoDJQueue(trackIds, PlaylistDAO::AutoDJSendLoc::REPLACE);
+    setStatusText(failedCount > 0
+                    ? tr("Auto DJ prepared with %1 recommendations; %2 failed.")
+                              .arg(trackIds.size())
+                              .arg(failedCount)
+                    : tr("Auto DJ prepared with %1 recommendations.").arg(trackIds.size()));
+    if (m_pAutoDJProcessor) {
+        m_pAutoDJProcessor->toggleAutoDJ(true);
+    }
+}
+
+void RestLibraryFeature::cancelRecommendationsAutoDJ() {
+    if (m_autoDJRemoteIds.isEmpty()) {
+        return;
+    }
+    m_autoDJRemoteIds.clear();
+    m_autoDJPendingIds.clear();
+    m_autoDJFailedIds.clear();
+    m_pCacheManager->cancelRequests(RestLibraryCacheRequestOwner::BrowserAutoDJ);
+    if (m_pRestLibraryView) {
+        m_pRestLibraryView->setAutoDJPreparing(false);
+        if (m_pAutoDJProcessor) {
+            m_pRestLibraryView->setAutoDJState(m_pAutoDJProcessor->getState());
+        }
+    }
 }
 
 void RestLibraryFeature::slotLoadTrackRequested(TrackPointer pTrack) {
@@ -1098,6 +1279,16 @@ QStringList RestLibraryFeature::recentRemoteIdsForRequest(const QString& remoteI
 }
 
 void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& tracks) {
+    QStringList remoteIds;
+    remoteIds.reserve(tracks.size());
+    for (const RestLibraryTrack& track : tracks) {
+        remoteIds.append(track.remoteId);
+    }
+    if (remoteIds == m_recommendationRemoteIds) {
+        return;
+    }
+    cancelRecommendationsAutoDJ();
+    m_recommendationRemoteIds = std::move(remoteIds);
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
     m_pCacheManager->cancelRequests(
             RestLibraryCacheRequestOwner::RecommendationPrefetch);
@@ -1420,7 +1611,7 @@ void RestLibraryFeature::selectMixManCandidateForTrack(const TrackPointer& pTrac
     }
 
     const QString remoteId = remoteIdForTrack(pTrack);
-    if (remoteId.isEmpty()) {
+    if (remoteId.isEmpty() || remoteId == m_pendingCandidateTrackId) {
         return;
     }
 
@@ -1675,8 +1866,19 @@ void RestLibraryFeature::slotTrackCacheStateChanged(const RestLibraryCacheResult
         m_cacheStates.insert(result.remoteId, result.cacheState);
     }
     m_pTableModel->updateTrackCacheState(result);
+    if (m_autoDJPendingIds.contains(result.remoteId) &&
+            (result.cacheState == RestLibraryCacheState::Ready ||
+                    result.cacheState == RestLibraryCacheState::Failed)) {
+        m_autoDJPendingIds.remove(result.remoteId);
+        if (result.cacheState == RestLibraryCacheState::Failed) {
+            m_autoDJFailedIds.insert(result.remoteId);
+        }
+        finishRecommendationsAutoDJIfReady();
+    }
     if (isDisplayedTrack) {
-        updateReadyStatus();
+        if (m_autoDJRemoteIds.isEmpty()) {
+            updateReadyStatus();
+        }
     }
 }
 
@@ -1740,8 +1942,10 @@ void RestLibraryFeature::updateReadyStatus() {
 }
 
 void RestLibraryFeature::clearRecommendations() {
+    cancelRecommendationsAutoDJ();
     m_pTableModel->setTracks({});
     m_cacheStates.clear();
+    m_recommendationRemoteIds.clear();
     m_recommendationCount = 0;
     m_averageQuality = 0.0;
     if (m_pRestLibraryView) {

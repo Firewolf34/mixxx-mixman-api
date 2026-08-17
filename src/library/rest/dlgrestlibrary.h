@@ -4,6 +4,7 @@
 
 #include <QWidget>
 
+#include "library/autodj/autodjprocessor.h"
 #include "library/libraryview.h"
 #include "library/rest/restlibrarymixman.h"
 #include "library/rest/restlibrarytablemodel.h"
@@ -57,6 +58,8 @@ class DlgRestLibrary final : public QWidget, public LibraryView {
             const QString& targetColor,
             bool targetBpmEnabled,
             int targetBpm);
+    void setAutoDJState(AutoDJProcessor::AutoDJState state);
+    void setAutoDJPreparing(bool preparing);
 
   signals:
     void refreshRequested();
@@ -66,6 +69,9 @@ class DlgRestLibrary final : public QWidget, public LibraryView {
     void targetColorChanged(bool enabled, const QString& color);
     void targetBpmChanged(bool enabled, int bpm);
     void rerollRequested();
+    void autoDJToggleRequested(bool enable);
+    void autoDJFadeNowRequested();
+    void autoDJSkipNextRequested();
     void loadTrack(TrackPointer pTrack);
     void loadTrackToPlayer(TrackPointer pTrack, const QString& group, bool play);
     void trackSelected(TrackPointer pTrack);
@@ -80,6 +86,7 @@ class DlgRestLibrary final : public QWidget, public LibraryView {
     WTrackTableView* m_pTrackTableView;
     RestLibraryTableModel* const m_pTableModel;
     QString m_targetColor;
+    const bool m_showButtonText;
 };
 
 } // namespace mixxx::library::rest
