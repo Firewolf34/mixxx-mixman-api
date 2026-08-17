@@ -121,7 +121,10 @@ TEST_PROCESS_STATE=live bash -c \
     'export TEST_LIVE_PID=$$; source "$1"; is_mixxx_running' bash \
     "${SCRIPT_DIR}/deck_flatpak_auto_update.sh"
 TEST_PROCESS_STATE=stale bash -c \
-    'source "$1"; ! is_mixxx_running' bash \
+    'source "$1"; is_host_pid_namespace() { return 0; }; ! is_mixxx_running' bash \
+    "${SCRIPT_DIR}/deck_flatpak_auto_update.sh"
+TEST_PROCESS_STATE=stale bash -c \
+    'source "$1"; is_host_pid_namespace() { return 1; }; is_mixxx_running' bash \
     "${SCRIPT_DIR}/deck_flatpak_auto_update.sh"
 TEST_PROCESS_STATE=malformed bash -c \
     'source "$1"; is_mixxx_running' bash \

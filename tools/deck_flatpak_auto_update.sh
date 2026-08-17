@@ -25,6 +25,13 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || die "Required command '$1' is missing."
 }
 
+is_host_pid_namespace() {
+    local pid_one_comm
+    [[ -r /proc/1/comm ]] || return 1
+    IFS= read -r pid_one_comm </proc/1/comm || return 1
+    [[ "${pid_one_comm}" == systemd || "${pid_one_comm}" == init ]]
+}
+
 is_mixxx_running() {
     local processes pid application
     if ! processes="$(flatpak ps --columns=pid,application 2>/dev/null)"; then
@@ -38,6 +45,10 @@ is_mixxx_running() {
             return 0
         fi
         [[ -d "/proc/${pid}" ]] && return 0
+        if ! is_host_pid_namespace; then
+            echo "Flatpak reported Mixxx, but its host PID is not visible in this PID namespace; deferring safely." >&2
+            return 0
+        fi
     done <<<"${processes}"
     return 1
 }

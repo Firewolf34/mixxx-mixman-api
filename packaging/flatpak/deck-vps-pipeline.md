@@ -642,9 +642,12 @@ repository metadata on any power source. If a new commit exists, it downloads
 and deploys only on AC power.
 
 Before downloading, it exits successfully when Mixxx is running. Process
-detection requires both a matching `flatpak ps` record and a live wrapper PID;
-this ignores dead Flatpak instance records while treating command or parse
-errors as active and deferring safely. After a download-only Flatpak pull it
+detection requires both a matching `flatpak ps` record and a live wrapper PID
+when the client can confirm it is in the host PID namespace. A matching record
+whose host PID is hidden by an isolated maintenance namespace is treated as
+active. This ignores confirmed-dead Flatpak instance records on the host while
+treating namespace, command, or parse uncertainty as active and deferring
+safely. After a download-only Flatpak pull it
 attempts the nonblocking exclusive deployment lock and checks again. A launch
 during download therefore leaves a verified pending update without changing
 the installed deployment. Activation exports the current build for rollback,

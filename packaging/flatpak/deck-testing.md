@@ -147,7 +147,9 @@ starting and then four hours after each completed check. The service waits for
 and deployment require AC power. A live Mixxx Flatpak process or an active
 shared launch lock defers activation without changing the installed app. Dead
 Flatpak instance records are ignored only after their wrapper PID is confirmed
-absent from `/proc`; inspection errors fail closed.
+absent from `/proc` in the host PID namespace. An isolated maintenance
+namespace that cannot see the reported host PID fails closed, as do other
+inspection errors.
 
 The signed Polinaria repository requires no provider credential on Coal. The
 legacy direct GitHub fallback remains available for manual recovery only; to
