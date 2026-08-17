@@ -219,13 +219,13 @@ dispatch endpoint for the explicit fallback. `wait` accepts success only for
 that SHA and then verifies the public manifest plus all three immutable files.
 
 ```bash
-tools/deck_forgejo_actions.sh configure
-tools/deck_forgejo_actions.sh runs
-tools/deck_forgejo_actions.sh status <candidate-sha>
-tools/deck_forgejo_actions.sh tasks <candidate-sha>
-tools/deck_forgejo_actions.sh wait <candidate-sha>
-tools/deck_forgejo_actions.sh dispatch
-tools/deck_forgejo_actions.sh publication <candidate-sha>
+mixxx-deck-ci configure
+mixxx-deck-ci runs
+mixxx-deck-ci status <candidate-sha>
+mixxx-deck-ci tasks <candidate-sha>
+mixxx-deck-ci wait <candidate-sha>
+mixxx-deck-ci dispatch
+mixxx-deck-ci publication <candidate-sha>
 ```
 
 Forgejo is configured to reject anonymous API calls. Create a scoped user token
@@ -233,7 +233,7 @@ at **Settings → Applications** with repository access limited to
 `total-infra/mixxx`. Use `read:repository` for monitoring. Grant
 `write:repository` only when autonomous manual dispatch is required. The
 interactive `configure` command stores the token at
-`~/.config/mixxx-deck/forgejo-api-token`, requires mode 0600, and validates it
+`~/.config/mixxx-deck/forgejo-actions-token`, requires mode 0600, and validates it
 without placing the value in Git, shell history, or curl's command-line
 arguments.
 

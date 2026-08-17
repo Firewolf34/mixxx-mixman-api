@@ -62,6 +62,10 @@ outside this checkout with mode 0600.
 
 The client may download a build while Mixxx is running, but activate, deploy,
 and rollback always refuse to modify the installed Flatpak until Mixxx stops.
+
+Tool boundaries:
+  Use mixxx-deck-ci for Forgejo Actions status, waiting, dispatch, and
+  publication verification. Use forgejo-issues for Forgejo issue tickets.
 EOF
 }
 
@@ -851,6 +855,7 @@ print_status() {
 
 setup_client() {
     local installed_helper="${HOME}/.local/bin/deck_ostree_validation.sh"
+    local ci_helper="${SCRIPT_DIR}/mixxx_deck_ci.sh"
     ensure_flatpak
     require_command curl
     require_command jq
@@ -860,6 +865,8 @@ setup_client() {
     ensure_directories
     [[ -r "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" ]] ||
         die "Missing deck_flatpak_auto_update.sh beside the setup script."
+    [[ -r "${ci_helper}" ]] ||
+        die "Missing mixxx_deck_ci.sh beside the setup script."
     [[ -r "${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.service" ]] ||
         die "Missing Mixxx updater systemd service."
     [[ -r "${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.timer" ]] ||
@@ -870,6 +877,7 @@ setup_client() {
         install -m 0644 "${OSTREE_VALIDATION_HELPER}" "${installed_helper}"
     fi
     install -m 0755 "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" "${AUTO_UPDATE_CLIENT}"
+    install -m 0755 "${ci_helper}" "${HOME}/.local/bin/mixxx-deck-ci"
     install -m 0644 \
         "${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.service" \
         "${SYSTEMD_USER_ROOT}/mixxx-deck-update.service"
@@ -896,7 +904,7 @@ setup_client() {
     systemctl --user disable mixxx-deck-update.service 2>/dev/null || true
     systemctl --user enable mixxx-deck-update.timer
     systemctl --user restart mixxx-deck-update.timer
-    echo "Installed mixxx-deck, signed-repository updater, desktop lock, and user units."
+    echo "Installed mixxx-deck, mixxx-deck-ci, signed-repository updater, desktop lock, and user units."
     echo "Run 'sudo loginctl enable-linger ${USER}' once so boot checks run while signed out."
 }
 

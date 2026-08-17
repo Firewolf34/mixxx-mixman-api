@@ -65,17 +65,17 @@ For unattended status and publication verification, configure the repository
 client once and then query or wait on the exact candidate:
 
 ```bash
-tools/deck_forgejo_actions.sh configure
-tools/deck_forgejo_actions.sh status <candidate-sha>
-tools/deck_forgejo_actions.sh tasks <candidate-sha>
-tools/deck_forgejo_actions.sh wait <candidate-sha>
+mixxx-deck-ci configure
+mixxx-deck-ci status <candidate-sha>
+mixxx-deck-ci tasks <candidate-sha>
+mixxx-deck-ci wait <candidate-sha>
 ```
 
 Create the token in Forgejo user settings with access restricted specifically
 to `total-infra/mixxx`. `read:repository` supports inspection; use
 `write:repository` only if this client must also perform the manual
 `dispatch` fallback. The token is stored outside Git in
-`~/.config/mixxx-deck/forgejo-api-token` with mode 0600.
+`~/.config/mixxx-deck/forgejo-actions-token` with mode 0600.
 
 Dependency sources are integrity-pinned. Before compilation, the VPS retries a
 transient source-download failure up to three times using its bounded private

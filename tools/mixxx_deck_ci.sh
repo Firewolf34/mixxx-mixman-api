@@ -1,12 +1,13 @@
 #!/bin/bash
 # Inspect and dispatch the authoritative Forgejo Actions deck workflow.
+# This is the CI companion to mixxx-deck, not an issue-tracker client.
 
 set -euo pipefail
 
 FORGEJO_BASE_URL="${MIXXX_FORGEJO_BASE_URL:-https://forge.polinaria.world}"
 FORGEJO_OWNER="${MIXXX_FORGEJO_OWNER:-total-infra}"
 FORGEJO_REPO="${MIXXX_FORGEJO_REPO:-mixxx}"
-TOKEN_FILE="${MIXXX_FORGEJO_TOKEN_FILE:-${HOME}/.config/mixxx-deck/forgejo-api-token}"
+TOKEN_FILE="${MIXXX_FORGEJO_TOKEN_FILE:-${HOME}/.config/mixxx-deck/forgejo-actions-token}"
 WORKFLOW_FILE="${MIXXX_FORGEJO_WORKFLOW:-deck-flatpak.yml}"
 EXPECTED_REF="refs/heads/deck/candidate"
 AUTH_CONFIG=""
@@ -14,21 +15,26 @@ AUTH_CONFIG=""
 usage() {
     cat <<'EOF'
 Usage:
-  deck_forgejo_actions.sh configure
-  deck_forgejo_actions.sh runs [candidate-sha]
-  deck_forgejo_actions.sh status <candidate-sha>
-  deck_forgejo_actions.sh tasks <candidate-sha>
-  deck_forgejo_actions.sh wait <candidate-sha> [timeout-seconds]
-  deck_forgejo_actions.sh dispatch
-  deck_forgejo_actions.sh publication <candidate-sha>
+  mixxx-deck-ci configure
+  mixxx-deck-ci runs [candidate-sha]
+  mixxx-deck-ci status <candidate-sha>
+  mixxx-deck-ci tasks <candidate-sha>
+  mixxx-deck-ci wait <candidate-sha> [timeout-seconds]
+  mixxx-deck-ci dispatch
+  mixxx-deck-ci publication <candidate-sha>
 
 Authentication:
   Store a Forgejo token as one line in:
-    ~/.config/mixxx-deck/forgejo-api-token
+    ~/.config/mixxx-deck/forgejo-actions-token
 
   The file must not be group/world accessible. Use a token restricted to
   total-infra/mixxx. read:repository is enough for inspection; write:repository is
   required for dispatch.
+
+Tool boundaries:
+  Use mixxx-deck for signed artifact staging, activation, rollback, updates,
+  and launching Mixxx. Use forgejo-issues for Forgejo issue tickets. This
+  command is only for the total-infra/mixxx Forgejo Actions workflow.
 EOF
 }
 

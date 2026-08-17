@@ -21,8 +21,19 @@ Before changing the deck pipeline, read:
   trigger.
 - `tools/deck_flatpak_publish.sh` — VPS build/validation/publication behavior.
 - `tools/deck_flatpak_deploy.sh` — laptop staging/activation/rollback behavior.
-- `tools/deck_forgejo_actions.sh` — authenticated Actions status, waiting,
+- `tools/mixxx_deck_ci.sh` — authenticated Actions status, waiting,
   dispatch, and publication validation.
+
+Agent tool selection:
+
+- `mixxx-deck` owns signed artifact selection, staging, activation, rollback,
+  automatic updates, and launching Mixxx.
+- `mixxx-deck-ci` owns Forgejo Actions inspection, waiting, dispatch, and
+  publication validation for `total-infra/mixxx`.
+- `forgejo-issues` owns Forgejo issue search/create/comment/close on supported
+  workstations. It does not inspect or dispatch Actions.
+- `forgejo-collab` is a Polinaria-only Unix-socket helper and must not be
+  assumed available on Coal.
 
 ## Source And Deployment Authority
 
@@ -312,7 +323,8 @@ Before changing the deck pipeline, read:
      tools/deck_ostree_validation.sh tools/deck_ostree_validation_test.sh \
      tools/deck_build_preflight.sh tools/deck_pressure_guard.sh \
      tools/deck_flatpak_publish.sh tools/deck_flatpak_deploy.sh \
-     tools/deck_forgejo_actions.sh
+     tools/mixxx_deck_ci.sh tools/mixxx_deck_ci_test.sh
+   tools/mixxx_deck_ci_test.sh
    tools/check_deck_flatpak_manifest.sh
    forgejo-runner validate --workflow \
      --path .forgejo/workflows/deck-flatpak.yml
