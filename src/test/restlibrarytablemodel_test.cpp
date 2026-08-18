@@ -4,12 +4,18 @@
 
 #include <QDir>
 #include <QFile>
+#include <QImage>
 #include <QIODevice>
+#include <QPainter>
+#include <QPersistentModelIndex>
+#include <QStyleOptionViewItem>
 #include <QTableView>
 #include <QTemporaryDir>
+#include <QVector>
 
 #include "control/controlobject.h"
 #include "library/library_prefs.h"
+#include "library/rest/restlibrarycachestatedelegate.h"
 #include "library/rest/restlibrarytablemodel.h"
 #include "library/tabledelegates/percentagedelegate.h"
 #include "test/librarytest.h"
@@ -130,8 +136,166 @@ TEST_F(RestLibraryTableModelTest, CacheFailureTooltipIncludesStatusContext) {
             {}});
 
     const QString tooltip = model.data(model.index(0, 0), Qt::ToolTipRole).toString();
+    EXPECT_TRUE(tooltip.startsWith(QStringLiteral("Failed\n")));
     EXPECT_TRUE(tooltip.contains(QStringLiteral("Authentication failed")));
     EXPECT_TRUE(tooltip.contains(QStringLiteral("HTTP 401")));
+}
+
+TEST_F(RestLibraryTableModelTest, CacheStatesUseCompactAccessiblePresentation) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setTracks({
+            newTrack(QStringLiteral("1"),
+                    QStringLiteral("Artist"),
+                    QStringLiteral("Missing"),
+                    RestLibraryCacheState::Missing),
+            newTrack(QStringLiteral("2"),
+                    QStringLiteral("Artist"),
+                    QStringLiteral("Downloading"),
+                    RestLibraryCacheState::Downloading),
+            newTrack(QStringLiteral("3"),
+                    QStringLiteral("Artist"),
+                    QStringLiteral("Ready"),
+                    RestLibraryCacheState::Ready),
+            newTrack(QStringLiteral("4"),
+                    QStringLiteral("Artist"),
+                    QStringLiteral("Failed"),
+                    RestLibraryCacheState::Failed),
+            newTrack(QStringLiteral("5"),
+                    QStringLiteral("Artist"),
+                    QStringLiteral("Stale"),
+                    RestLibraryCacheState::Stale),
+    });
+
+    const int cacheColumn = model.fieldIndex(QStringLiteral("cache"));
+    ASSERT_EQ(cacheColumn, 0);
+    EXPECT_EQ(
+            model.headerData(cacheColumn, Qt::Horizontal, TrackModel::kHeaderWidthRole).toInt(),
+            36);
+    const QStringList stateNames{
+            QStringLiteral("Not cached"),
+            QStringLiteral("Downloading"),
+            QStringLiteral("Ready"),
+            QStringLiteral("Failed"),
+            QStringLiteral("Stale"),
+    };
+    for (int row = 0; row < stateNames.size(); ++row) {
+        const QModelIndex cacheIndex = model.index(row, cacheColumn);
+        EXPECT_FALSE(model.data(cacheIndex, Qt::DisplayRole).isValid());
+        EXPECT_EQ(model.data(cacheIndex, Qt::EditRole).toInt(), row);
+        EXPECT_EQ(
+                model.data(cacheIndex, Qt::AccessibleTextRole).toString(),
+                stateNames.at(row));
+        EXPECT_EQ(
+                model.data(cacheIndex, TrackModel::kDataExportRole).toString(),
+                stateNames.at(row));
+        const QString tooltip = model.data(cacheIndex, Qt::ToolTipRole).toString();
+        EXPECT_TRUE(tooltip.startsWith(stateNames.at(row)));
+        EXPECT_EQ(
+                model.data(cacheIndex, Qt::AccessibleDescriptionRole).toString(),
+                tooltip);
+    }
+
+    QTableView tableView;
+    std::unique_ptr<QAbstractItemDelegate> delegate(
+            model.delegateForColumn(cacheColumn, &tableView));
+    EXPECT_NE(
+            dynamic_cast<RestLibraryCacheStateDelegate*>(delegate.get()),
+            nullptr);
+
+    QList<QImage> renderedStates;
+    for (int row = 0; row < stateNames.size(); ++row) {
+        QImage image(24, 24, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        QStyleOptionViewItem option;
+        option.rect = image.rect();
+        option.palette = tableView.palette();
+        delegate->paint(&painter, option, model.index(row, cacheColumn));
+        painter.end();
+        renderedStates.append(std::move(image));
+    }
+    for (int left = 0; left < renderedStates.size(); ++left) {
+        for (int right = left + 1; right < renderedStates.size(); ++right) {
+            EXPECT_FALSE(renderedStates.at(left) == renderedStates.at(right));
+        }
+    }
+}
+
+TEST_F(RestLibraryTableModelTest, CacheStateUpdatesInPlace) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setTracks({newTrack(
+            QStringLiteral("1"), QStringLiteral("Artist"), QStringLiteral("Track"))});
+    const QPersistentModelIndex cacheIndex(model.index(0, 0));
+    bool modelWasReset = false;
+    bool cacheCellChanged = false;
+    QVector<int> changedRoles;
+    connect(&model, &QAbstractItemModel::modelReset, [&modelWasReset] {
+        modelWasReset = true;
+    });
+    connect(&model,
+            &QAbstractItemModel::dataChanged,
+            [&cacheCellChanged, &changedRoles](
+                    const QModelIndex& topLeft,
+                    const QModelIndex& bottomRight,
+                    const QVector<int>& roles) {
+                cacheCellChanged = topLeft == bottomRight && topLeft.column() == 0;
+                changedRoles = roles;
+            });
+
+    model.updateTrackCacheState({
+            QStringLiteral("1"),
+            RestLibraryCacheState::Failed,
+            {},
+            QStringLiteral("Authentication failed"),
+            401,
+            7,
+            {}});
+
+    EXPECT_TRUE(cacheIndex.isValid());
+    EXPECT_FALSE(modelWasReset);
+    EXPECT_TRUE(cacheCellChanged);
+    EXPECT_TRUE(changedRoles.contains(Qt::EditRole));
+    EXPECT_TRUE(changedRoles.contains(Qt::AccessibleTextRole));
+    EXPECT_EQ(model.data(cacheIndex, Qt::EditRole).toInt(),
+            static_cast<int>(RestLibraryCacheState::Failed));
+    EXPECT_EQ(model.data(cacheIndex, Qt::AccessibleTextRole).toString(),
+            QStringLiteral("Failed"));
+    const QString tooltip = model.data(cacheIndex, Qt::ToolTipRole).toString();
+    EXPECT_TRUE(tooltip.contains(QStringLiteral("Authentication failed")));
+    EXPECT_TRUE(tooltip.contains(QStringLiteral("HTTP 401")));
+    EXPECT_TRUE(tooltip.contains(QStringLiteral("Network error 7")));
+}
+
+TEST_F(RestLibraryTableModelTest, SortsCacheStatesThroughStableSortId) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setTracks({
+            newTrack(QStringLiteral("stale"),
+                    QStringLiteral("Artist"),
+                    QStringLiteral("Stale"),
+                    RestLibraryCacheState::Stale),
+            newTrack(QStringLiteral("ready"),
+                    QStringLiteral("Artist"),
+                    QStringLiteral("Ready"),
+                    RestLibraryCacheState::Ready),
+            newTrack(QStringLiteral("missing"),
+                    QStringLiteral("Artist"),
+                    QStringLiteral("Missing"),
+                    RestLibraryCacheState::Missing),
+    });
+
+    const int cacheColumn = model.fieldIndex(QStringLiteral("cache_state"));
+    EXPECT_EQ(model.sortColumnIdFromColumnIndex(cacheColumn),
+            TrackModel::SortColumnId::CacheState);
+    EXPECT_EQ(model.columnIndexFromSortColumnId(TrackModel::SortColumnId::CacheState),
+            cacheColumn);
+    model.sort(cacheColumn, Qt::AscendingOrder);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("missing"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(1, 0)), QStringLiteral("ready"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(2, 0)), QStringLiteral("stale"));
+    model.sort(cacheColumn, Qt::DescendingOrder);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("stale"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(1, 0)), QStringLiteral("ready"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(2, 0)), QStringLiteral("missing"));
 }
 
 TEST_F(RestLibraryTableModelTest, CountsCatalogCacheStates) {

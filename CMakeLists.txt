@@ -1469,6 +1469,7 @@ add_library(
   src/library/rest/restlibrarybackend.cpp
   src/library/rest/restlibrarybrowserfeature.cpp
   src/library/rest/restlibrarycachemanager.cpp
+  src/library/rest/restlibrarycachestatedelegate.cpp
   src/library/rest/restlibraryclient.cpp
   src/library/rest/restlibrarymutationsequencer.cpp
   src/library/rest/restlibraryfeature.cpp

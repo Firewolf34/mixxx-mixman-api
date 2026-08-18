@@ -10,6 +10,7 @@
 
 #include "control/controlobject.h"
 #include "library/library_prefs.h"
+#include "library/rest/restlibrarycachestatedelegate.h"
 #include "library/tabledelegates/percentagedelegate.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
@@ -180,9 +181,14 @@ void RestLibraryTableModel::updateTrackCacheState(const RestLibraryCacheResult& 
         const int visibleRow = m_visibleRows.indexOf(i);
         if (visibleRow >= 0) {
             emit dataChanged(
-                    index(visibleRow, 0),
-                    index(visibleRow, ColumnCount - 1),
-                    {Qt::DisplayRole, Qt::ToolTipRole});
+                    index(visibleRow, ColumnCacheState),
+                    index(visibleRow, ColumnCacheState),
+                    {Qt::DisplayRole,
+                            Qt::EditRole,
+                            Qt::ToolTipRole,
+                            Qt::AccessibleTextRole,
+                            Qt::AccessibleDescriptionRole,
+                            TrackModel::kDataExportRole});
         }
     }
 }
@@ -206,6 +212,37 @@ QVariant RestLibraryTableModel::data(const QModelIndex& index, int role) const {
     if (!pTrack) {
         return {};
     }
+    if (index.column() == ColumnCacheState) {
+        const QString stateText = cacheStateText(pTrack->cacheState);
+        if (role == Qt::DisplayRole) {
+            return {};
+        }
+        if (role == Qt::EditRole) {
+            return static_cast<int>(pTrack->cacheState);
+        }
+        if (role == TrackModel::kDataExportRole || role == Qt::AccessibleTextRole) {
+            return stateText;
+        }
+        if (role == Qt::ToolTipRole || role == Qt::AccessibleDescriptionRole) {
+            QStringList details{stateText};
+            if (!pTrack->cacheError.isEmpty()) {
+                details.append(pTrack->cacheError);
+            }
+            if (pTrack->cacheStatusCode > 0) {
+                details.append(tr("HTTP %1").arg(pTrack->cacheStatusCode));
+            }
+            if (pTrack->cacheNetworkError != 0) {
+                details.append(tr("Network error %1").arg(pTrack->cacheNetworkError));
+            }
+            if (!pTrack->cachedFilePath.isEmpty()) {
+                details.append(QDir::toNativeSeparators(pTrack->cachedFilePath));
+            } else if (pTrack->cacheState == RestLibraryCacheState::Missing) {
+                details.append(tr("Track must be cached locally before it can be loaded."));
+            }
+            return details.join(QLatin1Char('\n'));
+        }
+        return {};
+    }
     const bool normalizedColumn =
             index.column() == ColumnFavour || index.column() == ColumnEnergy;
     if (normalizedColumn && role == Qt::DisplayRole) {
@@ -223,22 +260,6 @@ QVariant RestLibraryTableModel::data(const QModelIndex& index, int role) const {
     if (role == Qt::DisplayRole || role == Qt::EditRole ||
             role == TrackModel::kDataExportRole) {
         return valueForColumn(*pTrack, index.column());
-    }
-    if (role == Qt::ToolTipRole && index.column() == ColumnCacheState) {
-        if (!pTrack->cacheError.isEmpty()) {
-            QStringList parts;
-            parts.append(pTrack->cacheError);
-            if (pTrack->cacheStatusCode > 0) {
-                parts.append(tr("HTTP %1").arg(pTrack->cacheStatusCode));
-            }
-            if (pTrack->cacheNetworkError != 0) {
-                parts.append(tr("Network error %1").arg(pTrack->cacheNetworkError));
-            }
-            return parts.join(QLatin1Char('\n'));
-        }
-        return pTrack->cachedFilePath.isEmpty()
-                ? tr("Track must be cached locally before it can be loaded.")
-                : QDir::toNativeSeparators(pTrack->cachedFilePath);
     }
     if (role == Qt::ToolTipRole && index.column() == ColumnQuality) {
         QStringList details;
@@ -316,7 +337,7 @@ QVariant RestLibraryTableModel::headerData(
     if (role == TrackModel::kHeaderWidthRole) {
         switch (section) {
         case ColumnCacheState:
-            return 90;
+            return 36;
         case ColumnQuality:
             return 80;
         case ColumnBpm:
@@ -358,12 +379,16 @@ void RestLibraryTableModel::sort(int column, Qt::SortOrder order) {
 QAbstractItemDelegate* RestLibraryTableModel::delegateForColumn(
         int column,
         QObject* pParent) {
-    if (column != ColumnFavour && column != ColumnEnergy) {
+    if (column != ColumnCacheState &&
+            column != ColumnFavour && column != ColumnEnergy) {
         return nullptr;
     }
     auto* pTableView = qobject_cast<QTableView*>(pParent);
     VERIFY_OR_DEBUG_ASSERT(pTableView) {
         return nullptr;
+    }
+    if (column == ColumnCacheState) {
+        return new RestLibraryCacheStateDelegate(pTableView);
     }
     return new PercentageDelegate(pTableView);
 }
@@ -530,6 +555,8 @@ TrackModel::SortColumnId RestLibraryTableModel::sortColumnIdFromColumnIndex(int 
         return SortColumnId::Favour;
     case ColumnEnergy:
         return SortColumnId::Energy;
+    case ColumnCacheState:
+        return SortColumnId::CacheState;
     default:
         return SortColumnId::Invalid;
     }
@@ -569,6 +596,8 @@ int RestLibraryTableModel::columnIndexFromSortColumnId(SortColumnId sortColumn) 
         return ColumnFavour;
     case SortColumnId::Energy:
         return ColumnEnergy;
+    case SortColumnId::CacheState:
+        return ColumnCacheState;
     default:
         return -1;
     }
@@ -625,6 +654,10 @@ int RestLibraryTableModel::fieldIndex(const QString& fieldName) const {
     }
     if (fieldName == QStringLiteral("energy")) {
         return ColumnEnergy;
+    }
+    if (fieldName == QStringLiteral("cache") ||
+            fieldName == QStringLiteral("cache_state")) {
+        return ColumnCacheState;
     }
     if (fieldName == QStringLiteral("remote_id")) {
         return ColumnRemoteId;
