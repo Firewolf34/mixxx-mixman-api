@@ -5,13 +5,18 @@
 #include <utility>
 
 #include <QDir>
+#include <QTableView>
 #include <QUrl>
 
+#include "control/controlobject.h"
+#include "library/library_prefs.h"
+#include "library/tabledelegates/percentagedelegate.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
 #include "library/searchquery.h"
 #include "library/searchqueryparser.h"
 #include "moc_restlibrarytablemodel.cpp"
+#include "track/keyutils.h"
 #include "track/track.h"
 #include "track/trackref.h"
 #include "util/assert.h"
@@ -47,6 +52,13 @@ QString durationText(double seconds) {
     return QStringLiteral("%1:%2")
             .arg(minutes)
             .arg(remainingSeconds, 2, 10, QLatin1Char('0'));
+}
+
+QString percentageText(const std::optional<double>& value) {
+    if (!value.has_value()) {
+        return QStringLiteral("\u2014");
+    }
+    return QStringLiteral("%1%").arg(qRound(*value * 100.0));
 }
 
 QStringList searchableFields(const RestLibraryTrack& track) {
@@ -185,7 +197,22 @@ QVariant RestLibraryTableModel::data(const QModelIndex& index, int role) const {
     if (!pTrack) {
         return {};
     }
-    if (role == Qt::DisplayRole || role == Qt::EditRole || role == TrackModel::kDataExportRole) {
+    const bool normalizedColumn =
+            index.column() == ColumnFavour || index.column() == ColumnEnergy;
+    if (normalizedColumn && role == Qt::DisplayRole) {
+        return percentageText(index.column() == ColumnFavour ? pTrack->favour : pTrack->energy);
+    }
+    if (normalizedColumn && role == Qt::ToolTipRole) {
+        const std::optional<double>& value =
+                index.column() == ColumnFavour ? pTrack->favour : pTrack->energy;
+        const QString label = index.column() == ColumnFavour ? tr("Favour") : tr("Energy");
+        return value.has_value()
+                ? tr("%1: %2 (raw %3)")
+                          .arg(label, percentageText(value), QString::number(*value, 'f', 3))
+                : tr("%1: not provided").arg(label);
+    }
+    if (role == Qt::DisplayRole || role == Qt::EditRole ||
+            role == TrackModel::kDataExportRole) {
         return valueForColumn(*pTrack, index.column());
     }
     if (role == Qt::ToolTipRole && index.column() == ColumnCacheState) {
@@ -317,6 +344,19 @@ void RestLibraryTableModel::sort(int column, Qt::SortOrder order) {
     m_sortOrder = order;
     rebuildVisibleRows();
     endResetModel();
+}
+
+QAbstractItemDelegate* RestLibraryTableModel::delegateForColumn(
+        int column,
+        QObject* pParent) {
+    if (column != ColumnFavour && column != ColumnEnergy) {
+        return nullptr;
+    }
+    auto* pTableView = qobject_cast<QTableView*>(pParent);
+    VERIFY_OR_DEBUG_ASSERT(pTableView) {
+        return nullptr;
+    }
+    return new PercentageDelegate(pTableView);
 }
 
 TrackPointer RestLibraryTableModel::getTrack(const QModelIndex& index) const {
@@ -477,6 +517,10 @@ TrackModel::SortColumnId RestLibraryTableModel::sortColumnIdFromColumnIndex(int 
         return SortColumnId::FileType;
     case ColumnPlayCount:
         return SortColumnId::TimesPlayed;
+    case ColumnFavour:
+        return SortColumnId::Favour;
+    case ColumnEnergy:
+        return SortColumnId::Energy;
     default:
         return SortColumnId::Invalid;
     }
@@ -512,6 +556,10 @@ int RestLibraryTableModel::columnIndexFromSortColumnId(SortColumnId sortColumn) 
         return ColumnType;
     case SortColumnId::TimesPlayed:
         return ColumnPlayCount;
+    case SortColumnId::Favour:
+        return ColumnFavour;
+    case SortColumnId::Energy:
+        return ColumnEnergy;
     default:
         return -1;
     }
@@ -676,9 +724,9 @@ QVariant RestLibraryTableModel::valueForColumn(
     case ColumnPlayCount:
         return track.playCount > 0 ? QVariant(track.playCount) : QVariant();
     case ColumnFavour:
-        return track.favour > 0.0 ? QVariant(track.favour) : QVariant();
+        return track.favour.has_value() ? QVariant(*track.favour) : QVariant();
     case ColumnEnergy:
-        return track.energy > 0.0 ? QVariant(track.energy) : QVariant();
+        return track.energy.has_value() ? QVariant(*track.energy) : QVariant();
     case ColumnSource:
         return track.sourceLabel;
     case ColumnRemoteId:
@@ -712,10 +760,14 @@ void RestLibraryTableModel::rebuildVisibleRows() {
         }
     }
 
-    std::sort(m_visibleRows.begin(), m_visibleRows.end(), [this](int lhs, int rhs) {
+    const auto keyNotation = KeyUtils::keyNotationFromNumericValue(
+            ControlObject::get(mixxx::library::prefs::kKeyNotationConfigKey));
+    std::sort(m_visibleRows.begin(), m_visibleRows.end(), [this, keyNotation](int lhs, int rhs) {
         const RestLibraryTrack& leftTrack = m_tracks.at(lhs);
         const RestLibraryTrack& rightTrack = m_tracks.at(rhs);
         int compare = 0;
+        bool leftMissing = false;
+        bool rightMissing = false;
         switch (m_sortColumn) {
         case ColumnQuality:
             compare = leftTrack.quality < rightTrack.quality
@@ -738,15 +790,34 @@ void RestLibraryTableModel::rebuildVisibleRows() {
         case ColumnPlayCount:
             compare = leftTrack.playCount - rightTrack.playCount;
             break;
+        case ColumnKey: {
+            const auto leftKey = KeyUtils::guessKeyFromText(leftTrack.keyText);
+            const auto rightKey = KeyUtils::guessKeyFromText(rightTrack.keyText);
+            leftMissing = leftKey == mixxx::track::io::key::INVALID;
+            rightMissing = rightKey == mixxx::track::io::key::INVALID;
+            if (!leftMissing && !rightMissing) {
+                compare = KeyUtils::keyToCircleOfFifthsOrder(leftKey, keyNotation) -
+                        KeyUtils::keyToCircleOfFifthsOrder(rightKey, keyNotation);
+            }
+            break;
+        }
         case ColumnFavour:
-            compare = leftTrack.favour < rightTrack.favour
-                    ? -1
-                    : leftTrack.favour > rightTrack.favour ? 1 : 0;
+            leftMissing = !leftTrack.favour.has_value();
+            rightMissing = !rightTrack.favour.has_value();
+            if (!leftMissing && !rightMissing) {
+                compare = *leftTrack.favour < *rightTrack.favour
+                        ? -1
+                        : *leftTrack.favour > *rightTrack.favour ? 1 : 0;
+            }
             break;
         case ColumnEnergy:
-            compare = leftTrack.energy < rightTrack.energy
-                    ? -1
-                    : leftTrack.energy > rightTrack.energy ? 1 : 0;
+            leftMissing = !leftTrack.energy.has_value();
+            rightMissing = !rightTrack.energy.has_value();
+            if (!leftMissing && !rightMissing) {
+                compare = *leftTrack.energy < *rightTrack.energy
+                        ? -1
+                        : *leftTrack.energy > *rightTrack.energy ? 1 : 0;
+            }
             break;
         case ColumnCacheState:
             compare = static_cast<int>(leftTrack.cacheState) -
@@ -757,6 +828,9 @@ void RestLibraryTableModel::rebuildVisibleRows() {
                     valueForColumn(leftTrack, m_sortColumn).toString(),
                     valueForColumn(rightTrack, m_sortColumn).toString());
             break;
+        }
+        if (leftMissing != rightMissing) {
+            return !leftMissing;
         }
         if (compare == 0) {
             compare = QString::localeAwareCompare(leftTrack.remoteId, rightTrack.remoteId);

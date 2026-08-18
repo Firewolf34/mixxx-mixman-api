@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QHash>
@@ -314,6 +316,9 @@ class RestLibraryClient final : public QObject {
             const QJsonObject& object,
             std::initializer_list<QString> keys);
     static double readDouble(
+            const QJsonObject& object,
+            std::initializer_list<QString> keys);
+    static std::optional<double> readOptionalDouble(
             const QJsonObject& object,
             std::initializer_list<QString> keys);
     static int readRating(const QJsonObject& object);

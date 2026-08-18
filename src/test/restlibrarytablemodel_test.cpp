@@ -1,12 +1,19 @@
 #include <gtest/gtest.h>
 
+#include <memory>
+
 #include <QDir>
 #include <QFile>
 #include <QIODevice>
+#include <QTableView>
 #include <QTemporaryDir>
 
+#include "control/controlobject.h"
+#include "library/library_prefs.h"
 #include "library/rest/restlibrarytablemodel.h"
+#include "library/tabledelegates/percentagedelegate.h"
 #include "test/librarytest.h"
+#include "track/keyutils.h"
 
 namespace {
 
@@ -188,4 +195,95 @@ TEST_F(RestLibraryTableModelTest, CatalogLeavesLocalOnlySearchFieldsUnavailable)
     model.search(QStringLiteral("location:remote"));
 
     EXPECT_EQ(model.rowCount(), 0);
+}
+
+TEST_F(RestLibraryTableModelTest, NormalizedValuesKeepZeroDistinctFromMissing) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    RestLibraryTrack zero = newTrack(
+            QStringLiteral("zero"), QStringLiteral("Ada"), QStringLiteral("Zero"));
+    zero.favour = 0.0;
+    zero.energy = 1.0;
+    model.setTracks({
+            zero,
+            newTrack(QStringLiteral("missing"), QStringLiteral("Bea"), QStringLiteral("Missing")),
+    });
+
+    const int favourColumn = model.fieldIndex(QStringLiteral("favour"));
+    const int energyColumn = model.fieldIndex(QStringLiteral("energy"));
+    EXPECT_EQ(model.data(model.index(0, favourColumn)).toString(), QStringLiteral("0%"));
+    EXPECT_DOUBLE_EQ(
+            model.data(model.index(0, favourColumn), TrackModel::kDataExportRole).toDouble(),
+            0.0);
+    EXPECT_EQ(model.data(model.index(0, energyColumn)).toString(), QStringLiteral("100%"));
+    EXPECT_EQ(model.data(model.index(1, favourColumn)).toString(), QStringLiteral("\u2014"));
+    EXPECT_FALSE(model.data(model.index(1, favourColumn), Qt::EditRole).isValid());
+
+    QTableView tableView;
+    std::unique_ptr<QAbstractItemDelegate> favourDelegate(
+            model.delegateForColumn(favourColumn, &tableView));
+    std::unique_ptr<QAbstractItemDelegate> energyDelegate(
+            model.delegateForColumn(energyColumn, &tableView));
+    EXPECT_NE(dynamic_cast<PercentageDelegate*>(favourDelegate.get()), nullptr);
+    EXPECT_NE(dynamic_cast<PercentageDelegate*>(energyDelegate.get()), nullptr);
+}
+
+TEST_F(RestLibraryTableModelTest, SortsNormalizedValuesAndKeepsMissingLast) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    RestLibraryTrack low = newTrack(
+            QStringLiteral("low"), QStringLiteral("Ada"), QStringLiteral("Low"));
+    low.favour = 0.0;
+    low.energy = 0.25;
+    RestLibraryTrack high = newTrack(
+            QStringLiteral("high"), QStringLiteral("Bea"), QStringLiteral("High"));
+    high.favour = 0.75;
+    high.energy = 1.0;
+    model.setTracks({
+            high,
+            newTrack(QStringLiteral("missing"), QStringLiteral("Cam"), QStringLiteral("Missing")),
+            low,
+    });
+
+    const int favourColumn = model.fieldIndex(QStringLiteral("favour"));
+    EXPECT_EQ(
+            model.sortColumnIdFromColumnIndex(favourColumn), TrackModel::SortColumnId::Favour);
+    EXPECT_EQ(
+            model.columnIndexFromSortColumnId(TrackModel::SortColumnId::Favour), favourColumn);
+    model.sort(favourColumn, Qt::AscendingOrder);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("low"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(1, 0)), QStringLiteral("high"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(2, 0)), QStringLiteral("missing"));
+    model.sort(favourColumn, Qt::DescendingOrder);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("high"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(1, 0)), QStringLiteral("low"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(2, 0)), QStringLiteral("missing"));
+
+    const int energyColumn = model.fieldIndex(QStringLiteral("energy"));
+    EXPECT_EQ(
+            model.sortColumnIdFromColumnIndex(energyColumn), TrackModel::SortColumnId::Energy);
+    EXPECT_EQ(
+            model.columnIndexFromSortColumnId(TrackModel::SortColumnId::Energy), energyColumn);
+}
+
+TEST_F(RestLibraryTableModelTest, SortsKeysByConfiguredCircleOfFifthsOrder) {
+    ControlObject::set(
+            mixxx::library::prefs::kKeyNotationConfigKey,
+            static_cast<double>(KeyUtils::KeyNotation::Lancelot));
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    RestLibraryTrack eightA = newTrack(
+            QStringLiteral("8a"), QStringLiteral("Ada"), QStringLiteral("Eight A"));
+    eightA.keyText = QStringLiteral("8A");
+    RestLibraryTrack nineA = newTrack(
+            QStringLiteral("9a"), QStringLiteral("Bea"), QStringLiteral("Nine A"));
+    nineA.keyText = QStringLiteral("9A");
+    model.setTracks({
+            nineA,
+            newTrack(QStringLiteral("missing"), QStringLiteral("Cam"), QStringLiteral("Missing")),
+            eightA,
+    });
+
+    const int keyColumn = model.fieldIndex(QStringLiteral("key"));
+    model.sort(keyColumn, Qt::AscendingOrder);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("8a"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(1, 0)), QStringLiteral("9a"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(2, 0)), QStringLiteral("missing"));
 }

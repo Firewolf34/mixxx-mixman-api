@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <QDate>
 #include <QList>
 #include <QMetaType>
@@ -34,8 +36,8 @@ struct RestLibraryTrack {
     double durationSeconds = 0.0;
     int rating = 0;
     int playCount = 0;
-    double favour = 0.0;
-    double energy = 0.0;
+    std::optional<double> favour;
+    std::optional<double> energy;
     QString sourceLabel;
     QUrl sourceUrl;
     QUrl artworkUrl;

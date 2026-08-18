@@ -52,6 +52,7 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
             int role = Qt::DisplayRole) const override;
     Qt::ItemFlags flags(const QModelIndex& index) const override;
     void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override;
+    QAbstractItemDelegate* delegateForColumn(int index, QObject* pParent) override;
 
     TrackPointer getTrack(const QModelIndex& index) const override;
     TrackPointer getTrackByRef(const TrackRef& trackRef) const override;

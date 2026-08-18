@@ -169,9 +169,39 @@ TEST(RestLibraryClientTest, ParsesHydratedCatalogPage) {
     EXPECT_EQ(page.tracks.constFirst().remoteId, QStringLiteral("7"));
     EXPECT_EQ(page.tracks.constFirst().rating, 4);
     EXPECT_EQ(page.tracks.constFirst().playCount, 9);
-    EXPECT_DOUBLE_EQ(page.tracks.constFirst().favour, 0.75);
-    EXPECT_DOUBLE_EQ(page.tracks.constFirst().energy, 0.6);
+    ASSERT_TRUE(page.tracks.constFirst().favour.has_value());
+    ASSERT_TRUE(page.tracks.constFirst().energy.has_value());
+    EXPECT_DOUBLE_EQ(*page.tracks.constFirst().favour, 0.75);
+    EXPECT_DOUBLE_EQ(*page.tracks.constFirst().energy, 0.6);
     EXPECT_EQ(page.nextCursor, QStringLiteral("cursor-2"));
+}
+
+TEST(RestLibraryClientTest, PreservesNormalizedZeroAndRejectsInvalidNormalizedValues) {
+    bool valid = false;
+    const auto page = RestLibraryClient::parseTrackCatalogPageForTesting(
+            QJsonDocument::fromJson(R"json({
+                "items": [
+                    {"id": 1, "favour": 0, "energy": 1},
+                    {"id": 2},
+                    {"id": 3, "favour": -0.1, "energy": 1.1},
+                    {"id": 4, "favour": "0.25", "energy": "invalid"}
+                ]
+            })json"),
+            &valid);
+
+    ASSERT_TRUE(valid);
+    ASSERT_EQ(page.tracks.size(), 4);
+    ASSERT_TRUE(page.tracks.at(0).favour.has_value());
+    ASSERT_TRUE(page.tracks.at(0).energy.has_value());
+    EXPECT_DOUBLE_EQ(*page.tracks.at(0).favour, 0.0);
+    EXPECT_DOUBLE_EQ(*page.tracks.at(0).energy, 1.0);
+    EXPECT_FALSE(page.tracks.at(1).favour.has_value());
+    EXPECT_FALSE(page.tracks.at(1).energy.has_value());
+    EXPECT_FALSE(page.tracks.at(2).favour.has_value());
+    EXPECT_FALSE(page.tracks.at(2).energy.has_value());
+    ASSERT_TRUE(page.tracks.at(3).favour.has_value());
+    EXPECT_DOUBLE_EQ(*page.tracks.at(3).favour, 0.25);
+    EXPECT_FALSE(page.tracks.at(3).energy.has_value());
 }
 
 TEST(RestLibraryCatalogLimitsTest, StopsBeforeRequestingMoreThanConfiguredPages) {

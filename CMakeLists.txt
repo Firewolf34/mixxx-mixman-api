@@ -1494,6 +1494,7 @@ add_library(
   src/library/tabledelegates/locationdelegate.cpp
   src/library/tabledelegates/multilineeditdelegate.cpp
   src/library/tabledelegates/overviewdelegate.cpp
+  src/library/tabledelegates/percentagedelegate.cpp
   src/library/tabledelegates/previewbuttondelegate.cpp
   src/library/tabledelegates/stardelegate.cpp
   src/library/tabledelegates/stareditor.cpp

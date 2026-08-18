@@ -49,6 +49,13 @@ const char* kRequestMethodProperty = "requestMethod";
 const char* kMutationSequenceProperty = "mutationSequence";
 const char* kResponseTooLargeProperty = "restLibraryResponseTooLarge";
 
+std::optional<double> normalizedValue(std::optional<double> value) {
+    if (!value.has_value() || !std::isfinite(*value) || *value < 0.0 || *value > 1.0) {
+        return std::nullopt;
+    }
+    return value;
+}
+
 bool isSuccessStatus(int statusCode) {
     return statusCode >= 200 && statusCode < 300;
 }
@@ -2881,8 +2888,8 @@ RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) 
     track.color = readString(object, {"color", "colour"});
     track.region = readString(object, {"region", "region_id"});
     track.playCount = static_cast<int>(readDouble(object, {"play_count"}));
-    track.favour = readDouble(object, {"favour"});
-    track.energy = readDouble(object, {"energy"});
+    track.favour = normalizedValue(readOptionalDouble(object, {"favour"}));
+    track.energy = normalizedValue(readOptionalDouble(object, {"energy"}));
 
     const QString releaseDate = readString(object, {"release_date", "date"});
     if (!releaseDate.isEmpty()) {
@@ -3386,6 +3393,12 @@ QString RestLibraryClient::readString(
 double RestLibraryClient::readDouble(
         const QJsonObject& object,
         std::initializer_list<QString> keys) {
+    return readOptionalDouble(object, keys).value_or(0.0);
+}
+
+std::optional<double> RestLibraryClient::readOptionalDouble(
+        const QJsonObject& object,
+        std::initializer_list<QString> keys) {
     for (const QString& key : keys) {
         const QJsonValue value = object.value(key);
         if (value.isDouble()) {
@@ -3399,7 +3412,7 @@ double RestLibraryClient::readDouble(
             }
         }
     }
-    return 0.0;
+    return std::nullopt;
 }
 
 int RestLibraryClient::readRating(const QJsonObject& object) {
