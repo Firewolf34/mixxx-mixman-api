@@ -80,6 +80,7 @@ class DlgRestLibrary final : public QWidget, public LibraryView {
     void slotChooseTargetColor();
 
   private:
+    void updateTargetEnergyValue(int value);
     void updateTargetColorButton();
 
     std::unique_ptr<Ui::DlgRestLibrary> m_ui;

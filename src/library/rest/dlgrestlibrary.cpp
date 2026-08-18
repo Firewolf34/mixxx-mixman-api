@@ -88,6 +88,7 @@ DlgRestLibrary::DlgRestLibrary(
             &QSlider::valueChanged,
             this,
             [this](int value) {
+                updateTargetEnergyValue(value);
                 emit targetEnergyChanged(m_ui->checkBoxTargetEnergy->isChecked(), value);
             });
     connect(m_ui->checkBoxTargetColor,
@@ -150,6 +151,7 @@ DlgRestLibrary::DlgRestLibrary(
     m_ui->pushButtonTargetColor->setEnabled(false);
     m_ui->spinBoxTargetBpm->setEnabled(false);
     m_targetColor = QStringLiteral("#ffffff");
+    updateTargetEnergyValue(m_ui->horizontalSliderTargetEnergy->value());
     updateTargetColorButton();
     setAutoDJState(AutoDJProcessor::ADJ_DISABLED);
     setStatusText(tr("Select or play a track to load REST recommendations."));
@@ -243,6 +245,7 @@ void DlgRestLibrary::setMixManTargets(
         m_ui->horizontalSliderTargetEnergy->setValue(targetEnergy);
     }
     m_ui->horizontalSliderTargetEnergy->setEnabled(targetEnergyEnabled);
+    updateTargetEnergyValue(m_ui->horizontalSliderTargetEnergy->value());
 
     {
         const QSignalBlocker blocker(m_ui->checkBoxTargetColor);
@@ -305,13 +308,20 @@ void DlgRestLibrary::slotChooseTargetColor() {
     emit targetColorChanged(m_ui->checkBoxTargetColor->isChecked(), m_targetColor);
 }
 
+void DlgRestLibrary::updateTargetEnergyValue(int value) {
+    m_ui->labelTargetEnergyValue->setNum(value);
+    m_ui->horizontalSliderTargetEnergy->setAccessibleDescription(
+            tr("Current target energy: %1 of 5").arg(value));
+}
+
 void DlgRestLibrary::updateTargetColorButton() {
     const QColor color(m_targetColor);
     m_ui->pushButtonTargetColor->setStyleSheet(
             color.isValid()
                     ? QStringLiteral("background-color: %1;").arg(color.name(QColor::HexRgb))
                     : QString());
-    m_ui->pushButtonTargetColor->setToolTip(m_targetColor);
+    m_ui->pushButtonTargetColor->setToolTip(
+            tr("Choose target color (current: %1)").arg(m_targetColor));
 }
 
 } // namespace mixxx::library::rest
