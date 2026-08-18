@@ -113,6 +113,15 @@ RestLibraryTableModel::RestLibraryTableModel(
 
 RestLibraryTableModel::~RestLibraryTableModel() = default;
 
+int RestLibraryTableModel::cacheStateCount(RestLibraryCacheState state) const {
+    return static_cast<int>(std::count_if(
+            m_tracks.cbegin(),
+            m_tracks.cend(),
+            [state](const RestLibraryTrack& track) {
+                return track.cacheState == state;
+            }));
+}
+
 void RestLibraryTableModel::setTracks(QList<RestLibraryTrack> tracks) {
     beginResetModel();
     m_tracks = std::move(tracks);

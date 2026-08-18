@@ -1,5 +1,7 @@
 #include "library/rest/restlibrarybrowserfeature.h"
 
+#include <algorithm>
+
 #include <QMenu>
 #include <QUrl>
 #include <utility>
@@ -258,7 +260,7 @@ void RestLibraryBrowserFeature::slotCatalogPageFetched(
     m_catalogLoaded = true;
     m_refreshing = false;
     m_pRefreshAction->setEnabled(true);
-    setStatusText(tr("%1 tracks in REST Library.").arg(m_pTableModel->trackCount()));
+    updateStatusSummary();
 }
 
 void RestLibraryBrowserFeature::slotCatalogFetchFailed(const QString& message) {
@@ -298,8 +300,17 @@ void RestLibraryBrowserFeature::slotTrackCacheStateChanged(
         return;
     }
     m_pTableModel->updateTrackCacheState(result);
-    if (result.cacheState == RestLibraryCacheState::Ready) {
-        finishPendingLoads(result.remoteId);
+    const bool wasPendingForAutoDJ = m_autoDJIntent.pendingIds.contains(result.remoteId);
+    const bool hasPendingManualLoad =
+            m_pendingDefaultLoadRemoteId == result.remoteId ||
+            std::any_of(m_pendingPlayerLoads.cbegin(),
+                    m_pendingPlayerLoads.cend(),
+                    [&result](const PlayerLoadIntent& intent) {
+                        return intent.remoteId == result.remoteId;
+                    });
+    bool completedManualLoad = true;
+    if (result.cacheState == RestLibraryCacheState::Ready && hasPendingManualLoad) {
+        completedManualLoad = finishPendingLoads(result.remoteId);
     } else if (result.cacheState == RestLibraryCacheState::Failed) {
         if (m_pendingDefaultLoadRemoteId == result.remoteId) {
             m_pendingDefaultLoadRemoteId.clear();
@@ -324,6 +335,10 @@ void RestLibraryBrowserFeature::slotTrackCacheStateChanged(
             m_autoDJIntent.failedIds.insert(result.remoteId);
         }
         finishAutoDJIfReady();
+    }
+    if (result.cacheState == RestLibraryCacheState::Ready &&
+            !wasPendingForAutoDJ && completedManualLoad) {
+        updateStatusSummary();
     }
 }
 
@@ -431,11 +446,13 @@ void RestLibraryBrowserFeature::requestTrackCache(
     setStatusText(tr("Downloading %1 — %2…").arg(track.artist, track.title));
 }
 
-void RestLibraryBrowserFeature::finishPendingLoads(const QString& remoteId) {
+bool RestLibraryBrowserFeature::finishPendingLoads(const QString& remoteId) {
     const TrackPointer pTrack = m_pTableModel->materializeTrack(remoteId);
     if (!pTrack) {
-        return;
+        setStatusText(tr("Track was cached but could not be loaded."));
+        return false;
     }
+    bool completedCleanly = true;
     if (m_pendingDefaultLoadRemoteId == remoteId) {
         m_pendingDefaultLoadRemoteId.clear();
         emit loadTrack(pTrack);
@@ -450,6 +467,7 @@ void RestLibraryBrowserFeature::finishPendingLoads(const QString& remoteId) {
         it = m_pendingPlayerLoads.erase(it);
         if (!mayLoadToGroup(intent.group)) {
             setStatusText(tr("Track cached; the destination deck became busy. Load it again."));
+            completedCleanly = false;
             continue;
         }
 #ifdef __STEM__
@@ -459,6 +477,7 @@ void RestLibraryBrowserFeature::finishPendingLoads(const QString& remoteId) {
         emit loadTrackToPlayer(pTrack, intent.group, intent.play);
 #endif
     }
+    return completedCleanly;
 }
 
 void RestLibraryBrowserFeature::finishAutoDJIfReady() {
@@ -583,6 +602,33 @@ QString RestLibraryBrowserFeature::settingsIdentity(
 void RestLibraryBrowserFeature::setStatusText(const QString& text) {
     m_statusText = text;
     emit statusTextChanged(text);
+}
+
+void RestLibraryBrowserFeature::updateStatusSummary() {
+    const int trackCount = m_pTableModel->trackCount();
+    QString summary = trackCount == 1
+            ? tr("1 REST Library track")
+            : tr("%1 REST Library tracks").arg(trackCount);
+    QStringList details;
+    const int readyCount =
+            m_pTableModel->cacheStateCount(RestLibraryCacheState::Ready);
+    const int downloadingCount =
+            m_pTableModel->cacheStateCount(RestLibraryCacheState::Downloading);
+    const int failedCount =
+            m_pTableModel->cacheStateCount(RestLibraryCacheState::Failed);
+    if (readyCount > 0) {
+        details.append(tr("%1 cached").arg(readyCount));
+    }
+    if (downloadingCount > 0) {
+        details.append(tr("%1 downloading").arg(downloadingCount));
+    }
+    if (failedCount > 0) {
+        details.append(tr("%1 failed").arg(failedCount));
+    }
+    if (!details.isEmpty()) {
+        summary += QStringLiteral(" \u00b7 ") + details.join(QStringLiteral(" \u00b7 "));
+    }
+    setStatusText(summary);
 }
 
 } // namespace mixxx::library::rest

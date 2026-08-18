@@ -134,6 +134,33 @@ TEST_F(RestLibraryTableModelTest, CacheFailureTooltipIncludesStatusContext) {
     EXPECT_TRUE(tooltip.contains(QStringLiteral("HTTP 401")));
 }
 
+TEST_F(RestLibraryTableModelTest, CountsCatalogCacheStates) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setTracks({
+            newTrack(QStringLiteral("1"),
+                    QStringLiteral("Ada"),
+                    QStringLiteral("Ready"),
+                    RestLibraryCacheState::Ready),
+            newTrack(QStringLiteral("2"),
+                    QStringLiteral("Bea"),
+                    QStringLiteral("Downloading"),
+                    RestLibraryCacheState::Downloading),
+            newTrack(QStringLiteral("3"),
+                    QStringLiteral("Cam"),
+                    QStringLiteral("Failed"),
+                    RestLibraryCacheState::Failed),
+            newTrack(QStringLiteral("4"),
+                    QStringLiteral("Dee"),
+                    QStringLiteral("Missing")),
+    });
+
+    EXPECT_EQ(model.cacheStateCount(RestLibraryCacheState::Ready), 1);
+    EXPECT_EQ(model.cacheStateCount(RestLibraryCacheState::Downloading), 1);
+    EXPECT_EQ(model.cacheStateCount(RestLibraryCacheState::Failed), 1);
+    EXPECT_EQ(model.cacheStateCount(RestLibraryCacheState::Missing), 1);
+    EXPECT_EQ(model.cacheStateCount(RestLibraryCacheState::Stale), 0);
+}
+
 TEST_F(RestLibraryTableModelTest, SearchFiltersVisibleRows) {
     RestLibraryTableModel model(nullptr, trackCollectionManager());
     model.setTracks({

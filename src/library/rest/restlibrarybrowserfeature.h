@@ -100,7 +100,7 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     void requestTrackCache(
             const QString& remoteId,
             const RestLibrarySettings& settings);
-    void finishPendingLoads(const QString& remoteId);
+    bool finishPendingLoads(const QString& remoteId);
     void finishAutoDJIfReady();
     bool mayLoadToGroup(const QString& group) const;
     bool resetIfSettingsChanged(const RestLibrarySettings& settings);
@@ -109,6 +109,7 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     void updateLoadCapabilities(const RestLibrarySettings& settings);
     QString settingsIdentity(const RestLibrarySettings& settings) const;
     void setStatusText(const QString& text);
+    void updateStatusSummary();
 
     parented_ptr<TreeItemModel> m_pSidebarModel;
     parented_ptr<RestLibraryTableModel> m_pTableModel;

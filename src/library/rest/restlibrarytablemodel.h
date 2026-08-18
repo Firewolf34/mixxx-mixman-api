@@ -42,6 +42,7 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
     int trackCount() const {
         return m_tracks.size();
     }
+    int cacheStateCount(RestLibraryCacheState state) const;
 
     int rowCount(const QModelIndex& parent = QModelIndex()) const override;
     int columnCount(const QModelIndex& parent = QModelIndex()) const override;

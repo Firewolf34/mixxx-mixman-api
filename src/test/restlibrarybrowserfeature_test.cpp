@@ -203,8 +203,13 @@ TEST_F(RestLibraryBrowserFeatureTest, ExplicitLoadWaitsForCacheCompletion) {
             200,
             QByteArrayLiteral("audio bytes"));
     QSignalSpy loadSpy(m_pFeature.get(), &LibraryFeature::loadTrack);
+    QSignalSpy statusSpy(
+            m_pFeature.get(),
+            &RestLibraryBrowserFeature::statusTextChanged);
     requestDefaultLoad(model()->index(0, 0));
     EXPECT_EQ(loadSpy.count(), 0);
+    ASSERT_GT(statusSpy.count(), 0);
+    EXPECT_TRUE(statusSpy.last().at(0).toString().contains(QStringLiteral("Downloading")));
 
     pAudio->Done(true);
 
@@ -212,6 +217,11 @@ TEST_F(RestLibraryBrowserFeatureTest, ExplicitLoadWaitsForCacheCompletion) {
     const TrackPointer pTrack = qvariant_cast<TrackPointer>(loadSpy.takeFirst().at(0));
     ASSERT_TRUE(pTrack);
     EXPECT_TRUE(QFile::exists(pTrack->getLocation()));
+    ASSERT_GT(statusSpy.count(), 1);
+    const QString completedStatus = statusSpy.last().at(0).toString();
+    EXPECT_FALSE(completedStatus.contains(QStringLiteral("Downloading")));
+    EXPECT_TRUE(completedStatus.contains(QStringLiteral("1 REST Library track")));
+    EXPECT_TRUE(completedStatus.contains(QStringLiteral("1 cached")));
 }
 
 TEST_F(RestLibraryBrowserFeatureTest, CachedTrackDoesNotLoadIntoBusyDeck) {
