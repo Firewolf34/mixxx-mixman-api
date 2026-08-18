@@ -250,6 +250,11 @@ Agent tool selection:
 - Store REST bearer tokens only in QtKeychain, scoped to the configured server.
   Require HTTPS except for loopback development, and never send credentials or
   follow redirects outside the configured origin.
+- Partition REST catalog state, pending requests, cache events, and cached
+  audio by both configured server and a non-secret credential-context
+  namespace. Credential rotation and logout must invalidate the displayed
+  catalog immediately; raw bearer tokens must never enter filenames, logs, or
+  persisted cache metadata.
 - Store the rotating MixMan instance resume token only in QtKeychain, scoped to
   server and session. Never log or persist it in ordinary Mixxx settings.
 - Every authoritative MixMan playback, snapshot, and candidate write is fenced

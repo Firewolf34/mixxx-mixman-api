@@ -550,6 +550,19 @@ double RestLibrarySettings::mixManTargetEnergyNormalized() const {
             static_cast<double>(config::kMaxMixManTargetEnergy);
 }
 
+QString RestLibrarySettings::credentialContextNamespace() const {
+    if (bearerToken.isEmpty()) {
+        return QStringLiteral("tokenless");
+    }
+    const QByteArray material =
+            QByteArrayLiteral("mixxx/rest-library/credential-context/v1\0") +
+            bearerToken.toUtf8();
+    return QStringLiteral("bearer-sha256:%1")
+            .arg(QString::fromLatin1(
+                    QCryptographicHash::hash(material, QCryptographicHash::Sha256)
+                            .toHex()));
+}
+
 QString bearerTokenAccountForUrl(const QUrl& baseUrl) {
     const QUrl scopedUrl = baseUrl.adjusted(
             QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment |

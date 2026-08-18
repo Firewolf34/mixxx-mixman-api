@@ -296,7 +296,7 @@ void RestLibraryBrowserFeature::slotTrackCacheStateChanged(
         }
         return;
     }
-    if (result.serverIdentity != RestLibraryCacheManager::serverIdentity(settings)) {
+    if (result.cacheIdentity != RestLibraryCacheManager::cacheIdentity(settings)) {
         return;
     }
     m_pTableModel->updateTrackCacheState(result);
@@ -596,7 +596,8 @@ QString RestLibraryBrowserFeature::settingsIdentity(
     url.setPath(path);
     return url.toString(QUrl::FullyEncoded) + QLatin1Char('|') +
             settings.trackListPath + QLatin1Char('|') +
-            (settings.useMixManDefaults ? QStringLiteral("mixman") : QStringLiteral("custom"));
+            (settings.useMixManDefaults ? QStringLiteral("mixman") : QStringLiteral("custom")) +
+            QLatin1Char('|') + settings.credentialContextNamespace();
 }
 
 void RestLibraryBrowserFeature::setStatusText(const QString& text) {

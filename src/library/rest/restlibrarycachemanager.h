@@ -35,7 +35,7 @@ struct RestLibraryCacheResult {
     QString errorText;
     int statusCode = 0;
     int networkError = 0;
-    QString serverIdentity;
+    QString cacheIdentity;
 };
 
 class RestLibraryCacheManager final : public QObject {
@@ -63,11 +63,13 @@ class RestLibraryCacheManager final : public QObject {
     void abortAll();
 
     static QString serverIdentity(const RestLibrarySettings& settings);
+    static QString cacheIdentity(const RestLibrarySettings& settings);
 
     static QString cacheFileStemForTesting(const QString& remoteId);
     static QString cacheFileStemForTesting(
             const QUrl& baseUrl,
-            const QString& remoteId);
+            const QString& remoteId,
+            const QString& bearerToken = {});
     static QString extensionFromContentTypeForTesting(const QByteArray& contentType);
     static QString existingCachedFilePathForTesting(
             const QString& cacheDirectoryPath,
@@ -162,7 +164,7 @@ class RestLibraryCacheManager final : public QObject {
     QList<PendingDownload> m_downloadQueue;
     QList<ActiveDownload> m_activeDownloads;
     QHash<QString, QString> m_remoteIdByCacheStem;
-    QHash<QString, QString> m_serverIdentityByCacheStem;
+    QHash<QString, QString> m_cacheIdentityByCacheStem;
 };
 
 } // namespace mixxx::library::rest

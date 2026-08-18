@@ -261,7 +261,11 @@ bundle. If neither path restores the prior build, status remains
   reporting. While recommendation prefetch is queued, request a different deck
   track and confirm that it starts next without cancelling any shared browser
   or AutoDJ download. Set a small catalog page or track limit and confirm the
-  visible limit warning retains the prior completed catalog.
+  visible limit warning retains the prior completed catalog. On one server,
+  switch between two bearer-token accounts that expose an overlapping remote
+  track ID, then log out: each change must immediately clear the displayed
+  catalog, cancel pending catalog/audio requests, and download to a distinct
+  cache entry. Neither token may appear in cache filenames or logs.
 - For MixMan v3, verify both a configured bearer-token deployment and an
   explicitly auth-disabled trusted-LAN deployment. Confirm the same stable room
   is resumed after restarting Mixxx, recommendation controls use the

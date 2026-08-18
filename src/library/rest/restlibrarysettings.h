@@ -214,6 +214,9 @@ class RestLibrarySettings final {
     bool hasAllowedBearerTransport() const;
     bool maySendBearerTokenTo(const QUrl& url) const;
     double mixManTargetEnergyNormalized() const;
+    // A stable, non-secret identity for the current authentication context.
+    // It changes on bearer-token rotation and logout without exposing the token.
+    QString credentialContextNamespace() const;
 };
 
 QString bearerTokenAccountForUrl(const QUrl& baseUrl);

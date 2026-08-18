@@ -1851,7 +1851,7 @@ void RestLibraryFeature::slotFetchFailed(const QString& message) {
 
 void RestLibraryFeature::slotTrackCacheStateChanged(const RestLibraryCacheResult& result) {
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    if (result.serverIdentity != RestLibraryCacheManager::serverIdentity(settings)) {
+    if (result.cacheIdentity != RestLibraryCacheManager::cacheIdentity(settings)) {
         return;
     }
     if (result.cacheState == RestLibraryCacheState::Ready &&

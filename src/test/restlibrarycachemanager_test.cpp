@@ -58,10 +58,15 @@ RestLibraryCacheResult lastResult(const QSignalSpy& spy) {
     return qvariant_cast<RestLibraryCacheResult>(spy.at(spy.count() - 1).at(0));
 }
 
-QString cacheFilePath(const QString& cachePath, const QString& remoteId) {
+QString cacheFilePath(
+        const QString& cachePath,
+        const QString& remoteId,
+        const QString& bearerToken = {}) {
     return QDir(cachePath).filePath(
             RestLibraryCacheManager::cacheFileStemForTesting(
-                    QUrl(QStringLiteral("http://example.invalid")), remoteId) +
+                    QUrl(QStringLiteral("http://example.invalid")),
+                    remoteId,
+                    bearerToken) +
             QStringLiteral(".mp3"));
 }
 
@@ -237,7 +242,71 @@ TEST(RestLibraryCacheManagerTest, DownloadsAudioToFinalCacheFile) {
     EXPECT_EQ(result.cacheState, RestLibraryCacheState::Ready);
     EXPECT_TRUE(QFile::exists(result.cachedFilePath));
     EXPECT_TRUE(result.cachedFilePath.endsWith(QStringLiteral(".mp3")));
-    EXPECT_EQ(result.serverIdentity, QStringLiteral("http://example.invalid"));
+    EXPECT_EQ(result.cacheIdentity,
+            RestLibraryCacheManager::cacheIdentity(newSettings(tempDir.path())));
+}
+
+TEST(RestLibraryCacheManagerTest, PartitionsOverlappingTrackIdsByCredentialContext) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MockNetworkAccessManager network;
+    RestLibraryCacheManager manager(&network);
+    QSignalSpy spy(&manager, &RestLibraryCacheManager::trackCacheStateChanged);
+    RestLibrarySettings accountA = newSettings(tempDir.path());
+    accountA.baseUrl = QUrl(QStringLiteral("https://example.invalid"));
+    accountA.bearerToken = QStringLiteral("account-a-secret-token");
+    RestLibrarySettings accountB = newSettings(tempDir.path());
+    accountB.baseUrl = accountA.baseUrl;
+    accountB.bearerToken = QStringLiteral("account-b-rotated-token");
+    RestLibrarySettings loggedOut = newSettings(tempDir.path());
+    loggedOut.baseUrl = accountA.baseUrl;
+    const RestLibraryTrack overlappingTrack = newTrack(QStringLiteral("42"));
+
+    MockNetworkReply* pAccountA = network.ExpectGet(
+            QStringLiteral("/configured-audio/42"),
+            {},
+            200,
+            QByteArrayLiteral("account a audio"));
+    manager.cacheTracks({overlappingTrack}, accountA);
+    pAccountA->Done(true);
+    const QString accountAPath = lastResult(spy).cachedFilePath;
+    ASSERT_TRUE(QFile::exists(accountAPath));
+
+    spy.clear();
+    manager.reconcileTracks({overlappingTrack}, accountB);
+    EXPECT_EQ(spy.count(), 0);
+    MockNetworkReply* pAccountB = network.ExpectGet(
+            QStringLiteral("/configured-audio/42"),
+            {},
+            200,
+            QByteArrayLiteral("account b audio"));
+    manager.cacheTracks({overlappingTrack}, accountB);
+    pAccountB->Done(true);
+    const QString accountBPath = lastResult(spy).cachedFilePath;
+    ASSERT_TRUE(QFile::exists(accountBPath));
+    EXPECT_NE(accountAPath, accountBPath);
+
+    spy.clear();
+    manager.reconcileTracks({overlappingTrack}, loggedOut);
+    EXPECT_EQ(spy.count(), 0);
+    MockNetworkReply* pLoggedOut = network.ExpectGet(
+            QStringLiteral("/configured-audio/42"),
+            {},
+            200,
+            QByteArrayLiteral("trusted lan audio"));
+    manager.cacheTracks({overlappingTrack}, loggedOut);
+    pLoggedOut->Done(true);
+    const QString loggedOutPath = lastResult(spy).cachedFilePath;
+    ASSERT_TRUE(QFile::exists(loggedOutPath));
+    EXPECT_NE(accountAPath, loggedOutPath);
+    EXPECT_NE(accountBPath, loggedOutPath);
+
+    const QStringList cacheFiles =
+            QDir(tempDir.path()).entryList(QDir::Files | QDir::NoDotAndDotDot);
+    EXPECT_EQ(cacheFiles.size(), 3);
+    EXPECT_FALSE(cacheFiles.join(QLatin1Char('|')).contains(accountA.bearerToken));
+    EXPECT_FALSE(cacheFiles.join(QLatin1Char('|')).contains(accountB.bearerToken));
 }
 
 TEST(RestLibraryCacheManagerTest, ExplicitLoadPromotesQueuedRecommendation) {
