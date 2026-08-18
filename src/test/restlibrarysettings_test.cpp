@@ -281,3 +281,20 @@ TEST_F(RestLibrarySettingsTest, TokenlessTrustedLanHttpRemainsAllowed) {
     EXPECT_FALSE(settings.maySendBearerTokenTo(
             QUrl(QStringLiteral("http://mixman.lan/api/tracks"))));
 }
+
+TEST_F(RestLibrarySettingsTest, CredentialContextNamespaceIsStableAndNonSecret) {
+    RestLibrarySettings settings;
+    EXPECT_EQ(settings.credentialContextNamespace(), QStringLiteral("tokenless"));
+
+    settings.bearerToken = QStringLiteral("account-a-secret-token");
+    const QString accountA = settings.credentialContextNamespace();
+    EXPECT_EQ(accountA, settings.credentialContextNamespace());
+    EXPECT_TRUE(accountA.startsWith(QStringLiteral("bearer-sha256:")));
+    EXPECT_FALSE(accountA.contains(settings.bearerToken));
+
+    settings.bearerToken = QStringLiteral("account-b-secret-token");
+    EXPECT_NE(accountA, settings.credentialContextNamespace());
+
+    settings.bearerToken.clear();
+    EXPECT_EQ(settings.credentialContextNamespace(), QStringLiteral("tokenless"));
+}

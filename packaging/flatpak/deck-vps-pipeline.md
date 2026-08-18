@@ -739,7 +739,12 @@ verify that browsing issues no audio requests. A deck or AutoDJ action must
 download only the requested tracks, and a failed catalog refresh must retain
 the prior complete in-memory snapshot. Explicit deck loads outrank ordered
 AutoDJ batches and recommendation prefetch; replacing recommendations may
-cancel only prefetch-only work.
+cancel only prefetch-only work. Verify that switching credentials on one
+configured origin clears the prior catalog and pending requests, and that two
+credential contexts with overlapping remote track IDs never share cached
+audio. Credential rotation and logout must each select a distinct cache
+identity without placing a bearer token in a filename, log, or persisted
+metadata.
 MixMan acceptance uses session contract v3: verify server-issued instance
 resume, generation-fenced playback publication, the limited Mixxx
 recommendation projection, and both configured-bearer and explicitly

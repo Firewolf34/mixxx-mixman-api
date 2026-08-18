@@ -23,7 +23,9 @@ namespace {
 namespace restConfig = mixxx::library::rest::config;
 using mixxx::library::rest::RestLibraryBackend;
 using mixxx::library::rest::RestLibraryBrowserFeature;
+using mixxx::library::rest::RestLibrarySettings;
 using mixxx::library::rest::RestLibraryTableModel;
+using mixxx::library::rest::RestLibraryTrack;
 
 QByteArray catalogPage(
         const QString& items,
@@ -76,6 +78,10 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
 
     void refresh() {
         m_pFeature->slotRefresh();
+    }
+
+    bool resetForSettings(const RestLibrarySettings& settings) {
+        return m_pFeature->resetIfSettingsChanged(settings);
     }
 
     void requestDefaultLoad(const QModelIndex& index) {
@@ -184,6 +190,54 @@ TEST_F(RestLibraryBrowserFeatureTest, SettingsChangeRestartsCatalogOnNewOrigin) 
     EXPECT_EQ(model()->trackForRemoteId(QStringLiteral("2")).title,
             QStringLiteral("Current"));
     EXPECT_TRUE(model()->trackForRemoteId(QStringLiteral("1")).remoteId.isEmpty());
+}
+
+TEST_F(RestLibraryBrowserFeatureTest, CredentialRotationAndLogoutClearCatalogImmediately) {
+    MockNetworkReply* pInitial = m_network.ExpectGet(
+            QStringLiteral("/tracks"),
+            {},
+            200,
+            catalogPage(QStringLiteral(R"json({"id":1,"title":"Account A"})json")));
+    activate();
+    pInitial->Done(true);
+    ASSERT_EQ(model()->trackCount(), 1);
+
+    MockNetworkReply* pPending = m_network.ExpectGet(
+            QStringLiteral("/tracks"),
+            {},
+            200,
+            catalogPage(QStringLiteral(R"json({"id":2,"title":"Stale"})json")));
+    refresh();
+    RestLibrarySettings accountA = RestLibrarySettings::fromConfig(config());
+    accountA.bearerToken = QStringLiteral("account-a-secret-token");
+    EXPECT_TRUE(resetForSettings(accountA));
+    EXPECT_TRUE(pPending->WasAborted());
+    EXPECT_EQ(model()->trackCount(), 0);
+
+    RestLibraryTrack accountATrack;
+    accountATrack.remoteId = QStringLiteral("7");
+    accountATrack.title = QStringLiteral("Account A cached catalog");
+    accountATrack.audioFileExtension = QStringLiteral("mp3");
+    model()->setTracks({accountATrack});
+    ASSERT_EQ(model()->trackCount(), 1);
+    MockNetworkReply* pAccountAAudio = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("7")}},
+            200,
+            QByteArrayLiteral("account a audio"));
+    m_backend.cacheManager()->cacheTracks({accountATrack}, accountA);
+
+    RestLibrarySettings rotated = accountA;
+    rotated.bearerToken = QStringLiteral("account-b-rotated-token");
+    EXPECT_TRUE(resetForSettings(rotated));
+    EXPECT_TRUE(pAccountAAudio->WasAborted());
+    EXPECT_EQ(model()->trackCount(), 0);
+
+    model()->setTracks({accountATrack});
+    RestLibrarySettings loggedOut = rotated;
+    loggedOut.bearerToken.clear();
+    EXPECT_TRUE(resetForSettings(loggedOut));
+    EXPECT_EQ(model()->trackCount(), 0);
 }
 
 TEST_F(RestLibraryBrowserFeatureTest, ExplicitLoadWaitsForCacheCompletion) {

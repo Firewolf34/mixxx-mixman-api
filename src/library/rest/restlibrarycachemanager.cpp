@@ -294,15 +294,23 @@ QString RestLibraryCacheManager::serverIdentity(
     return scopedUrl.toString(QUrl::FullyEncoded);
 }
 
+QString RestLibraryCacheManager::cacheIdentity(
+        const RestLibrarySettings& settings) {
+    return serverIdentity(settings) + QLatin1Char('|') +
+            settings.credentialContextNamespace();
+}
+
 QString RestLibraryCacheManager::cacheFileStemForTesting(const QString& remoteId) {
     return legacyCacheFileStem(remoteId);
 }
 
 QString RestLibraryCacheManager::cacheFileStemForTesting(
         const QUrl& baseUrl,
-        const QString& remoteId) {
+        const QString& remoteId,
+        const QString& bearerToken) {
     RestLibrarySettings settings;
     settings.baseUrl = baseUrl;
+    settings.bearerToken = bearerToken;
     return cacheFileStem(settings, remoteId);
 }
 
@@ -673,7 +681,7 @@ void RestLibraryCacheManager::rememberTrackCacheStems(
         if (!track.remoteId.isEmpty()) {
             const QString stem = cacheFileStem(settings, track.remoteId);
             m_remoteIdByCacheStem.insert(stem, track.remoteId);
-            m_serverIdentityByCacheStem.insert(stem, serverIdentity(settings));
+            m_cacheIdentityByCacheStem.insert(stem, cacheIdentity(settings));
         }
     }
 }
@@ -748,8 +756,8 @@ void RestLibraryCacheManager::pruneCacheSize(
             const QString remoteId =
                     m_remoteIdByCacheStem.value(fileInfo.completeBaseName());
             if (!remoteId.isEmpty() &&
-                    m_serverIdentityByCacheStem.value(fileInfo.completeBaseName()) ==
-                            serverIdentity(settings)) {
+                    m_cacheIdentityByCacheStem.value(fileInfo.completeBaseName()) ==
+                            cacheIdentity(settings)) {
                 emitState(settings, remoteId, RestLibraryCacheState::Stale);
             }
         }
@@ -832,7 +840,7 @@ void RestLibraryCacheManager::emitState(
             errorText,
             statusCode,
             networkError,
-            serverIdentity(settings)});
+            cacheIdentity(settings)});
 }
 
 void RestLibraryCacheManager::cleanupActiveDownload(ActiveDownload* pDownload) {
@@ -864,7 +872,7 @@ QString RestLibraryCacheManager::cacheFileStem(
         const RestLibrarySettings& settings,
         const QString& remoteId) {
     const QByteArray identity =
-            serverIdentity(settings).toUtf8() + '\0' + remoteId.toUtf8();
+            cacheIdentity(settings).toUtf8() + '\0' + remoteId.toUtf8();
     const QByteArray hash =
             QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex();
     return QString::fromLatin1(hash.left(kCacheHashLength));
