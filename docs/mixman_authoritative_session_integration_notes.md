@@ -67,6 +67,12 @@ With MixMan defaults enabled, recommendations come only from the instance-bound
 state route and authoritative mutation responses. Mixxx accepts the limited
 candidate display projection and path steps; controller queue, pressure,
 presence, intent graph, and event products are outside this surface.
+Candidate track metadata is hydrated from the bounded contract-v3 response,
+including `tracks_by_id` maps nested in direct policy plans and authoritative
+candidate envelopes. The catalog and recommendation panes project the same
+core metadata while recommendation scores, transition fields, and reason codes
+remain attached to the candidate. Hydration never starts a per-candidate
+request loop.
 
 Mixxx may request only `policy_refresh` from the shared actions route. It may
 select only a currently advertised candidate, using the current playback lease,
@@ -90,14 +96,25 @@ warning while retaining the prior completed snapshot. Browsing, search, sort,
 and selection never download audio or artwork.
 
 Deck, preview, sampler, and AutoDJ actions download only the selected tracks to
-the configured cache. Cache identity includes the normalized MixMan server URL
-and remote track ID; ambiguous legacy ID-only cache entries are ignored and
-left for normal pruning. Explicit deck loads take priority over ordered AutoDJ
+the configured cache. Cache identity includes the normalized MixMan server,
+non-secret credential-context namespace, and remote track ID; ambiguous legacy
+ID-only cache entries are ignored and left for normal pruning. Explicit deck
+loads take priority over ordered AutoDJ
 batches, which take priority over recommendation prefetch. Replacing a
 recommendation set cancels only prefetch ownership; a shared browser request
 keeps the same deduplicated download alive. Catalog reads remain outside
 session lease authority, while a materialized track's playback is observed by
 the existing v3 session integration.
+
+Before a newly materialized REST track is emitted to a deck or inserted into
+the AutoDJ queue, the shared REST backend runs a single-worker, low-priority,
+gain-only analysis when ReplayGain is enabled. Existing measured gain is reused
+from the stable cache-backed library identity. Manual loads show an analyzing
+state, and ordered AutoDJ batches wait for every selected track to become
+loudness-ready or fail explicitly. Analysis failure skips/refuses the affected
+track instead of labeling the configured fallback as measured gain. The normal
+player analyzer may still calculate waveform, BPM, key, and silence data after
+load, but it no longer races first audible playback for ReplayGain.
 
 ## Connection test
 

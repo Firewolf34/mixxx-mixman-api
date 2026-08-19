@@ -36,14 +36,16 @@ RestLibraryBrowserFeature::RestLibraryBrowserFeature(
                   pLibrary,
                   std::move(pConfig),
                   pBackend,
-                  pLibrary->trackCollectionManager()) {
+                  pLibrary->trackCollectionManager(),
+                  pBackend->loudnessManager()) {
 }
 
 RestLibraryBrowserFeature::RestLibraryBrowserFeature(
         Library* pLibrary,
         UserSettingsPointer pConfig,
         RestLibraryBackend* pBackend,
-        TrackCollectionManager* pTrackCollectionManager)
+        TrackCollectionManager* pTrackCollectionManager,
+        RestLibraryLoudnessManager* pLoudnessManager)
         : LibraryFeature(pLibrary, std::move(pConfig), QStringLiteral("computer")),
           m_pSidebarModel(make_parented<TreeItemModel>(this)),
           m_pTableModel(make_parented<RestLibraryTableModel>(
@@ -53,6 +55,7 @@ RestLibraryBrowserFeature::RestLibraryBrowserFeature(
           m_pRefreshAction(make_parented<QAction>(tr("Refresh"), this)),
           m_pBackend(pBackend),
           m_pTrackCollectionManager(pTrackCollectionManager),
+          m_pLoudnessManager(pLoudnessManager),
           m_client(pBackend->networkAccessManager(), this),
           m_settingsIdentity(
                   settingsIdentity(RestLibrarySettings::fromConfig(m_pConfig))) {
@@ -73,6 +76,12 @@ RestLibraryBrowserFeature::RestLibraryBrowserFeature(
             &RestLibraryCacheManager::trackCacheStateChanged,
             this,
             &RestLibraryBrowserFeature::slotTrackCacheStateChanged);
+    if (m_pLoudnessManager) {
+        connect(m_pLoudnessManager,
+                &RestLibraryLoudnessManager::trackLoudnessPrepared,
+                this,
+                &RestLibraryBrowserFeature::slotTrackLoudnessPrepared);
+    }
 }
 
 QVariant RestLibraryBrowserFeature::title() {
@@ -312,27 +321,28 @@ void RestLibraryBrowserFeature::slotTrackCacheStateChanged(
     if (result.cacheState == RestLibraryCacheState::Ready && hasPendingManualLoad) {
         completedManualLoad = finishPendingLoads(result.remoteId);
     } else if (result.cacheState == RestLibraryCacheState::Failed) {
-        if (m_pendingDefaultLoadRemoteId == result.remoteId) {
-            m_pendingDefaultLoadRemoteId.clear();
-        }
-        for (auto it = m_pendingPlayerLoads.begin();
-                it != m_pendingPlayerLoads.end();) {
-            if (it->remoteId == result.remoteId) {
-                it = m_pendingPlayerLoads.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        setStatusText(result.errorText.isEmpty()
+        failPendingLoads(
+                result.remoteId,
+                result.errorText.isEmpty()
                         ? tr("REST track download failed.")
                         : result.errorText);
     }
     if (m_autoDJIntent.pendingIds.contains(result.remoteId) &&
             (result.cacheState == RestLibraryCacheState::Ready ||
                     result.cacheState == RestLibraryCacheState::Failed)) {
-        m_autoDJIntent.pendingIds.remove(result.remoteId);
         if (result.cacheState == RestLibraryCacheState::Failed) {
+            m_autoDJIntent.pendingIds.remove(result.remoteId);
             m_autoDJIntent.failedIds.insert(result.remoteId);
+        } else {
+            const RestLibraryLoudnessResult loudness =
+                    prepareTrackForPlayback(result.remoteId);
+            if (loudness.state != RestLibraryLoudnessState::Analyzing) {
+                m_autoDJIntent.pendingIds.remove(result.remoteId);
+            }
+            if (loudness.state == RestLibraryLoudnessState::Failed) {
+                m_autoDJIntent.failedIds.insert(result.remoteId);
+                setStatusText(loudness.errorText);
+            }
         }
         finishAutoDJIfReady();
     }
@@ -410,6 +420,15 @@ void RestLibraryBrowserFeature::slotUnresolvedTracksAddToAutoDJ(
                 track.cachedFilePath.isEmpty()) {
             m_autoDJIntent.pendingIds.insert(remoteId);
             tracksToCache.append(track);
+        } else {
+            const RestLibraryLoudnessResult loudness =
+                    prepareTrackForPlayback(remoteId);
+            if (loudness.state == RestLibraryLoudnessState::Analyzing) {
+                m_autoDJIntent.pendingIds.insert(remoteId);
+            } else if (loudness.state == RestLibraryLoudnessState::Failed) {
+                m_autoDJIntent.failedIds.insert(remoteId);
+                setStatusText(loudness.errorText);
+            }
         }
     }
     if (m_autoDJIntent.remoteIds.isEmpty()) {
@@ -452,6 +471,16 @@ bool RestLibraryBrowserFeature::finishPendingLoads(const QString& remoteId) {
         setStatusText(tr("Track was cached but could not be loaded."));
         return false;
     }
+    const RestLibraryLoudnessResult loudness = prepareTrackForPlayback(remoteId);
+    if (loudness.state == RestLibraryLoudnessState::Analyzing) {
+        setStatusText(tr("Analyzing ReplayGain for %1 — %2…")
+                              .arg(pTrack->getArtist(), pTrack->getTitle()));
+        return false;
+    }
+    if (loudness.state == RestLibraryLoudnessState::Failed) {
+        failPendingLoads(remoteId, loudness.errorText);
+        return false;
+    }
     bool completedCleanly = true;
     if (m_pendingDefaultLoadRemoteId == remoteId) {
         m_pendingDefaultLoadRemoteId.clear();
@@ -478,6 +507,61 @@ bool RestLibraryBrowserFeature::finishPendingLoads(const QString& remoteId) {
 #endif
     }
     return completedCleanly;
+}
+
+RestLibraryLoudnessResult RestLibraryBrowserFeature::prepareTrackForPlayback(
+        const QString& remoteId) {
+    const TrackPointer pTrack = m_pTableModel->materializeTrack(remoteId);
+    if (!pTrack) {
+        return {{},
+                RestLibraryLoudnessState::Failed,
+                tr("Track was cached but could not be prepared for playback.")};
+    }
+    if (!m_pLoudnessManager) {
+        return {pTrack->getId(), RestLibraryLoudnessState::Ready, {}};
+    }
+    const RestLibraryLoudnessResult result =
+            m_pLoudnessManager->prepareTrack(pTrack);
+    if (result.state == RestLibraryLoudnessState::Analyzing) {
+        m_loudnessRemoteIds[result.trackId].insert(remoteId);
+    }
+    return result;
+}
+
+void RestLibraryBrowserFeature::failPendingLoads(
+        const QString& remoteId,
+        const QString& errorText) {
+    if (m_pendingDefaultLoadRemoteId == remoteId) {
+        m_pendingDefaultLoadRemoteId.clear();
+    }
+    for (auto it = m_pendingPlayerLoads.begin();
+            it != m_pendingPlayerLoads.end();) {
+        if (it->remoteId == remoteId) {
+            it = m_pendingPlayerLoads.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    setStatusText(errorText);
+}
+
+void RestLibraryBrowserFeature::slotTrackLoudnessPrepared(
+        const RestLibraryLoudnessResult& result) {
+    const QSet<QString> remoteIds = m_loudnessRemoteIds.take(result.trackId);
+    for (const QString& remoteId : remoteIds) {
+        if (result.state == RestLibraryLoudnessState::Ready) {
+            finishPendingLoads(remoteId);
+        } else {
+            failPendingLoads(remoteId, result.errorText);
+        }
+        if (m_autoDJIntent.pendingIds.contains(remoteId)) {
+            m_autoDJIntent.pendingIds.remove(remoteId);
+            if (result.state != RestLibraryLoudnessState::Ready) {
+                m_autoDJIntent.failedIds.insert(remoteId);
+            }
+        }
+    }
+    finishAutoDJIfReady();
 }
 
 void RestLibraryBrowserFeature::finishAutoDJIfReady() {
@@ -576,6 +660,7 @@ void RestLibraryBrowserFeature::clearPendingIntents() {
     m_pendingDefaultLoadRemoteId.clear();
     m_pendingPlayerLoads.clear();
     m_autoDJIntent.clear();
+    m_loudnessRemoteIds.clear();
 }
 
 void RestLibraryBrowserFeature::updateLoadCapabilities(

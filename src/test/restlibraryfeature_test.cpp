@@ -19,7 +19,47 @@ namespace {
 namespace restConfig = mixxx::library::rest::config;
 using mixxx::library::rest::RestLibraryBackend;
 using mixxx::library::rest::RestLibraryFeature;
+using mixxx::library::rest::RestLibraryLoudnessManager;
+using mixxx::library::rest::RestLibraryLoudnessResult;
+using mixxx::library::rest::RestLibraryLoudnessState;
 using mixxx::library::rest::RestLibraryTrack;
+
+class FakeLoudnessManager final : public RestLibraryLoudnessManager {
+  public:
+    using RestLibraryLoudnessManager::RestLibraryLoudnessManager;
+
+    RestLibraryLoudnessResult prepareTrack(const TrackPointer& pTrack) override {
+        if (!pTrack) {
+            return {{}, RestLibraryLoudnessState::Failed, QStringLiteral("missing track")};
+        }
+        if (!defer || m_readyTrackIds.contains(pTrack->getId())) {
+            return {pTrack->getId(), RestLibraryLoudnessState::Ready, {}};
+        }
+        return {pTrack->getId(), RestLibraryLoudnessState::Analyzing, {}};
+    }
+
+    void complete(const TrackPointer& pTrack, bool success) {
+        ASSERT_TRUE(pTrack);
+        RestLibraryLoudnessResult result;
+        result.trackId = pTrack->getId();
+        if (success) {
+            mixxx::ReplayGain replayGain = pTrack->getReplayGain();
+            replayGain.setRatio(2.0);
+            pTrack->setReplayGain(replayGain);
+            m_readyTrackIds.insert(pTrack->getId());
+            result.state = RestLibraryLoudnessState::Ready;
+        } else {
+            result.state = RestLibraryLoudnessState::Failed;
+            result.errorText = QStringLiteral("ReplayGain analysis failed");
+        }
+        emit trackLoudnessPrepared(result);
+    }
+
+    bool defer = false;
+
+  private:
+    QSet<TrackId> m_readyTrackIds;
+};
 
 RestLibraryTrack recommendation(const QString& remoteId, const QString& title) {
     RestLibraryTrack track;
@@ -52,7 +92,8 @@ class RestLibraryFeatureTest : public LibraryTest {
                 config(),
                 &m_backend,
                 nullptr,
-                trackCollectionManager()));
+                trackCollectionManager(),
+                &m_loudness));
     }
 
   protected:
@@ -64,6 +105,17 @@ class RestLibraryFeatureTest : public LibraryTest {
         m_pFeature->queueRecommendationsForAutoDJ();
     }
 
+    void requestPlayerLoad(
+            const TrackPointer& pTrack,
+            const QString& group,
+            bool play) {
+        m_pFeature->slotLoadTrackToPlayerRequested(pTrack, group, play);
+    }
+
+    void failFetch(const QString& message) {
+        m_pFeature->slotFetchFailed(message);
+    }
+
     QList<TrackId> autoDJTrackIds() {
         PlaylistDAO& playlistDao = internalCollection()->getPlaylistDAO();
         return playlistDao.getTrackIdsInPlaylistOrder(
@@ -73,6 +125,7 @@ class RestLibraryFeatureTest : public LibraryTest {
     MockNetworkAccessManager m_network;
     QTemporaryDir m_cacheDir;
     RestLibraryBackend m_backend;
+    FakeLoudnessManager m_loudness;
     std::unique_ptr<RestLibraryFeature> m_pFeature;
 };
 
@@ -105,6 +158,65 @@ TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForAllDownloadsAndPreservesOrder)
     EXPECT_EQ(autoDJTrackIds(),
             (QList<TrackId>{pFirst->getId(), pSecond->getId()}));
     EXPECT_TRUE(m_pFeature->m_autoDJRemoteIds.isEmpty());
+}
+
+TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForReplayGainPreparation) {
+    m_loudness.defer = true;
+    MockNetworkReply* pFirstAudio = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("52")}},
+            200,
+            QByteArrayLiteral("first audio"));
+    MockNetworkReply* pSecondAudio = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("51")}},
+            200,
+            QByteArrayLiteral("second audio"));
+
+    setRecommendations({recommendation(QStringLiteral("52"), QStringLiteral("First")),
+            recommendation(QStringLiteral("51"), QStringLiteral("Second"))});
+    queueRecommendations();
+    pFirstAudio->Done(true);
+    pSecondAudio->Done(true);
+
+    EXPECT_TRUE(autoDJTrackIds().isEmpty());
+    const TrackPointer pFirst =
+            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("52"));
+    const TrackPointer pSecond =
+            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("51"));
+    ASSERT_TRUE(pFirst);
+    ASSERT_TRUE(pSecond);
+    m_loudness.complete(pSecond, true);
+    EXPECT_TRUE(autoDJTrackIds().isEmpty());
+    m_loudness.complete(pFirst, true);
+
+    EXPECT_EQ(autoDJTrackIds(),
+            (QList<TrackId>{pFirst->getId(), pSecond->getId()}));
+}
+
+TEST_F(RestLibraryFeatureTest, ManualPlayerLoadWaitsForReplayGainPreparation) {
+    MockNetworkReply* pAudio = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("61")}},
+            200,
+            QByteArrayLiteral("audio"));
+    setRecommendations(
+            {recommendation(QStringLiteral("61"), QStringLiteral("Quiet Master"))});
+    pAudio->Done(true);
+    const TrackPointer pTrack =
+            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("61"));
+    ASSERT_TRUE(pTrack);
+    m_loudness.defer = true;
+    QSignalSpy loadSpy(m_pFeature.get(), &LibraryFeature::loadTrackToPlayer);
+
+    requestPlayerLoad(pTrack, QStringLiteral("[Channel1]"), true);
+
+    EXPECT_EQ(loadSpy.count(), 0);
+    EXPECT_FALSE(pTrack->getReplayGain().hasRatio());
+    m_loudness.complete(pTrack, true);
+
+    ASSERT_EQ(loadSpy.count(), 1);
+    EXPECT_TRUE(pTrack->getReplayGain().hasRatio());
 }
 
 TEST_F(RestLibraryFeatureTest, AutoDJBatchQueuesSuccessfulTracksAfterPartialFailure) {
@@ -189,4 +301,18 @@ TEST_F(RestLibraryFeatureTest, ChangedCandidatesCancelActiveAutoDJBatch) {
     EXPECT_TRUE(m_pFeature->m_autoDJPendingIds.isEmpty());
     EXPECT_TRUE(pOldAudio->WasAborted());
     pNewAudio->Done(true);
+}
+
+TEST_F(RestLibraryFeatureTest, FailedRefreshRetainsLastValidRecommendations) {
+    config()->setValue(restConfig::kCacheEnabledKey, false);
+    const QList<RestLibraryTrack> tracks{
+            recommendation(QStringLiteral("71"), QStringLiteral("Keep Me"))};
+    setRecommendations(tracks);
+    ASSERT_EQ(m_pFeature->m_pTableModel->trackCount(), 1);
+
+    failFetch(QStringLiteral("MixMan policy path response was not valid JSON."));
+
+    ASSERT_EQ(m_pFeature->m_pTableModel->trackCount(), 1);
+    EXPECT_EQ(m_pFeature->m_pTableModel->trackForRemoteId(QStringLiteral("71")).title,
+            QStringLiteral("Keep Me"));
 }

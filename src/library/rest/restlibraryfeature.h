@@ -11,6 +11,7 @@
 #include "library/rest/restlibrarycachemanager.h"
 #include "library/rest/restlibrarybackend.h"
 #include "library/rest/restlibraryclient.h"
+#include "library/rest/restlibraryloudnessmanager.h"
 #include "library/rest/restlibrarymutationsequencer.h"
 #include "library/rest/restlibrarytablemodel.h"
 #include "library/treeitemmodel.h"
@@ -92,6 +93,8 @@ class RestLibraryFeature final : public LibraryFeature {
     void slotFetchFailed(const QString& message);
     void slotTrackCacheStateChanged(
             const mixxx::library::rest::RestLibraryCacheResult& result);
+    void slotTrackLoudnessPrepared(
+            const mixxx::library::rest::RestLibraryLoudnessResult& result);
 
   private:
     friend class ::RestLibraryFeatureTest;
@@ -101,7 +104,15 @@ class RestLibraryFeature final : public LibraryFeature {
             UserSettingsPointer pConfig,
             RestLibraryBackend* pBackend,
             AutoDJProcessor* pAutoDJProcessor,
-            TrackCollectionManager* pTrackCollectionManager);
+            TrackCollectionManager* pTrackCollectionManager,
+            RestLibraryLoudnessManager* pLoudnessManager = nullptr);
+
+    struct PlayerLoadIntent {
+        TrackPointer pTrack;
+        QString remoteId;
+        QString group;
+        bool play = false;
+    };
 
     void refreshForTrack(const TrackPointer& pTrack, bool force, bool publishPlayback = true);
     void requestRecommendationsForRemoteId(
@@ -138,6 +149,11 @@ class RestLibraryFeature final : public LibraryFeature {
     void queueRecommendationsForAutoDJ();
     void finishRecommendationsAutoDJIfReady();
     void cancelRecommendationsAutoDJ();
+    RestLibraryLoudnessResult prepareTrackForPlayback(
+            const TrackPointer& pTrack,
+            const QString& remoteId);
+    void finishPendingManualLoads(const QString& remoteId);
+    void failPendingManualLoads(const QString& remoteId, const QString& errorText);
     void clearRecommendations();
     QString remoteIdForTrack(const TrackPointer& pTrack) const;
     static QString normalizedTrackLocation(const QString& location);
@@ -149,6 +165,7 @@ class RestLibraryFeature final : public LibraryFeature {
     RestLibraryBackend* const m_pBackend;
     AutoDJProcessor* const m_pAutoDJProcessor;
     TrackCollectionManager* const m_pTrackCollectionManager;
+    RestLibraryLoudnessManager* const m_pLoudnessManager;
     RestLibraryClient m_client;
     RestLibraryCacheManager* const m_pCacheManager;
     RestLibraryDiagnostics m_diagnostics;
@@ -168,6 +185,10 @@ class RestLibraryFeature final : public LibraryFeature {
     QStringList m_autoDJRemoteIds;
     QSet<QString> m_autoDJPendingIds;
     QSet<QString> m_autoDJFailedIds;
+    TrackPointer m_pPendingDefaultLoadTrack;
+    QString m_pendingDefaultLoadRemoteId;
+    QHash<QString, PlayerLoadIntent> m_pendingPlayerLoads;
+    QHash<TrackId, QSet<QString>> m_loudnessRemoteIds;
     QString m_lastRequestedTrackLocation;
     QString m_currentRemoteId;
     QString m_previousRemoteId;

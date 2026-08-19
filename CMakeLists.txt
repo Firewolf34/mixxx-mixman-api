@@ -1473,6 +1473,7 @@ add_library(
   src/library/rest/restlibraryclient.cpp
   src/library/rest/restlibrarymutationsequencer.cpp
   src/library/rest/restlibraryfeature.cpp
+  src/library/rest/restlibraryloudnessmanager.cpp
   src/library/rest/restlibrarysettings.cpp
   src/library/rest/restlibrarytablemodel.cpp
   src/library/rhythmbox/rhythmboxfeature.cpp

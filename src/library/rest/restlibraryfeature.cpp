@@ -121,7 +121,8 @@ RestLibraryFeature::RestLibraryFeature(
                   std::move(pConfig),
                   pBackend,
                   pAutoDJProcessor,
-                  pLibrary->trackCollectionManager()) {
+                  pLibrary->trackCollectionManager(),
+                  pBackend->loudnessManager()) {
 }
 
 RestLibraryFeature::RestLibraryFeature(
@@ -129,7 +130,8 @@ RestLibraryFeature::RestLibraryFeature(
         UserSettingsPointer pConfig,
         RestLibraryBackend* pBackend,
         AutoDJProcessor* pAutoDJProcessor,
-        TrackCollectionManager* pTrackCollectionManager)
+        TrackCollectionManager* pTrackCollectionManager,
+        RestLibraryLoudnessManager* pLoudnessManager)
         : LibraryFeature(pLibrary, std::move(pConfig), QStringLiteral("computer")),
           m_pSidebarModel(make_parented<TreeItemModel>(this)),
           m_pTableModel(make_parented<RestLibraryTableModel>(
@@ -139,6 +141,7 @@ RestLibraryFeature::RestLibraryFeature(
           m_pBackend(pBackend),
           m_pAutoDJProcessor(pAutoDJProcessor),
           m_pTrackCollectionManager(pTrackCollectionManager),
+          m_pLoudnessManager(pLoudnessManager),
           m_client(pBackend->networkAccessManager(), this),
           m_pCacheManager(pBackend->cacheManager()) {
     m_sessionHeartbeatTimer.setInterval(kSessionHeartbeatIntervalMillis);
@@ -233,6 +236,12 @@ RestLibraryFeature::RestLibraryFeature(
             &RestLibraryCacheManager::trackCacheStateChanged,
             this,
             &RestLibraryFeature::slotTrackCacheStateChanged);
+    if (m_pLoudnessManager) {
+        connect(m_pLoudnessManager,
+                &RestLibraryLoudnessManager::trackLoudnessPrepared,
+                this,
+                &RestLibraryFeature::slotTrackLoudnessPrepared);
+    }
     connect(m_pCacheManager,
             &RestLibraryCacheManager::requestDiagnosticUpdated,
             this,
@@ -527,7 +536,6 @@ void RestLibraryFeature::refreshForTrack(
 
     if (settings.hasTrackLookupConfigured()) {
         m_currentRemoteId.clear();
-        clearRecommendations();
         setStatusText(tr("Looking up the current track in the REST Library."));
         m_client.lookupTrack(settings, pTrack);
         return;
@@ -1096,6 +1104,16 @@ void RestLibraryFeature::queueRecommendationsForAutoDJ() {
                 track.cachedFilePath.isEmpty()) {
             m_autoDJPendingIds.insert(remoteId);
             tracksToCache.append(track);
+        } else {
+            const TrackPointer pTrack = m_pTableModel->materializeTrack(remoteId);
+            const RestLibraryLoudnessResult loudness =
+                    prepareTrackForPlayback(pTrack, remoteId);
+            if (loudness.state == RestLibraryLoudnessState::Analyzing) {
+                m_autoDJPendingIds.insert(remoteId);
+            } else if (loudness.state == RestLibraryLoudnessState::Failed) {
+                m_autoDJFailedIds.insert(remoteId);
+                setStatusText(loudness.errorText);
+            }
         }
     }
 
@@ -1192,36 +1210,122 @@ void RestLibraryFeature::cancelRecommendationsAutoDJ() {
 }
 
 void RestLibraryFeature::slotLoadTrackRequested(TrackPointer pTrack) {
-    selectMixManCandidateForTrack(pTrack);
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
     const QString remoteId = remoteIdForTrack(pTrack);
-    if (!remoteId.isEmpty()) {
-        rememberRemoteId(remoteId);
-        publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("loaded"));
+    if (remoteId.isEmpty()) {
+        emit loadTrack(pTrack);
+        return;
     }
-    emit loadTrack(pTrack);
+    m_pPendingDefaultLoadTrack = pTrack;
+    m_pendingDefaultLoadRemoteId = remoteId;
+    const RestLibraryLoudnessResult loudness =
+            prepareTrackForPlayback(pTrack, remoteId);
+    if (loudness.state == RestLibraryLoudnessState::Ready) {
+        finishPendingManualLoads(remoteId);
+    } else if (loudness.state == RestLibraryLoudnessState::Failed) {
+        failPendingManualLoads(remoteId, loudness.errorText);
+    } else {
+        setStatusText(tr("Analyzing ReplayGain for %1 — %2…")
+                              .arg(pTrack->getArtist(), pTrack->getTitle()));
+    }
 }
 
 void RestLibraryFeature::slotLoadTrackToPlayerRequested(
         TrackPointer pTrack,
         const QString& group,
         bool play) {
-    selectMixManCandidateForTrack(pTrack);
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
     const QString remoteId = remoteIdForTrack(pTrack);
-    if (!remoteId.isEmpty()) {
+    if (remoteId.isEmpty()) {
+#ifdef __STEM__
+        emit loadTrackToPlayer(pTrack, group, mixxx::StemChannelSelection(), play);
+#else
+        emit loadTrackToPlayer(pTrack, group, play);
+#endif
+        return;
+    }
+    m_pendingPlayerLoads.insert(group, {pTrack, remoteId, group, play});
+    const RestLibraryLoudnessResult loudness =
+            prepareTrackForPlayback(pTrack, remoteId);
+    if (loudness.state == RestLibraryLoudnessState::Ready) {
+        finishPendingManualLoads(remoteId);
+    } else if (loudness.state == RestLibraryLoudnessState::Failed) {
+        failPendingManualLoads(remoteId, loudness.errorText);
+    } else {
+        setStatusText(tr("Analyzing ReplayGain for %1 — %2…")
+                              .arg(pTrack->getArtist(), pTrack->getTitle()));
+    }
+}
+
+RestLibraryLoudnessResult RestLibraryFeature::prepareTrackForPlayback(
+        const TrackPointer& pTrack,
+        const QString& remoteId) {
+    if (!pTrack) {
+        return {{},
+                RestLibraryLoudnessState::Failed,
+                tr("REST track could not be prepared for playback.")};
+    }
+    if (!m_pLoudnessManager) {
+        return {pTrack->getId(), RestLibraryLoudnessState::Ready, {}};
+    }
+    const RestLibraryLoudnessResult result =
+            m_pLoudnessManager->prepareTrack(pTrack);
+    if (result.state == RestLibraryLoudnessState::Analyzing) {
+        m_loudnessRemoteIds[result.trackId].insert(remoteId);
+    }
+    return result;
+}
+
+void RestLibraryFeature::finishPendingManualLoads(const QString& remoteId) {
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    if (m_pendingDefaultLoadRemoteId == remoteId && m_pPendingDefaultLoadTrack) {
+        const TrackPointer pTrack = std::move(m_pPendingDefaultLoadTrack);
+        m_pendingDefaultLoadRemoteId.clear();
+        selectMixManCandidateForTrack(pTrack);
+        rememberRemoteId(remoteId);
+        publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("loaded"));
+        emit loadTrack(pTrack);
+    }
+    for (auto it = m_pendingPlayerLoads.begin();
+            it != m_pendingPlayerLoads.end();) {
+        if (it->remoteId != remoteId) {
+            ++it;
+            continue;
+        }
+        const PlayerLoadIntent intent = it.value();
+        it = m_pendingPlayerLoads.erase(it);
+        selectMixManCandidateForTrack(intent.pTrack);
         rememberRemoteId(remoteId);
         publishMixManPlayback(
                 settings,
-                pTrack,
+                intent.pTrack,
                 remoteId,
-                play ? QStringLiteral("playing") : QStringLiteral("loaded"));
-    }
+                intent.play ? QStringLiteral("playing") : QStringLiteral("loaded"));
 #ifdef __STEM__
-    emit loadTrackToPlayer(pTrack, group, mixxx::StemChannelSelection(), play);
+        emit loadTrackToPlayer(intent.pTrack,
+                intent.group,
+                mixxx::StemChannelSelection(),
+                intent.play);
 #else
-    emit loadTrackToPlayer(pTrack, group, play);
+        emit loadTrackToPlayer(intent.pTrack, intent.group, intent.play);
 #endif
+    }
+}
+
+void RestLibraryFeature::failPendingManualLoads(
+        const QString& remoteId,
+        const QString& errorText) {
+    if (m_pendingDefaultLoadRemoteId == remoteId) {
+        m_pendingDefaultLoadRemoteId.clear();
+        m_pPendingDefaultLoadTrack.reset();
+    }
+    for (auto it = m_pendingPlayerLoads.begin();
+            it != m_pendingPlayerLoads.end();) {
+        if (it->remoteId == remoteId) {
+            it = m_pendingPlayerLoads.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    setStatusText(errorText);
 }
 
 void RestLibraryFeature::requestRecommendationsForRemoteId(
@@ -1236,7 +1340,6 @@ void RestLibraryFeature::requestRecommendationsForRemoteId(
     }
 
     rememberRemoteId(remoteId);
-    clearRecommendations();
     if (settings.useMixManDefaults) {
         if (m_mixManRegistration.instance.instanceId.isEmpty()) {
             setStatusText(tr("Waiting for the MixMan v3 session instance."));
@@ -1842,7 +1945,6 @@ void RestLibraryFeature::setPathSummary(const RestLibraryPolicyPath& policyPath)
 }
 
 void RestLibraryFeature::slotFetchFailed(const QString& message) {
-    clearRecommendations();
     setStatusText(message.isEmpty()
                     ? tr("REST Library request failed.")
                     : message);
@@ -1869,9 +1971,21 @@ void RestLibraryFeature::slotTrackCacheStateChanged(const RestLibraryCacheResult
     if (m_autoDJPendingIds.contains(result.remoteId) &&
             (result.cacheState == RestLibraryCacheState::Ready ||
                     result.cacheState == RestLibraryCacheState::Failed)) {
-        m_autoDJPendingIds.remove(result.remoteId);
         if (result.cacheState == RestLibraryCacheState::Failed) {
+            m_autoDJPendingIds.remove(result.remoteId);
             m_autoDJFailedIds.insert(result.remoteId);
+        } else {
+            const TrackPointer pTrack =
+                    m_pTableModel->materializeTrack(result.remoteId);
+            const RestLibraryLoudnessResult loudness =
+                    prepareTrackForPlayback(pTrack, result.remoteId);
+            if (loudness.state != RestLibraryLoudnessState::Analyzing) {
+                m_autoDJPendingIds.remove(result.remoteId);
+            }
+            if (loudness.state == RestLibraryLoudnessState::Failed) {
+                m_autoDJFailedIds.insert(result.remoteId);
+                setStatusText(loudness.errorText);
+            }
         }
         finishRecommendationsAutoDJIfReady();
     }
@@ -1880,6 +1994,25 @@ void RestLibraryFeature::slotTrackCacheStateChanged(const RestLibraryCacheResult
             updateReadyStatus();
         }
     }
+}
+
+void RestLibraryFeature::slotTrackLoudnessPrepared(
+        const RestLibraryLoudnessResult& result) {
+    const QSet<QString> remoteIds = m_loudnessRemoteIds.take(result.trackId);
+    for (const QString& remoteId : remoteIds) {
+        if (result.state == RestLibraryLoudnessState::Ready) {
+            finishPendingManualLoads(remoteId);
+        } else {
+            failPendingManualLoads(remoteId, result.errorText);
+        }
+        if (m_autoDJPendingIds.contains(remoteId)) {
+            m_autoDJPendingIds.remove(remoteId);
+            if (result.state != RestLibraryLoudnessState::Ready) {
+                m_autoDJFailedIds.insert(remoteId);
+            }
+        }
+    }
+    finishRecommendationsAutoDJIfReady();
 }
 
 void RestLibraryFeature::setStatusText(const QString& statusText) {

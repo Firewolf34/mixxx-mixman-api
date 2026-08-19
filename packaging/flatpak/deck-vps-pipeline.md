@@ -784,6 +784,12 @@ credential contexts with overlapping remote track IDs never share cached
 audio. Credential rotation and logout must each select a distinct cache
 identity without placing a bearer token in a filename, log, or persisted
 metadata.
+Confirm that direct policy and authoritative recommendation rows expose the
+same hydrated core metadata as the catalog without per-candidate requests.
+For a newly downloaded quiet-master fixture, manual playback and AutoDJ must
+wait for the low-priority gain-only preparation pass and use its positive
+ReplayGain on first audible play. A preparation failure must remain visible and
+skip/refuse the affected track without changing gain during active playback.
 MixMan acceptance uses session contract v3: verify server-issued instance
 resume, generation-fenced playback publication, the limited Mixxx
 recommendation projection, and both configured-bearer and explicitly

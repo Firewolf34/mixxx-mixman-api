@@ -138,6 +138,47 @@ QJsonObject objectForTrackId(const QJsonObject& tracksById, const QString& remot
     return value.isObject() ? value.toObject() : QJsonObject();
 }
 
+QJsonObject mergeTrackObjects(QJsonObject base, const QJsonObject& overlay) {
+    for (auto it = overlay.constBegin(); it != overlay.constEnd(); ++it) {
+        if (it.key() == QStringLiteral("metadata") &&
+                it.value().isObject() &&
+                base.value(it.key()).isObject()) {
+            base.insert(it.key(),
+                    mergeTrackObjects(
+                            base.value(it.key()).toObject(),
+                            it.value().toObject()));
+        } else {
+            base.insert(it.key(), it.value());
+        }
+    }
+    return base;
+}
+
+QJsonObject hydratedTrackObject(
+        const QJsonObject& candidate,
+        const QString& remoteId,
+        std::initializer_list<QJsonObject> trackMaps) {
+    QJsonObject result = candidate;
+    result.remove(QStringLiteral("id"));
+    result.remove(QStringLiteral("track"));
+    result.remove(QStringLiteral("track_metadata"));
+    if (!remoteId.isEmpty()) {
+        result.insert(QStringLiteral("track_id"), remoteId);
+    }
+    for (const QJsonObject& tracksById : trackMaps) {
+        const QJsonObject mappedTrack = objectForTrackId(tracksById, remoteId);
+        if (!mappedTrack.isEmpty()) {
+            result = mergeTrackObjects(std::move(result), mappedTrack);
+        }
+    }
+    result = mergeTrackObjects(
+            std::move(result),
+            candidate.value(QStringLiteral("track_metadata")).toObject());
+    return mergeTrackObjects(
+            std::move(result),
+            candidate.value(QStringLiteral("track")).toObject());
+}
+
 QStringList readStringArray(const QJsonObject& object, const QString& key) {
     QStringList result;
     const QJsonValue value = object.value(key);
@@ -2836,20 +2877,70 @@ RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) 
     RestLibraryTrack track;
     const QJsonObject metadata = object.value(QStringLiteral("metadata")).toObject();
     track.remoteId = readString(object, {"id", "track_id"});
+    if (track.remoteId.isEmpty()) {
+        track.remoteId = readString(metadata, {"id", "track_id"});
+    }
     track.reviewId = readString(object, {"review_id", "hash_id"});
+    if (track.reviewId.isEmpty()) {
+        track.reviewId = readString(metadata, {"review_id", "hash_id"});
+    }
     track.title = readString(object, {"title", "name", "label"});
+    if (track.title.isEmpty()) {
+        track.title = readString(metadata, {"title", "name", "label"});
+    }
     track.artist = readString(object, {"artist", "artists"});
+    if (track.artist.isEmpty()) {
+        track.artist = readString(metadata, {"artist", "artists"});
+    }
     track.album = readString(object, {"album"});
+    if (track.album.isEmpty()) {
+        track.album = readString(metadata, {"album"});
+    }
     track.genre = readString(object, {"genre"});
+    if (track.genre.isEmpty()) {
+        track.genre = readString(metadata, {"genre"});
+    }
     track.composer = readString(object, {"composer"});
+    if (track.composer.isEmpty()) {
+        track.composer = readString(metadata, {"composer"});
+    }
     track.comment = readString(object, {"comment"});
+    if (track.comment.isEmpty()) {
+        track.comment = readString(metadata, {"comment"});
+    }
     track.keyText = readString(object, {"key", "musical_key"});
+    if (track.keyText.isEmpty()) {
+        track.keyText = readString(metadata, {"key", "musical_key"});
+    }
     track.trackNumber = readString(object, {"track_number", "tracknumber"});
+    if (track.trackNumber.isEmpty()) {
+        track.trackNumber = readString(metadata, {"track_number", "tracknumber"});
+    }
     track.label = readString(object, {"label"});
+    if (track.label.isEmpty()) {
+        track.label = readString(metadata, {"label"});
+    }
     track.sourceLabel = readString(object, {"source", "mode"});
+    if (track.sourceLabel.isEmpty()) {
+        track.sourceLabel = readString(metadata, {"source", "mode"});
+    }
     track.audioFileExtension = readString(
             object,
-            {"extension", "file_extension", "audio_extension", "download_file_extension"});
+            {"extension",
+                    "file_extension",
+                    "audio_extension",
+                    "download_file_extension",
+                    "file_type"});
+    if (track.audioFileExtension.isEmpty()) {
+        track.audioFileExtension = readString(
+                metadata,
+                {"extension",
+                        "file_extension",
+                        "audio_extension",
+                        "download_file_extension",
+                        "file_type",
+                        "type"});
+    }
     track.bpm = readDouble(object, {"bpm"});
     if (track.bpm <= 0.0) {
         track.bpm = readDouble(metadata, {"bpm"});
@@ -2861,15 +2952,6 @@ RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) 
     track.rating = readRating(object);
     if (track.rating <= 0) {
         track.rating = readRating(metadata);
-    }
-    if (track.keyText.isEmpty()) {
-        track.keyText = readString(metadata, {"key", "musical_key"});
-    }
-    if (track.genre.isEmpty()) {
-        track.genre = readString(metadata, {"genre"});
-    }
-    if (track.audioFileExtension.isEmpty()) {
-        track.audioFileExtension = readString(metadata, {"download_file_extension"});
     }
     track.quality = readDouble(object, {"quality", "quality_score"});
     if (track.quality <= 0.0) {
@@ -2888,20 +2970,41 @@ RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) 
     track.color = readString(object, {"color", "colour"});
     track.region = readString(object, {"region", "region_id"});
     track.playCount = static_cast<int>(readDouble(object, {"play_count"}));
+    if (track.playCount <= 0) {
+        track.playCount = static_cast<int>(readDouble(metadata, {"play_count"}));
+    }
     track.favour = normalizedValue(readOptionalDouble(object, {"favour"}));
+    if (!track.favour.has_value()) {
+        track.favour = normalizedValue(readOptionalDouble(metadata, {"favour"}));
+    }
     track.energy = normalizedValue(readOptionalDouble(object, {"energy"}));
-
-    const QString releaseDate = readString(object, {"release_date", "date"});
-    if (!releaseDate.isEmpty()) {
-        track.releaseDate = QDate::fromString(releaseDate.left(10), Qt::ISODate);
+    if (!track.energy.has_value()) {
+        track.energy = normalizedValue(readOptionalDouble(metadata, {"energy"}));
     }
 
-    const QString sourceUrl = readString(
+    QString releaseDate = readString(object, {"release_date", "date", "release_year", "year"});
+    if (releaseDate.isEmpty()) {
+        releaseDate = readString(metadata, {"release_date", "date", "release_year", "year"});
+    }
+    if (!releaseDate.isEmpty()) {
+        track.releaseDate = releaseDate.size() == 4
+                ? QDate(releaseDate.toInt(), 1, 1)
+                : QDate::fromString(releaseDate.left(10), Qt::ISODate);
+    }
+
+    QString sourceUrl = readString(
             object, {"permalink", "permalink_url", "source_url", "url"});
+    if (sourceUrl.isEmpty()) {
+        sourceUrl = readString(
+                metadata, {"permalink", "permalink_url", "source_url", "url"});
+    }
     if (!sourceUrl.isEmpty()) {
         track.sourceUrl = QUrl(sourceUrl);
     }
-    const QString artworkUrl = readString(object, {"artwork", "artwork_url", "cover_url"});
+    QString artworkUrl = readString(object, {"artwork", "artwork_url", "cover_url"});
+    if (artworkUrl.isEmpty()) {
+        artworkUrl = readString(metadata, {"artwork", "artwork_url", "cover_url"});
+    }
     if (!artworkUrl.isEmpty()) {
         track.artworkUrl = QUrl(artworkUrl);
     }
@@ -2957,10 +3060,15 @@ RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocument(const QJsonDocu
     }
 
     const QJsonObject root = document.object();
-    const QJsonObject tracksById = root.value(QStringLiteral("tracks_by_id")).toObject();
     const QJsonObject plan = root.value(QStringLiteral("plan")).toObject();
     const QJsonObject path = root.value(QStringLiteral("path")).toObject();
     const QJsonObject pathSource = !path.isEmpty() ? path : plan;
+    const QJsonObject rootTracksById =
+            root.value(QStringLiteral("tracks_by_id")).toObject();
+    const QJsonObject planTracksById =
+            plan.value(QStringLiteral("tracks_by_id")).toObject();
+    const QJsonObject pathTracksById =
+            path.value(QStringLiteral("tracks_by_id")).toObject();
     result.policyPreset = readString(root, {"policy_preset"});
     result.resolvedMoveType = readString(root, {"resolved_move_type"});
     result.recommendationEventId =
@@ -2975,7 +3083,10 @@ RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocument(const QJsonDocu
         }
         const QJsonObject recommendation = value.toObject();
         const QString remoteId = readString(recommendation, {"id", "track_id"});
-        RestLibraryTrack track = parseTrackObject(objectForTrackId(tracksById, remoteId));
+        RestLibraryTrack track = parseTrackObject(hydratedTrackObject(
+                recommendation,
+                remoteId,
+                {rootTracksById, pathTracksById, planTracksById}));
         if (track.remoteId.isEmpty()) {
             track.remoteId = remoteId;
         }
@@ -3035,7 +3146,10 @@ RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocument(const QJsonDocu
         }
         const QJsonObject stepObject = value.toObject();
         const QString remoteId = readString(stepObject, {"id", "track_id"});
-        const RestLibraryTrack track = parseTrackObject(objectForTrackId(tracksById, remoteId));
+        const RestLibraryTrack track = parseTrackObject(hydratedTrackObject(
+                stepObject,
+                remoteId,
+                {rootTracksById, planTracksById, pathTracksById}));
         RestLibraryPathStep step;
         step.remoteId = track.remoteId.isEmpty() ? remoteId : track.remoteId;
         step.title = track.title;
@@ -3107,10 +3221,16 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
         state.intents = authoritative.value(QStringLiteral("intents")).toArray();
     }
 
-    const QJsonObject tracksById = root.value(QStringLiteral("tracks_by_id")).toObject();
     const QJsonValue candidatesValue = authoritative.value(QStringLiteral("candidates"));
+    const QJsonObject candidatesObject = candidatesValue.toObject();
+    const QJsonObject rootTracksById =
+            root.value(QStringLiteral("tracks_by_id")).toObject();
+    const QJsonObject authoritativeTracksById =
+            authoritative.value(QStringLiteral("tracks_by_id")).toObject();
+    const QJsonObject candidateTracksById =
+            candidatesObject.value(QStringLiteral("tracks_by_id")).toObject();
     const QJsonArray candidates = candidatesValue.isObject()
-            ? candidatesValue.toObject().value(QStringLiteral("candidates")).toArray()
+            ? candidatesObject.value(QStringLiteral("candidates")).toArray()
             : candidatesValue.toArray();
     state.policyPath.candidates.reserve(candidates.size());
     for (const QJsonValue& value : candidates) {
@@ -3119,11 +3239,10 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
         }
         const QJsonObject candidate = value.toObject();
         const QString remoteId = readString(candidate, {"track_id", "id"});
-        QJsonObject trackObject = candidate.value(QStringLiteral("track")).toObject();
-        if (trackObject.isEmpty()) {
-            trackObject = objectForTrackId(tracksById, remoteId);
-        }
-        RestLibraryTrack track = parseTrackObject(trackObject);
+        RestLibraryTrack track = parseTrackObject(hydratedTrackObject(
+                candidate,
+                remoteId,
+                {rootTracksById, authoritativeTracksById, candidateTracksById}));
         if (track.remoteId.isEmpty()) {
             track.remoteId = remoteId;
         }
@@ -3157,8 +3276,11 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
     }
 
     const QJsonValue pathValue = authoritative.value(QStringLiteral("path"));
+    const QJsonObject pathObject = pathValue.toObject();
+    const QJsonObject pathTracksById =
+            pathObject.value(QStringLiteral("tracks_by_id")).toObject();
     const QJsonArray steps = pathValue.isObject()
-            ? pathValue.toObject().value(QStringLiteral("steps")).toArray()
+            ? pathObject.value(QStringLiteral("steps")).toArray()
             : pathValue.toArray();
     state.policyPath.path.reserve(steps.size());
     for (const QJsonValue& value : steps) {
@@ -3167,11 +3289,13 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
         }
         const QJsonObject stepObject = value.toObject();
         const QString remoteId = readString(stepObject, {"track_id", "id"});
-        QJsonObject trackObject = stepObject.value(QStringLiteral("track")).toObject();
-        if (trackObject.isEmpty()) {
-            trackObject = objectForTrackId(tracksById, remoteId);
-        }
-        const RestLibraryTrack track = parseTrackObject(trackObject);
+        const RestLibraryTrack track = parseTrackObject(hydratedTrackObject(
+                stepObject,
+                remoteId,
+                {rootTracksById,
+                        authoritativeTracksById,
+                        candidateTracksById,
+                        pathTracksById}));
         RestLibraryPathStep step;
         step.remoteId = track.remoteId.isEmpty() ? remoteId : track.remoteId;
         step.title = track.title.isEmpty() ? readString(stepObject, {"title", "label"})

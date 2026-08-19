@@ -271,6 +271,13 @@ Agent tool selection:
   value, and ignore stale mutation completions. Keep JSON responses bounded to
   4 MiB after decompression with the 15-second transfer timeout; cache audio
   directly to temporary files and discard partial, failed, or oversized files.
+- Hydrate recommendation core metadata from the bounded contract-v3 candidate
+  envelope, including nested `tracks_by_id` maps; never add unbounded
+  per-candidate metadata requests.
+- Before first audible playback of newly materialized REST audio, run the
+  shared low-priority gain-only preparation path when ReplayGain is enabled.
+  Manual loads and ordered AutoDJ batches must wait for measured gain or fail
+  explicitly, and late analysis must never change gain during active playback.
 - Changing the REST credential scope must clear the displayed bearer token;
   require explicit token entry for the new server and retain the old keychain
   entry only under its old scope.

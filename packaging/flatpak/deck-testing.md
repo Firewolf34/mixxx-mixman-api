@@ -277,6 +277,19 @@ bundle. If neither path restores the prior build, status remains
   track ID, then log out: each change must immediately clear the displayed
   catalog, cancel pending catalog/audio requests, and download to a distinct
   cache entry. Neither token may appear in cache filenames or logs.
+- Compare a track present in REST Library with the same track in direct-policy
+  and authoritative REST Recommendations responses. Artist, title, album,
+  genre, BPM, key, duration, rating, composer, comment, track number, release
+  year/type, play count, favour, and energy must agree, while recommendation
+  scoring and reason fields remain present. Confirm no per-candidate metadata
+  requests or audio downloads occur during hydration.
+- Download a previously unseen quiet-master fixture whose measured ReplayGain
+  is positive. A manual play request must show ReplayGain analysis before the
+  deck starts, and the first audible playback must use the measured value.
+  Repeat through AutoDJ and confirm queue order is retained while preparation
+  completes. Reload the track and confirm the stored result is reused. Force
+  an analysis failure and confirm the track is skipped/refused with an explicit
+  diagnostic; an already playing deck must never receive a late gain jump.
 - For MixMan v3, verify both a configured bearer-token deployment and an
   explicitly auth-disabled trusted-LAN deployment. Confirm the same stable room
   is resumed after restarting Mixxx, recommendation controls use the

@@ -389,6 +389,68 @@ TEST(RestLibraryClientTest, ParsesMixManPolicyPath) {
     EXPECT_EQ(path.path.at(1).position, 2);
 }
 
+TEST(RestLibraryClientTest, HydratesPolicyCandidatesFromNestedTrackMap) {
+    const auto path = RestLibraryClient::parsePolicyPathDocumentForTesting(
+            QJsonDocument::fromJson(R"json({
+              "plan": {
+                "tracks_by_id": {
+                  "8": {
+                    "track_id": 8,
+                    "metadata": {
+                      "title": "Hydrated Policy Track",
+                      "artist": "Ada",
+                      "album": "Signals",
+                      "genre": "House",
+                      "bpm": 124.5,
+                      "musical_key": "8A",
+                      "duration_seconds": 366,
+                      "rating": 4,
+                      "composer": "Composer",
+                      "comment": "Comment",
+                      "track_number": "2",
+                      "release_year": 2025,
+                      "download_file_extension": "flac",
+                      "play_count": 9,
+                      "favour": 0.75,
+                      "energy": 0.6
+                    }
+                  }
+                },
+                "alternatives": [{
+                  "track_id": 8,
+                  "score": 0.88,
+                  "reason_codes": ["energy_match"],
+                  "candidate_features": {"transition_fit": 0.72}
+                }]
+              }
+            })json"));
+
+    ASSERT_EQ(path.candidates.size(), 1);
+    const auto& track = path.candidates.constFirst();
+    EXPECT_EQ(track.remoteId, QStringLiteral("8"));
+    EXPECT_EQ(track.title, QStringLiteral("Hydrated Policy Track"));
+    EXPECT_EQ(track.artist, QStringLiteral("Ada"));
+    EXPECT_EQ(track.album, QStringLiteral("Signals"));
+    EXPECT_EQ(track.genre, QStringLiteral("House"));
+    EXPECT_DOUBLE_EQ(track.bpm, 124.5);
+    EXPECT_EQ(track.keyText, QStringLiteral("8A"));
+    EXPECT_DOUBLE_EQ(track.durationSeconds, 366.0);
+    EXPECT_EQ(track.rating, 4);
+    EXPECT_EQ(track.composer, QStringLiteral("Composer"));
+    EXPECT_EQ(track.comment, QStringLiteral("Comment"));
+    EXPECT_EQ(track.trackNumber, QStringLiteral("2"));
+    EXPECT_EQ(track.releaseDate.year(), 2025);
+    EXPECT_EQ(track.audioFileExtension, QStringLiteral("flac"));
+    EXPECT_EQ(track.playCount, 9);
+    ASSERT_TRUE(track.favour.has_value());
+    ASSERT_TRUE(track.energy.has_value());
+    EXPECT_DOUBLE_EQ(*track.favour, 0.75);
+    EXPECT_DOUBLE_EQ(*track.energy, 0.6);
+    EXPECT_DOUBLE_EQ(track.score, 0.88);
+    EXPECT_DOUBLE_EQ(track.transitionFit, 0.72);
+    EXPECT_EQ(track.reasonCodes, QStringList({QStringLiteral("energy_match")}));
+}
+
 TEST(RestLibraryClientTest, ParsesMixManSessionDetail) {
     const QJsonDocument document = QJsonDocument::fromJson(R"json(
         {
@@ -486,6 +548,74 @@ TEST(RestLibraryClientTest, ParsesMixManAuthoritativeSessionState) {
     EXPECT_TRUE(session.authoritative.policyPath.candidates.at(0).reasonCodes.isEmpty());
     ASSERT_EQ(session.authoritative.policyPath.path.size(), 1);
     EXPECT_EQ(session.authoritative.policyPath.path.at(0).remoteId, QStringLiteral("9"));
+}
+
+TEST(RestLibraryClientTest, HydratesAuthoritativeCandidatesFromNestedTrackMap) {
+    const auto state = RestLibraryClient::parseAuthoritativeDocumentForTesting(
+            QJsonDocument::fromJson(R"json({
+              "authoritative": {
+                "session_id": "session-1",
+                "revision": 42,
+                "candidates": {
+                  "tracks_by_id": {
+                    "9": {
+                      "track_id": 9,
+                      "metadata": {
+                        "title": "Hydrated Session Track",
+                        "artist": "Ben",
+                        "album": "Night Signals",
+                        "genre": "Techno",
+                        "bpm": 128,
+                        "key": "9A",
+                        "duration": 300,
+                        "dj_rating": 5,
+                        "composer": "Session Composer",
+                        "comment": "Session Comment",
+                        "tracknumber": "4",
+                        "release_date": "2024-06-01",
+                        "file_type": "mp3",
+                        "play_count": 12,
+                        "favour": 0.8,
+                        "energy": 0.9
+                      }
+                    }
+                  },
+                  "candidates": [{
+                    "track_id": 9,
+                    "score": 0.91,
+                    "transition_risk": 0.1,
+                    "transition_fit": 0.9,
+                    "reason_codes": ["harmonic"]
+                  }]
+                }
+              }
+            })json"));
+
+    ASSERT_EQ(state.policyPath.candidates.size(), 1);
+    const auto& track = state.policyPath.candidates.constFirst();
+    EXPECT_EQ(track.remoteId, QStringLiteral("9"));
+    EXPECT_EQ(track.title, QStringLiteral("Hydrated Session Track"));
+    EXPECT_EQ(track.artist, QStringLiteral("Ben"));
+    EXPECT_EQ(track.album, QStringLiteral("Night Signals"));
+    EXPECT_EQ(track.genre, QStringLiteral("Techno"));
+    EXPECT_DOUBLE_EQ(track.bpm, 128.0);
+    EXPECT_EQ(track.keyText, QStringLiteral("9A"));
+    EXPECT_DOUBLE_EQ(track.durationSeconds, 300.0);
+    EXPECT_EQ(track.rating, 5);
+    EXPECT_EQ(track.composer, QStringLiteral("Session Composer"));
+    EXPECT_EQ(track.comment, QStringLiteral("Session Comment"));
+    EXPECT_EQ(track.trackNumber, QStringLiteral("4"));
+    EXPECT_EQ(track.releaseDate, QDate(2024, 6, 1));
+    EXPECT_EQ(track.audioFileExtension, QStringLiteral("mp3"));
+    EXPECT_EQ(track.playCount, 12);
+    ASSERT_TRUE(track.favour.has_value());
+    ASSERT_TRUE(track.energy.has_value());
+    EXPECT_DOUBLE_EQ(*track.favour, 0.8);
+    EXPECT_DOUBLE_EQ(*track.energy, 0.9);
+    EXPECT_DOUBLE_EQ(track.score, 0.91);
+    EXPECT_DOUBLE_EQ(track.transitionRisk, 0.1);
+    EXPECT_DOUBLE_EQ(track.transitionFit, 0.9);
+    EXPECT_EQ(track.reasonCodes, QStringList({QStringLiteral("harmonic")}));
 }
 
 TEST(RestLibraryClientTest, FetchesTrackListWithMockNetworkAccessManager) {

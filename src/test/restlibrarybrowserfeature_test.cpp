@@ -23,6 +23,9 @@ namespace {
 namespace restConfig = mixxx::library::rest::config;
 using mixxx::library::rest::RestLibraryBackend;
 using mixxx::library::rest::RestLibraryBrowserFeature;
+using mixxx::library::rest::RestLibraryLoudnessManager;
+using mixxx::library::rest::RestLibraryLoudnessResult;
+using mixxx::library::rest::RestLibraryLoudnessState;
 using mixxx::library::rest::RestLibrarySettings;
 using mixxx::library::rest::RestLibraryTableModel;
 using mixxx::library::rest::RestLibraryTrack;
@@ -37,6 +40,46 @@ QByteArray catalogPage(
                             : QStringLiteral("\"%1\"").arg(nextCursor))
             .toUtf8();
 }
+
+class FakeLoudnessManager final : public RestLibraryLoudnessManager {
+  public:
+    using RestLibraryLoudnessManager::RestLibraryLoudnessManager;
+
+    RestLibraryLoudnessResult prepareTrack(const TrackPointer& pTrack) override {
+        if (!pTrack) {
+            return {{}, RestLibraryLoudnessState::Failed, QStringLiteral("missing track")};
+        }
+        if (!defer || m_readyTrackIds.contains(pTrack->getId())) {
+            return {pTrack->getId(), RestLibraryLoudnessState::Ready, {}};
+        }
+        m_pendingTracks.insert(pTrack->getId(), pTrack);
+        return {pTrack->getId(), RestLibraryLoudnessState::Analyzing, {}};
+    }
+
+    void complete(const TrackPointer& pTrack, bool success) {
+        ASSERT_TRUE(pTrack);
+        m_pendingTracks.remove(pTrack->getId());
+        RestLibraryLoudnessResult result;
+        result.trackId = pTrack->getId();
+        if (success) {
+            mixxx::ReplayGain replayGain = pTrack->getReplayGain();
+            replayGain.setRatio(2.0);
+            pTrack->setReplayGain(replayGain);
+            m_readyTrackIds.insert(pTrack->getId());
+            result.state = RestLibraryLoudnessState::Ready;
+        } else {
+            result.state = RestLibraryLoudnessState::Failed;
+            result.errorText = QStringLiteral("ReplayGain analysis failed");
+        }
+        emit trackLoudnessPrepared(result);
+    }
+
+    bool defer = false;
+
+  private:
+    QHash<TrackId, TrackPointer> m_pendingTracks;
+    QSet<TrackId> m_readyTrackIds;
+};
 
 } // namespace
 
@@ -64,7 +107,8 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
                 nullptr,
                 config(),
                 &m_backend,
-                trackCollectionManager()));
+                trackCollectionManager(),
+                &m_loudness));
     }
 
   protected:
@@ -112,6 +156,7 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
     MockNetworkAccessManager m_network;
     QTemporaryDir m_cacheDir;
     RestLibraryBackend m_backend;
+    FakeLoudnessManager m_loudness;
     std::unique_ptr<RestLibraryBrowserFeature> m_pFeature;
 };
 
@@ -278,6 +323,74 @@ TEST_F(RestLibraryBrowserFeatureTest, ExplicitLoadWaitsForCacheCompletion) {
     EXPECT_TRUE(completedStatus.contains(QStringLiteral("1 cached")));
 }
 
+TEST_F(RestLibraryBrowserFeatureTest, ExplicitLoadWaitsForReplayGainPreparation) {
+    m_loudness.defer = true;
+    MockNetworkReply* pCatalog = m_network.ExpectGet(
+            QStringLiteral("/tracks"),
+            {},
+            200,
+            catalogPage(QStringLiteral(
+                    R"json({"id":17,"title":"Quiet Master","artist":"Ada","download_file_extension":"wav"})json")));
+    activate();
+    pCatalog->Done(true);
+    MockNetworkReply* pAudio = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("17")}},
+            200,
+            QByteArrayLiteral("audio bytes"));
+    QSignalSpy loadSpy(m_pFeature.get(), &LibraryFeature::loadTrack);
+
+    requestDefaultLoad(model()->index(0, 0));
+    pAudio->Done(true);
+
+    EXPECT_EQ(loadSpy.count(), 0);
+    const TrackPointer pTrack = model()->materializeTrack(QStringLiteral("17"));
+    ASSERT_TRUE(pTrack);
+    EXPECT_FALSE(pTrack->getReplayGain().hasRatio());
+
+    m_loudness.complete(pTrack, true);
+
+    ASSERT_EQ(loadSpy.count(), 1);
+    EXPECT_TRUE(pTrack->getReplayGain().hasRatio());
+    EXPECT_DOUBLE_EQ(pTrack->getReplayGain().getRatio(), 2.0);
+
+    loadSpy.clear();
+    requestDefaultLoad(model()->index(0, 0));
+    EXPECT_EQ(loadSpy.count(), 1);
+}
+
+TEST_F(RestLibraryBrowserFeatureTest, ReplayGainFailureKeepsManualTrackUnloaded) {
+    m_loudness.defer = true;
+    MockNetworkReply* pCatalog = m_network.ExpectGet(
+            QStringLiteral("/tracks"),
+            {},
+            200,
+            catalogPage(QStringLiteral(
+                    R"json({"id":18,"title":"Broken","download_file_extension":"wav"})json")));
+    activate();
+    pCatalog->Done(true);
+    MockNetworkReply* pAudio = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("18")}},
+            200,
+            QByteArrayLiteral("audio bytes"));
+    QSignalSpy loadSpy(m_pFeature.get(), &LibraryFeature::loadTrack);
+    QSignalSpy statusSpy(
+            m_pFeature.get(),
+            &RestLibraryBrowserFeature::statusTextChanged);
+
+    requestDefaultLoad(model()->index(0, 0));
+    pAudio->Done(true);
+    const TrackPointer pTrack = model()->materializeTrack(QStringLiteral("18"));
+    ASSERT_TRUE(pTrack);
+    m_loudness.complete(pTrack, false);
+
+    EXPECT_EQ(loadSpy.count(), 0);
+    ASSERT_GT(statusSpy.count(), 0);
+    EXPECT_TRUE(statusSpy.last().at(0).toString().contains(
+            QStringLiteral("ReplayGain analysis failed")));
+}
+
 TEST_F(RestLibraryBrowserFeatureTest, CachedTrackDoesNotLoadIntoBusyDeck) {
     MockNetworkReply* pCatalog = m_network.ExpectGet(
             QStringLiteral("/tracks"),
@@ -351,6 +464,54 @@ TEST_F(RestLibraryBrowserFeatureTest, AutoDJBatchPreservesSelectionOrder) {
     const TrackPointer pSecond = model()->materializeTrack(secondRemoteId);
     ASSERT_TRUE(pFirst);
     ASSERT_TRUE(pSecond);
+    EXPECT_EQ(playlistDao.getTrackIdsInPlaylistOrder(autoDJPlaylistId),
+            (QList<TrackId>{pFirst->getId(), pSecond->getId()}));
+}
+
+TEST_F(RestLibraryBrowserFeatureTest, AutoDJWaitsForAllReplayGainPreparation) {
+    m_loudness.defer = true;
+    MockNetworkReply* pCatalog = m_network.ExpectGet(
+            QStringLiteral("/tracks"),
+            {},
+            200,
+            catalogPage(QStringLiteral(
+                    R"json({"id":32,"title":"First","download_file_extension":"wav"},{"id":31,"title":"Second","download_file_extension":"wav"})json")));
+    activate();
+    pCatalog->Done(true);
+    const QModelIndex firstIndex = model()->index(0, 0);
+    const QModelIndex secondIndex = model()->index(1, 0);
+    const QString firstRemoteId = model()->remoteIdForIndex(firstIndex);
+    const QString secondRemoteId = model()->remoteIdForIndex(secondIndex);
+    MockNetworkReply* pFirstAudio = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), firstRemoteId}},
+            200,
+            QByteArrayLiteral("first audio"));
+    MockNetworkReply* pSecondAudio = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), secondRemoteId}},
+            200,
+            QByteArrayLiteral("second audio"));
+
+    requestAutoDJ(
+            {firstIndex, secondIndex},
+            PlaylistDAO::AutoDJSendLoc::BOTTOM);
+    pFirstAudio->Done(true);
+    pSecondAudio->Done(true);
+
+    PlaylistDAO& playlistDao = internalCollection()->getPlaylistDAO();
+    const int autoDJPlaylistId =
+            playlistDao.getPlaylistIdFromName(AUTODJ_TABLE);
+    EXPECT_TRUE(playlistDao.getTrackIdsInPlaylistOrder(autoDJPlaylistId).isEmpty());
+    const TrackPointer pFirst = model()->materializeTrack(firstRemoteId);
+    const TrackPointer pSecond = model()->materializeTrack(secondRemoteId);
+    ASSERT_TRUE(pFirst);
+    ASSERT_TRUE(pSecond);
+
+    m_loudness.complete(pSecond, true);
+    EXPECT_TRUE(playlistDao.getTrackIdsInPlaylistOrder(autoDJPlaylistId).isEmpty());
+    m_loudness.complete(pFirst, true);
+
     EXPECT_EQ(playlistDao.getTrackIdsInPlaylistOrder(autoDJPlaylistId),
             (QList<TrackId>{pFirst->getId(), pSecond->getId()}));
 }

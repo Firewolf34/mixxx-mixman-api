@@ -100,6 +100,7 @@ Library::Library(
 
     m_pRestLibraryBackend =
             make_parented<mixxx::library::rest::RestLibraryBackend>(this);
+    m_pRestLibraryBackend->initializeLoudnessManager(this, m_pConfig);
     // REST Recommendations reuses the single Auto DJ processor. Construct it
     // first while preserving the existing sidebar order below.
     m_pAutoDJFeature = make_parented<AutoDJFeature>(this, m_pConfig, pPlayerManager);

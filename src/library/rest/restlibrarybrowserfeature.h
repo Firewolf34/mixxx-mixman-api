@@ -9,6 +9,7 @@
 #include "library/rest/restlibrarybackend.h"
 #include "library/rest/restlibrarycataloglimits.h"
 #include "library/rest/restlibraryclient.h"
+#include "library/rest/restlibraryloudnessmanager.h"
 #include "library/rest/restlibrarytablemodel.h"
 #include "library/treeitemmodel.h"
 #include "util/parented_ptr.h"
@@ -45,6 +46,7 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     void slotCatalogPageFetched(const RestLibraryCatalogPage& page);
     void slotCatalogFetchFailed(const QString& message);
     void slotTrackCacheStateChanged(const RestLibraryCacheResult& result);
+    void slotTrackLoudnessPrepared(const RestLibraryLoudnessResult& result);
     void slotUnresolvedTrackLoad(const QModelIndex& index);
 #ifdef __STEM__
     void slotUnresolvedTrackLoadToPlayer(const QModelIndex& index,
@@ -68,7 +70,8 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
             Library* pLibrary,
             UserSettingsPointer pConfig,
             RestLibraryBackend* pBackend,
-            TrackCollectionManager* pTrackCollectionManager);
+            TrackCollectionManager* pTrackCollectionManager,
+            RestLibraryLoudnessManager* pLoudnessManager = nullptr);
 
     struct PlayerLoadIntent {
         QString remoteId;
@@ -101,6 +104,8 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
             const QString& remoteId,
             const RestLibrarySettings& settings);
     bool finishPendingLoads(const QString& remoteId);
+    RestLibraryLoudnessResult prepareTrackForPlayback(const QString& remoteId);
+    void failPendingLoads(const QString& remoteId, const QString& errorText);
     void finishAutoDJIfReady();
     bool mayLoadToGroup(const QString& group) const;
     bool resetIfSettingsChanged(const RestLibrarySettings& settings);
@@ -117,6 +122,7 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     DlgRestLibraryBrowser* m_pView = nullptr;
     RestLibraryBackend* const m_pBackend;
     TrackCollectionManager* const m_pTrackCollectionManager;
+    RestLibraryLoudnessManager* const m_pLoudnessManager;
     RestLibraryClient m_client;
     RestLibrarySettings m_refreshSettings;
     QList<RestLibraryTrack> m_stagingTracks;
@@ -126,6 +132,7 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     QString m_settingsIdentity;
     QString m_pendingDefaultLoadRemoteId;
     QHash<QString, PlayerLoadIntent> m_pendingPlayerLoads;
+    QHash<TrackId, QSet<QString>> m_loudnessRemoteIds;
     AutoDJIntent m_autoDJIntent;
     QString m_statusText;
     bool m_catalogLoaded = false;

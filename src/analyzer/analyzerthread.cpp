@@ -93,7 +93,8 @@ void AnalyzerThread::doRun() {
     // before returning from this function.
     mixxx::DbConnectionPooler dbConnectionPooler;
 
-    if (m_modeFlags & AnalyzerModeFlags::WithWaveform) {
+    const bool gainOnly = m_modeFlags & AnalyzerModeFlags::GainOnly;
+    if (!gainOnly && (m_modeFlags & AnalyzerModeFlags::WithWaveform)) {
         dbConnectionPooler = mixxx::DbConnectionPooler(m_dbConnectionPool); // move assignment
         if (!dbConnectionPooler.isPooling()) {
             kLogger.warning()
@@ -103,18 +104,24 @@ void AnalyzerThread::doRun() {
         QSqlDatabase dbConnection = mixxx::DbConnectionPooled(m_dbConnectionPool);
         m_analyzers.push_back(AnalyzerWithState(std::make_unique<AnalyzerWaveform>(m_pConfig, dbConnection)));
     }
-    if (AnalyzerGain::isEnabled(ReplayGainSettings(m_pConfig))) {
+    const ReplayGainSettings replayGainSettings(m_pConfig);
+    if (AnalyzerGain::isEnabled(replayGainSettings) ||
+            (gainOnly && replayGainSettings.getReplayGainAnalyzerVersion() == 1)) {
         m_analyzers.push_back(AnalyzerWithState(std::make_unique<AnalyzerGain>(m_pConfig)));
     }
-    if (AnalyzerEbur128::isEnabled(ReplayGainSettings(m_pConfig))) {
+    if (AnalyzerEbur128::isEnabled(replayGainSettings) ||
+            (gainOnly && replayGainSettings.getReplayGainAnalyzerVersion() == 2)) {
         m_analyzers.push_back(AnalyzerWithState(std::make_unique<AnalyzerEbur128>(m_pConfig)));
     }
-    // BPM detection might be disabled in the config, but can be overridden
-    // and enabled by explicitly setting the mode flag.
-    const bool enforceBpmDetection = (m_modeFlags & AnalyzerModeFlags::WithBeats) != 0;
-    m_analyzers.push_back(AnalyzerWithState(std::make_unique<AnalyzerBeats>(m_pConfig, enforceBpmDetection)));
-    m_analyzers.push_back(AnalyzerWithState(std::make_unique<AnalyzerKey>(m_pConfig)));
-    m_analyzers.push_back(AnalyzerWithState(std::make_unique<AnalyzerSilence>(m_pConfig)));
+    if (!gainOnly) {
+        // BPM detection might be disabled in the config, but can be overridden
+        // and enabled by explicitly setting the mode flag.
+        const bool enforceBpmDetection = (m_modeFlags & AnalyzerModeFlags::WithBeats) != 0;
+        m_analyzers.push_back(AnalyzerWithState(
+                std::make_unique<AnalyzerBeats>(m_pConfig, enforceBpmDetection)));
+        m_analyzers.push_back(AnalyzerWithState(std::make_unique<AnalyzerKey>(m_pConfig)));
+        m_analyzers.push_back(AnalyzerWithState(std::make_unique<AnalyzerSilence>(m_pConfig)));
+    }
     DEBUG_ASSERT(!m_analyzers.empty());
     kLogger.debug() << "Activated" << m_analyzers.size() << "analyzers";
 
