@@ -141,7 +141,7 @@
    </item>
    <item>
     <widget class="QWidget" name="MixManControls">
-     <layout class="QGridLayout" name="gridLayoutMixMan">
+     <layout class="QGridLayout" name="gridLayoutMixMan" columnstretch="0,1,0,0,0,0,0,0">
       <property name="spacing">
        <number>4</number>
       </property>
@@ -156,9 +156,6 @@
       </property>
       <property name="bottomMargin">
        <number>0</number>
-      </property>
-      <property name="columnStretch">
-       <string>0,1,0,0,0,0,0,0</string>
       </property>
       <item row="0" column="0">
        <widget class="QLabel" name="labelPolicyPreset">
