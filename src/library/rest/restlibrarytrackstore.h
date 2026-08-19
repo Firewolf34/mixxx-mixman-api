@@ -4,6 +4,7 @@
 
 #include "library/rest/restlibrarytrack.h"
 #include "track/track_decl.h"
+#include "track/trackid.h"
 
 class TrackCollectionManager;
 
