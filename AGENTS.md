@@ -28,8 +28,10 @@ Agent tool selection:
 
 - `mixxx-deck` owns signed artifact selection, staging, activation, rollback,
   automatic updates, and launching Mixxx.
-- `mixxx-deck-ci` owns Forgejo Actions inspection, waiting, dispatch, and
-  publication validation for `total-infra/mixxx`.
+- `mixxx-deck-ci` owns Forgejo Actions inspection, waiting, confirmed manual
+  dispatch, and publication validation for `total-infra/mixxx`. It is a
+  machine-agnostic Linux workstation client; install it from a current checkout
+  with `tools/mixxx_deck_ci.sh install` without running deck setup.
 - `forgejo-issues` owns Forgejo issue search/create/comment/close on supported
   workstations. It does not inspect or dispatch Actions.
 - `forgejo-collab` is a Polinaria-only Unix-socket helper and must not be
@@ -173,6 +175,8 @@ Agent tool selection:
   never retry or weaken an integrity failure.
 - Store any Forgejo API token outside the repository with mode 0600. Use a
   token restricted to `total-infra/mixxx`; never print, log, or commit it.
+  Configure a distinct token on each workstation rather than copying one
+  between machines. `mixxx-deck-ci install` must not create or change it.
 - Store the most recent failed custom workflow-step output only at private
   runner path `/data/logs/latest.log` (0700 directory, 0600 log, 2 MiB cap).
   It records caught `HUP`, `INT`, and `TERM` cancellations as well as ordinary

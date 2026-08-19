@@ -9,18 +9,24 @@ FORGEJO_OWNER="${MIXXX_FORGEJO_OWNER:-total-infra}"
 FORGEJO_REPO="${MIXXX_FORGEJO_REPO:-mixxx}"
 TOKEN_FILE="${MIXXX_FORGEJO_TOKEN_FILE:-${HOME}/.config/mixxx-deck/forgejo-actions-token}"
 WORKFLOW_FILE="${MIXXX_FORGEJO_WORKFLOW:-deck-flatpak.yml}"
+INSTALL_PATH="${MIXXX_FORGEJO_CI_INSTALL_PATH:-${HOME}/.local/bin/mixxx-deck-ci}"
+DISPATCH_CONFIRM_TIMEOUT_SECONDS="${MIXXX_FORGEJO_DISPATCH_CONFIRM_TIMEOUT_SECONDS:-90}"
+DISPATCH_POLL_INTERVAL_SECONDS="${MIXXX_FORGEJO_DISPATCH_POLL_INTERVAL_SECONDS:-5}"
+CANDIDATE_BRANCH="deck/candidate"
 EXPECTED_REF="refs/heads/deck/candidate"
 AUTH_CONFIG=""
+INSTALL_TEMP=""
 
 usage() {
     cat <<'EOF'
 Usage:
+  mixxx-deck-ci install
   mixxx-deck-ci configure
   mixxx-deck-ci runs [candidate-sha]
   mixxx-deck-ci status <candidate-sha>
   mixxx-deck-ci tasks <candidate-sha>
   mixxx-deck-ci wait <candidate-sha> [timeout-seconds]
-  mixxx-deck-ci dispatch
+  mixxx-deck-ci dispatch [confirmation-timeout-seconds]
   mixxx-deck-ci publication <candidate-sha>
 
 Authentication:
@@ -29,7 +35,17 @@ Authentication:
 
   The file must not be group/world accessible. Use a token restricted to
   total-infra/mixxx. read:repository is enough for inspection; write:repository is
-  required for dispatch.
+  required for dispatch. Configure a separate token on each machine; never copy
+  a token between workstations.
+
+Install:
+  install writes this command atomically to ~/.local/bin/mixxx-deck-ci. It does
+  not install deck services, use root, or create/change a credential.
+
+Dispatch:
+  dispatch resolves the exact deck/candidate SHA, refuses a duplicate active
+  run, requests deck-flatpak.yml by its bare workflow filename, and succeeds
+  only after a new workflow_dispatch run for that exact ref and SHA is visible.
 
 Tool boundaries:
   Use mixxx-deck for signed artifact staging, activation, rollback, updates,
@@ -48,12 +64,37 @@ require_sha() {
         die "candidate SHA must be exactly 40 lowercase hexadecimal characters"
 }
 
+require_positive_integer() {
+    local value="$1"
+    local description="$2"
+    [[ "${value}" =~ ^[1-9][0-9]*$ ]] ||
+        die "${description} must be a positive integer number of seconds"
+}
+
 cleanup() {
     if [[ -n "${AUTH_CONFIG}" ]]; then
         rm -f -- "${AUTH_CONFIG}"
     fi
+    if [[ -n "${INSTALL_TEMP}" ]]; then
+        rm -f -- "${INSTALL_TEMP}"
+    fi
 }
 trap cleanup EXIT
+
+command_install() {
+    ((EUID != 0)) || die "install must be run as a non-root user"
+    [[ "${INSTALL_PATH}" == /* ]] || die "install path must be absolute"
+
+    local install_dir
+    install_dir="${INSTALL_PATH%/*}"
+    mkdir -p -- "${install_dir}"
+    INSTALL_TEMP="$(mktemp "${install_dir}/.mixxx-deck-ci.XXXXXX")"
+    install -m 0755 "${BASH_SOURCE[0]}" "${INSTALL_TEMP}"
+    mv -f -- "${INSTALL_TEMP}" "${INSTALL_PATH}"
+    INSTALL_TEMP=""
+    echo "Installed mixxx-deck-ci at ${INSTALL_PATH}."
+    echo "No credential was created or changed. Run 'mixxx-deck-ci configure' on this machine if needed."
+}
 
 prepare_auth() {
     [[ -f "${TOKEN_FILE}" ]] ||
@@ -128,6 +169,17 @@ runs_json() {
         path+="&head_sha=${sha}"
     fi
     api_request GET "${path}"
+}
+
+candidate_sha() {
+    local response sha
+    response="$(api_request GET \
+        "/repos/${FORGEJO_OWNER}/${FORGEJO_REPO}/branches/deck%2Fcandidate")"
+    if ! sha="$(jq -er '.commit.id | select(type == "string")' <<<"${response}")"; then
+        die "Forgejo returned malformed deck/candidate branch metadata"
+    fi
+    require_sha "${sha}"
+    printf '%s\n' "${sha}"
 }
 
 run_for_sha() {
@@ -249,9 +301,101 @@ command_wait() {
 }
 
 command_dispatch() {
-    api_request POST \
+    local timeout_seconds="${1:-${DISPATCH_CONFIRM_TIMEOUT_SECONDS}}"
+    require_positive_integer "${timeout_seconds}" "dispatch confirmation timeout"
+    require_positive_integer "${DISPATCH_POLL_INTERVAL_SECONDS}" "dispatch poll interval"
+    [[ "${WORKFLOW_FILE}" != */* ]] ||
+        die "workflow must be a bare filename, not a repository path"
+    [[ "${WORKFLOW_FILE}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]] ||
+        die "workflow filename is invalid"
+
+    local sha before_runs before_ids active_runs response deadline current_runs new_runs run
+    sha="$(candidate_sha)"
+    before_runs="$(runs_json "${sha}")"
+    jq -e '.workflow_runs | type == "array"' <<<"${before_runs}" >/dev/null ||
+        die "Forgejo returned malformed Actions run data before dispatch"
+    before_ids="$(jq -c '[.workflow_runs[] | .id | select(type == "number")] | unique' \
+        <<<"${before_runs}")"
+    active_runs="$(jq -c --arg sha "${sha}" '
+        def candidate_ref:
+            .prettyref == "deck/candidate" or
+            .head_branch == "deck/candidate" or
+            .ref == "refs/heads/deck/candidate";
+        [.workflow_runs[]
+         | select(.commit_sha == $sha and candidate_ref)
+         | select(.status != "success" and
+                  .status != "failure" and
+                  .status != "cancelled" and
+                  .status != "skipped" and
+                  .status != "blocked")
+         | {id, status, event, ref: (.prettyref // .head_branch // .ref)}]
+        ' <<<"${before_runs}")"
+    if [[ "$(jq 'length' <<<"${active_runs}")" -ne 0 ]]; then
+        jq '{error: "active-candidate-run", active_runs: .}' <<<"${active_runs}" >&2
+        die "deck/candidate ${sha} already has a nonterminal Actions run; refusing duplicate dispatch"
+    fi
+
+    response="$(api_request POST \
         "/repos/${FORGEJO_OWNER}/${FORGEJO_REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches" \
-        '{"ref":"deck/candidate","return_run_info":true}'
+        "{\"ref\":\"${CANDIDATE_BRANCH}\",\"return_run_info\":true}")"
+    : "${response}"
+
+    deadline=$((SECONDS + timeout_seconds))
+    while :; do
+        current_runs="$(runs_json "${sha}")"
+        jq -e '.workflow_runs | type == "array"' <<<"${current_runs}" >/dev/null ||
+            die "Forgejo returned malformed Actions run data after dispatch"
+        new_runs="$(jq -c --argjson before_ids "${before_ids}" '
+            [.workflow_runs[]
+             | select(.id | type == "number")
+             | select(.id as $id | ($before_ids | index($id) | not))]
+            | sort_by(.created // "")
+            | reverse
+            ' <<<"${current_runs}")"
+        if [[ "$(jq 'length' <<<"${new_runs}")" -ne 0 ]]; then
+            if ! run="$(jq -ce --arg sha "${sha}" '
+                    def candidate_ref:
+                        .prettyref == "deck/candidate" or
+                        .head_branch == "deck/candidate" or
+                        .ref == "refs/heads/deck/candidate";
+                    [.[]
+                     | select(.event == "workflow_dispatch")
+                     | select(.commit_sha == $sha)
+                     | select(candidate_ref)]
+                    | first
+                    ' <<<"${new_runs}")"; then
+                jq '{error: "dispatch-run-mismatch", observed_new_runs: map({id, event, status, commit_sha, ref: (.prettyref // .head_branch // .ref)})}' \
+                    <<<"${new_runs}" >&2
+                die "Forgejo created a new run, but it did not match workflow_dispatch, deck/candidate, and ${sha}"
+            fi
+            jq -e '
+                (.id | type == "number" and . > 0) and
+                (.index_in_repo | type == "number" and . > 0) and
+                (.status | type == "string" and length > 0) and
+                (.html_url | type == "string" and length > 0)
+                ' <<<"${run}" >/dev/null ||
+                die "Forgejo returned malformed confirmed run metadata"
+            jq \
+                --arg workflow "${WORKFLOW_FILE}" \
+                --arg ref "${EXPECTED_REF}" \
+                '{
+                    schema_version: 1,
+                    result: "dispatch-confirmed",
+                    workflow: $workflow,
+                    event,
+                    ref: $ref,
+                    commit_sha,
+                    run_id: .id,
+                    run_number: .index_in_repo,
+                    status,
+                    html_url
+                }' <<<"${run}"
+            return 0
+        fi
+        ((SECONDS < deadline)) || break
+        sleep "${DISPATCH_POLL_INTERVAL_SECONDS}"
+    done
+    die "timed out after ${timeout_seconds} seconds waiting for a new exact-SHA Forgejo Actions run"
 }
 
 command_publication() {
@@ -292,6 +436,10 @@ command_publication() {
 main() {
     local command="${1:-}"
     case "${command}" in
+        install)
+            [[ $# -eq 1 ]] || { usage; exit 2; }
+            command_install
+            ;;
         configure)
             [[ $# -eq 1 ]] || { usage; exit 2; }
             command_configure
@@ -316,9 +464,9 @@ main() {
             command_wait "$2" "${3:-86400}"
             ;;
         dispatch)
-            [[ $# -eq 1 ]] || { usage; exit 2; }
+            [[ $# -le 2 ]] || { usage; exit 2; }
             prepare_auth
-            command_dispatch
+            command_dispatch "${2:-${DISPATCH_CONFIRM_TIMEOUT_SECONDS}}"
             ;;
         publication)
             [[ $# -eq 2 ]] || { usage; exit 2; }

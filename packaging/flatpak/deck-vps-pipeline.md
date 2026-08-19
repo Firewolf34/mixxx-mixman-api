@@ -240,21 +240,28 @@ work. It accepts one job at a time.
 
 ### Authenticated Actions API client
 
-Forgejo Actions runs are available from the repository API. The deck client
-helper uses the live `/api/v1/repos/total-infra/mixxx/actions/runs` and
+Forgejo Actions runs are available from the repository API. The standalone
+Linux workstation helper uses the live
+`/api/v1/repos/total-infra/mixxx/actions/runs` and
 `/actions/tasks` endpoints to select the exact candidate SHA, and the workflow
 dispatch endpoint for the explicit fallback. `wait` accepts success only for
 that SHA and then verifies the public manifest plus all three immutable files.
 
 ```bash
+tools/mixxx_deck_ci.sh install
 mixxx-deck-ci configure
 mixxx-deck-ci runs
 mixxx-deck-ci status <candidate-sha>
 mixxx-deck-ci tasks <candidate-sha>
 mixxx-deck-ci wait <candidate-sha>
-mixxx-deck-ci dispatch
+mixxx-deck-ci dispatch [confirmation-timeout-seconds]
 mixxx-deck-ci publication <candidate-sha>
 ```
+
+`install` atomically writes `~/.local/bin/mixxx-deck-ci` mode 0755. It does not
+require root, run deck setup, or create/change a credential. This makes the
+same reviewed client usable from a development workstation or the VPS without
+assuming the Polinaria-only collaboration socket exists.
 
 Forgejo is configured to reject anonymous API calls. Create a scoped user token
 at **Settings → Applications** with repository access limited to
@@ -263,7 +270,17 @@ at **Settings → Applications** with repository access limited to
 interactive `configure` command stores the token at
 `~/.config/mixxx-deck/forgejo-actions-token`, requires mode 0600, and validates it
 without placing the value in Git, shell history, or curl's command-line
-arguments.
+arguments. Configure a separate repository-scoped token on every machine that
+needs this client; never copy the token between workstations.
+
+`dispatch` resolves the current `deck/candidate` SHA through Forgejo, snapshots
+the existing exact-SHA run IDs, and refuses to enqueue when that candidate
+already has a nonterminal run. It sends the bare workflow filename
+`deck-flatpak.yml` with ref `deck/candidate`, then polls for a newly created
+`workflow_dispatch` run. Success returns schema-1 JSON containing the workflow,
+exact source ref and SHA, run ID/number, status, and URL. A timeout, malformed
+run record, or mismatched event/ref/SHA is a failed dispatch confirmation; do
+not infer success from the HTTP request alone or enqueue another run blindly.
 
 The Forgejo 15 REST schema reports authoritative run and task state but does
 not publish a raw job-log endpoint. A successful exact-SHA run plus complete

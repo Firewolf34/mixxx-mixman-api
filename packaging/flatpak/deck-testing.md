@@ -72,21 +72,33 @@ sets `MIXXX_FLATPAK_DISABLE_ROFILES_FUSE=1`, so the build wrapper uses Flatpak
 Builder's `--disable-rofiles-fuse` mode rather than adding a
 device mount or privileged access.
 
-For unattended status and publication verification, configure the repository
-client once and then query or wait on the exact candidate:
+For unattended status, confirmed manual dispatch, and publication verification,
+install the repository client on any Linux workstation, configure it locally,
+and then query or wait on the exact candidate:
 
 ```bash
+tools/mixxx_deck_ci.sh install
 mixxx-deck-ci configure
 mixxx-deck-ci status <candidate-sha>
 mixxx-deck-ci tasks <candidate-sha>
 mixxx-deck-ci wait <candidate-sha>
+mixxx-deck-ci dispatch [confirmation-timeout-seconds]
 ```
+
+The standalone install atomically writes `~/.local/bin/mixxx-deck-ci` mode
+0755. It does not require root, install deck services, or create/change a
+credential. Manual dispatch first refuses an already-active exact-candidate
+run, then succeeds only after Forgejo exposes a new `workflow_dispatch` run for
+the resolved `deck/candidate` SHA. Preserve the returned JSON run ID, number,
+SHA, status, and URL as the dispatch confirmation.
 
 Create the token in Forgejo user settings with access restricted specifically
 to `total-infra/mixxx`. `read:repository` supports inspection; use
 `write:repository` only if this client must also perform the manual
 `dispatch` fallback. The token is stored outside Git in
-`~/.config/mixxx-deck/forgejo-actions-token` with mode 0600.
+`~/.config/mixxx-deck/forgejo-actions-token` with mode 0600. Configure a
+different repository-scoped token on each workstation; never copy one between
+machines.
 
 Dependency sources are integrity-pinned. Before compilation, the VPS retries a
 transient source-download failure up to three times using its bounded private
