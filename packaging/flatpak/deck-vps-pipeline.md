@@ -783,7 +783,13 @@ configured origin clears the prior catalog and pending requests, and that two
 credential contexts with overlapping remote track IDs never share cached
 audio. Credential rotation and logout must each select a distinct cache
 identity without placing a bearer token in a filename, log, or persisted
-metadata.
+metadata. Loading catalog or recommendation audio must register its internal
+track as a credential-scoped cache artifact: it remains usable by decks,
+preview, samplers, history, and Auto DJ but is excluded from the main Tracks
+view. Repeating the same remote track must reuse its database identity. A
+server-confirmed lookup may map a remote ID to an existing local track; title,
+artist, and other descriptive metadata must never be used to merge tracks.
+Cache eviction must not make an artifact row visible in Tracks.
 Confirm that direct policy and authoritative recommendation rows expose the
 same hydrated core metadata as the catalog without per-candidate requests.
 For a newly downloaded quiet-master fixture, manual playback and AutoDJ must

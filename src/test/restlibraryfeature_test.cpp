@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include <QDir>
+#include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -245,6 +247,27 @@ TEST_F(RestLibraryFeatureTest, AutoDJBatchQueuesSuccessfulTracksAfterPartialFail
     EXPECT_EQ(autoDJTrackIds(), (QList<TrackId>{pGood->getId()}));
     ASSERT_GT(statusSpy.count(), 0);
     EXPECT_TRUE(statusSpy.last().at(0).toString().contains(QStringLiteral("1 failed")));
+}
+
+TEST_F(RestLibraryFeatureTest, ServerLookupMappingQueuesExistingLocalTrackWithoutDownload) {
+    const QString localPath =
+            QDir(m_cacheDir.path()).filePath(QStringLiteral("ordinary-local.mp3"));
+    QFile localFile(localPath);
+    ASSERT_TRUE(localFile.open(QIODevice::WriteOnly));
+    localFile.write("local audio");
+    localFile.close();
+    const TrackPointer pLocalTrack = getOrAddTrackByLocation(localPath);
+    ASSERT_TRUE(pLocalTrack);
+
+    m_pFeature->m_pendingTrackLookup = pLocalTrack;
+    m_pFeature->slotTrackLookupSucceeded(QStringLiteral("77"));
+    setRecommendations({recommendation(QStringLiteral("77"), QStringLiteral("Mapped"))});
+    queueRecommendations();
+
+    EXPECT_EQ(autoDJTrackIds(), (QList<TrackId>{pLocalTrack->getId()}));
+    EXPECT_FALSE(m_pFeature->m_pTableModel->isCacheArtifact(pLocalTrack->getId()));
+    EXPECT_EQ(m_pFeature->m_pTableModel->remoteIdForTrack(pLocalTrack),
+            QStringLiteral("77"));
 }
 
 TEST_F(RestLibraryFeatureTest, UnchangedCandidatesDoNotCancelActiveAutoDJBatch) {

@@ -179,7 +179,6 @@ class RestLibraryFeature final : public LibraryFeature {
     QTimer m_playbackLeaseRenewTimer;
     QTimer m_playbackLeaseReleaseTimer;
     QTimer m_authorityReconcileTimer;
-    QHash<QString, QString> m_cachedPathToRemoteId;
     QHash<QString, RestLibraryCacheState> m_cacheStates;
     QStringList m_recommendationRemoteIds;
     QStringList m_autoDJRemoteIds;
@@ -190,6 +189,7 @@ class RestLibraryFeature final : public LibraryFeature {
     QHash<QString, PlayerLoadIntent> m_pendingPlayerLoads;
     QHash<TrackId, QSet<QString>> m_loudnessRemoteIds;
     QString m_lastRequestedTrackLocation;
+    TrackPointer m_pendingTrackLookup;
     QString m_currentRemoteId;
     QString m_previousRemoteId;
     QStringList m_recentRemoteIds;

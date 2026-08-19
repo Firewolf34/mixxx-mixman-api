@@ -17,6 +17,8 @@ class SearchQueryParser;
 
 namespace mixxx::library::rest {
 
+class RestLibraryTrackStore;
+
 class RestLibraryTableModel final : public QAbstractTableModel, public TrackModel {
     Q_OBJECT
 
@@ -33,12 +35,19 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
     ~RestLibraryTableModel() override;
 
     void setTracks(QList<RestLibraryTrack> tracks);
+    void setCacheIdentity(const QString& cacheIdentity);
     void setCacheLoadCapabilitiesEnabled(bool enabled);
     void updateTrackCacheState(const RestLibraryCacheResult& result);
     QString remoteIdForIndex(const QModelIndex& index) const;
     int visibleRowForRemoteId(const QString& remoteId) const;
     RestLibraryTrack trackForRemoteId(const QString& remoteId) const;
+    TrackPointer mappedTrack(const QString& remoteId) const;
     TrackPointer materializeTrack(const QString& remoteId) const;
+    bool rememberLocalMapping(
+            const QString& remoteId,
+            const TrackPointer& pTrack) const;
+    QString remoteIdForTrack(const TrackPointer& pTrack) const;
+    bool isCacheArtifact(TrackId trackId) const;
     int trackCount() const {
         return m_tracks.size();
     }
@@ -107,12 +116,14 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
 
     TrackCollectionManager* const m_pTrackCollectionManager;
     const Mode m_mode;
+    std::unique_ptr<RestLibraryTrackStore> m_pTrackStore;
     std::unique_ptr<SearchQueryParser> m_pSearchQueryParser;
     std::unique_ptr<QueryNode> m_pSearchQuery;
     QList<RestLibraryTrack> m_tracks;
     QHash<QString, TrackPointer> m_searchTracks;
     QVector<int> m_visibleRows;
     QString m_currentSearch;
+    QString m_cacheIdentity;
     int m_sortColumn = ColumnArtist;
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
     bool m_cacheLoadCapabilitiesEnabled = false;

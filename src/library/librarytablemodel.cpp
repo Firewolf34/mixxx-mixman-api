@@ -35,7 +35,10 @@ void LibraryTableModel::setTableModel() {
             " FROM library "
             "INNER JOIN track_locations "
             "ON library.location=track_locations.id "
-            "WHERE (mixxx_deleted=0 AND fs_deleted=0)");
+            "WHERE (mixxx_deleted=0 AND fs_deleted=0) "
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM rest_library_cache_tracks "
+            "WHERE rest_library_cache_tracks.track_id=library.id)");
     if (!query.exec()) {
         LOG_FAILED_QUERY(query);
     }

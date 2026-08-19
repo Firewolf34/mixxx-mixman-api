@@ -262,6 +262,13 @@ Agent tool selection:
   namespace. Credential rotation and logout must invalidate the displayed
   catalog immediately; raw bearer tokens must never enter filenames, logs, or
   persisted cache metadata.
+- Register database-backed REST cache tracks as credential-scoped cache
+  artifacts and exclude them from the main Tracks view without hiding them
+  from decks, preview, samplers, history, or Auto DJ. Reuse an ordinary local
+  track only after the server lookup establishes its stable remote mapping;
+  never infer identity from title, artist, or other descriptive metadata.
+  Preserve cache-artifact registration after file eviction so stale database
+  rows cannot become visible library tracks.
 - Store the rotating MixMan instance resume token only in QtKeychain, scoped to
   server and session. Never log or persist it in ordinary Mixxx settings.
 - Every authoritative MixMan playback, snapshot, and candidate write is fenced

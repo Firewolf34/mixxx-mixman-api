@@ -1476,6 +1476,7 @@ add_library(
   src/library/rest/restlibraryloudnessmanager.cpp
   src/library/rest/restlibrarysettings.cpp
   src/library/rest/restlibrarytablemodel.cpp
+  src/library/rest/restlibrarytrackstore.cpp
   src/library/rhythmbox/rhythmboxfeature.cpp
   src/library/scanner/importfilestask.cpp
   src/library/scanner/libraryscanner.cpp

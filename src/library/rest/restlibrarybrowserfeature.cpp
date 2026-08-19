@@ -59,6 +59,8 @@ RestLibraryBrowserFeature::RestLibraryBrowserFeature(
           m_client(pBackend->networkAccessManager(), this),
           m_settingsIdentity(
                   settingsIdentity(RestLibrarySettings::fromConfig(m_pConfig))) {
+    m_pTableModel->setCacheIdentity(RestLibraryCacheManager::cacheIdentity(
+            RestLibrarySettings::fromConfig(m_pConfig)));
     m_pSidebarModel->setRootItem(TreeItem::newRoot(this));
     connect(m_pRefreshAction,
             &QAction::triggered,
@@ -416,8 +418,9 @@ void RestLibraryBrowserFeature::slotUnresolvedTracksAddToAutoDJ(
         }
         m_autoDJIntent.remoteIds.append(remoteId);
         const RestLibraryTrack track = m_pTableModel->trackForRemoteId(remoteId);
-        if (track.cacheState != RestLibraryCacheState::Ready ||
-                track.cachedFilePath.isEmpty()) {
+        if (!m_pTableModel->materializeTrack(remoteId) &&
+                (track.cacheState != RestLibraryCacheState::Ready ||
+                        track.cachedFilePath.isEmpty())) {
             m_autoDJIntent.pendingIds.insert(remoteId);
             tracksToCache.append(track);
         } else {
@@ -581,7 +584,6 @@ void RestLibraryBrowserFeature::finishAutoDJIfReady() {
     const int failedCount =
             m_autoDJIntent.remoteIds.size() - trackIds.size();
     if (!trackIds.isEmpty()) {
-        m_pTrackCollectionManager->unhideTracks(trackIds);
         m_pTrackCollectionManager->internalCollection()
                 ->getPlaylistDAO()
                 .addTracksToAutoDJQueue(trackIds, m_autoDJIntent.location);
@@ -626,6 +628,8 @@ bool RestLibraryBrowserFeature::resetIfSettingsChanged(
     m_seenCursors.clear();
     m_catalogLimits.reset(settings.maxCatalogPages, settings.maxCatalogTracks);
     m_pTableModel->setTracks({});
+    m_pTableModel->setCacheIdentity(
+            RestLibraryCacheManager::cacheIdentity(settings));
     m_catalogLoaded = false;
     m_refreshing = false;
     m_pRefreshAction->setEnabled(true);

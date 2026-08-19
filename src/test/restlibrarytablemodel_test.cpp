@@ -14,7 +14,9 @@
 #include <QVector>
 
 #include "control/controlobject.h"
+#include "library/dao/playlistdao.h"
 #include "library/library_prefs.h"
+#include "library/librarytablemodel.h"
 #include "library/rest/restlibrarycachestatedelegate.h"
 #include "library/rest/restlibrarytablemodel.h"
 #include "library/tabledelegates/percentagedelegate.h"
@@ -26,6 +28,8 @@ namespace {
 using mixxx::library::rest::RestLibraryCacheState;
 using mixxx::library::rest::RestLibraryTableModel;
 using mixxx::library::rest::RestLibraryTrack;
+
+const QString kCacheIdentity = QStringLiteral("https://rest.test|test-account");
 
 RestLibraryTrack newTrack(
         QString remoteId,
@@ -47,6 +51,7 @@ class RestLibraryTableModelTest : public LibraryTest {
 
 TEST_F(RestLibraryTableModelTest, ExposesRowsAndKeepsLoadCapabilitiesDisabled) {
     RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setCacheIdentity(kCacheIdentity);
     model.setTracks({
             newTrack(QStringLiteral("1"), QStringLiteral("Beta"), QStringLiteral("Second")),
             newTrack(QStringLiteral("2"), QStringLiteral("Alpha"), QStringLiteral("First")),
@@ -84,6 +89,7 @@ TEST_F(RestLibraryTableModelTest, ReadyRowsExposeLocalTrackLocation) {
     file.close();
 
     RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setCacheIdentity(kCacheIdentity);
     RestLibraryTrack remoteTrack = newTrack(
             QStringLiteral("1"),
             QStringLiteral("Beta"),
@@ -98,13 +104,289 @@ TEST_F(RestLibraryTableModelTest, ReadyRowsExposeLocalTrackLocation) {
             {},
             0,
             0,
-            {}});
+            kCacheIdentity});
 
     EXPECT_EQ(
             model.getTrackLocation(model.index(0, 0)),
             QDir::fromNativeSeparators(filePath));
     EXPECT_TRUE(model.getTrack(model.index(0, 0)));
     EXPECT_TRUE(model.getTrackId(model.index(0, 0)).isValid());
+}
+
+TEST_F(RestLibraryTableModelTest, CacheArtifactsStayOutOfTracksAndReuseIdentity) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString filePath = QDir(tempDir.path()).filePath(QStringLiteral("cached.mp3"));
+    QFile file(filePath);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("audio");
+    file.close();
+
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setCacheIdentity(kCacheIdentity);
+    model.setTracks({newTrack(
+            QStringLiteral("remote-1"),
+            QStringLiteral("Artist"),
+            QStringLiteral("Cached"))});
+    model.updateTrackCacheState({
+            QStringLiteral("remote-1"),
+            RestLibraryCacheState::Ready,
+            filePath,
+            {},
+            0,
+            0,
+            kCacheIdentity});
+
+    const TrackPointer pFirst = model.materializeTrack(QStringLiteral("remote-1"));
+    RestLibraryTableModel reconstructedModel(nullptr, trackCollectionManager());
+    reconstructedModel.setCacheIdentity(kCacheIdentity);
+    reconstructedModel.setTracks({newTrack(
+            QStringLiteral("remote-1"),
+            QStringLiteral("Artist"),
+            QStringLiteral("Cached"))});
+    reconstructedModel.updateTrackCacheState({QStringLiteral("remote-1"),
+            RestLibraryCacheState::Ready,
+            filePath,
+            {},
+            0,
+            0,
+            kCacheIdentity});
+    const TrackPointer pSecond =
+            reconstructedModel.materializeTrack(QStringLiteral("remote-1"));
+    ASSERT_TRUE(pFirst);
+    ASSERT_TRUE(pSecond);
+    EXPECT_EQ(pFirst->getId(), pSecond->getId());
+    EXPECT_TRUE(model.isCacheArtifact(pFirst->getId()));
+
+    PlaylistDAO& playlistDao = internalCollection()->getPlaylistDAO();
+    const int historyId = playlistDao.createPlaylist(
+            QStringLiteral("REST history test"), PlaylistDAO::PLHT_SET_LOG);
+    ASSERT_GT(historyId, 0);
+    ASSERT_TRUE(playlistDao.appendTrackToPlaylist(pFirst->getId(), historyId));
+    EXPECT_EQ(playlistDao.getTrackIdsInPlaylistOrder(historyId),
+            (QList<TrackId>{pFirst->getId()}));
+
+    LibraryTableModel libraryModel(
+            nullptr, trackCollectionManager(), "mixxx.db.model.library.rest-test");
+    libraryModel.select();
+    EXPECT_EQ(libraryModel.rowCount(), 0);
+}
+
+TEST_F(RestLibraryTableModelTest, ExplicitLocalMappingAvoidsCacheDuplicate) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString localPath = QDir(tempDir.path()).filePath(QStringLiteral("local.mp3"));
+    QFile localFile(localPath);
+    ASSERT_TRUE(localFile.open(QIODevice::WriteOnly));
+    localFile.write("local audio");
+    localFile.close();
+    const TrackPointer pLocalTrack = getOrAddTrackByLocation(localPath);
+    ASSERT_TRUE(pLocalTrack);
+
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setCacheIdentity(kCacheIdentity);
+    model.setTracks({newTrack(
+            QStringLiteral("remote-1"),
+            QStringLiteral("Artist"),
+            QStringLiteral("Remote"))});
+    ASSERT_TRUE(model.rememberLocalMapping(QStringLiteral("remote-1"), pLocalTrack));
+
+    RestLibraryTableModel reconstructedModel(nullptr, trackCollectionManager());
+    reconstructedModel.setCacheIdentity(kCacheIdentity);
+    reconstructedModel.setTracks({newTrack(
+            QStringLiteral("remote-1"),
+            QStringLiteral("Artist"),
+            QStringLiteral("Remote"))});
+    const TrackPointer pResolved =
+            reconstructedModel.materializeTrack(QStringLiteral("remote-1"));
+    ASSERT_TRUE(pResolved);
+    EXPECT_EQ(pResolved->getId(), pLocalTrack->getId());
+    EXPECT_FALSE(reconstructedModel.isCacheArtifact(pResolved->getId()));
+    EXPECT_EQ(reconstructedModel.remoteIdForTrack(pLocalTrack),
+            QStringLiteral("remote-1"));
+    EXPECT_EQ(reconstructedModel.getTrackLocation(
+                      reconstructedModel.index(0, 0)),
+            QDir::fromNativeSeparators(localPath));
+
+    LibraryTableModel libraryModel(
+            nullptr, trackCollectionManager(), "mixxx.db.model.library.rest-local-test");
+    libraryModel.select();
+    EXPECT_EQ(libraryModel.rowCount(), 1);
+}
+
+TEST_F(RestLibraryTableModelTest, UnmappedLocalTrackRemainsWhileCacheArtifactIsHidden) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString localPath = QDir(tempDir.path()).filePath(QStringLiteral("local.mp3"));
+    const QString cachePath = QDir(tempDir.path()).filePath(QStringLiteral("cached.mp3"));
+    for (const QString& path : {localPath, cachePath}) {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("audio");
+    }
+    const TrackPointer pLocalTrack = getOrAddTrackByLocation(localPath);
+    ASSERT_TRUE(pLocalTrack);
+
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setCacheIdentity(kCacheIdentity);
+    model.setTracks({newTrack(
+            QStringLiteral("remote-1"),
+            QStringLiteral("Artist"),
+            QStringLiteral("Remote"))});
+    model.updateTrackCacheState({QStringLiteral("remote-1"),
+            RestLibraryCacheState::Ready,
+            cachePath,
+            {},
+            0,
+            0,
+            kCacheIdentity});
+
+    const TrackPointer pCacheTrack = model.materializeTrack(QStringLiteral("remote-1"));
+    ASSERT_TRUE(pCacheTrack);
+    EXPECT_NE(pCacheTrack->getId(), pLocalTrack->getId());
+    EXPECT_TRUE(model.isCacheArtifact(pCacheTrack->getId()));
+
+    LibraryTableModel libraryModel(
+            nullptr, trackCollectionManager(), "mixxx.db.model.library.rest-unmapped-test");
+    libraryModel.select();
+    EXPECT_EQ(libraryModel.rowCount(), 1);
+}
+
+TEST_F(RestLibraryTableModelTest, OverlappingRemoteIdsStayCredentialScoped) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString firstPath = QDir(tempDir.path()).filePath(QStringLiteral("first.mp3"));
+    const QString secondPath = QDir(tempDir.path()).filePath(QStringLiteral("second.mp3"));
+    for (const QString& path : {firstPath, secondPath}) {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("audio");
+    }
+
+    RestLibraryTableModel firstModel(nullptr, trackCollectionManager());
+    firstModel.setCacheIdentity(QStringLiteral("https://rest.test|account-a"));
+    firstModel.setTracks({newTrack(
+            QStringLiteral("shared"), QStringLiteral("A"), QStringLiteral("First"))});
+    firstModel.updateTrackCacheState({QStringLiteral("shared"),
+            RestLibraryCacheState::Ready,
+            firstPath,
+            {},
+            0,
+            0,
+            QStringLiteral("https://rest.test|account-a")});
+
+    RestLibraryTableModel secondModel(nullptr, trackCollectionManager());
+    secondModel.setCacheIdentity(QStringLiteral("https://rest.test|account-b"));
+    secondModel.setTracks({newTrack(
+            QStringLiteral("shared"), QStringLiteral("B"), QStringLiteral("Second"))});
+    secondModel.updateTrackCacheState({QStringLiteral("shared"),
+            RestLibraryCacheState::Ready,
+            secondPath,
+            {},
+            0,
+            0,
+            QStringLiteral("https://rest.test|account-b")});
+
+    const TrackPointer pFirst = firstModel.materializeTrack(QStringLiteral("shared"));
+    const TrackPointer pSecond = secondModel.materializeTrack(QStringLiteral("shared"));
+    ASSERT_TRUE(pFirst);
+    ASSERT_TRUE(pSecond);
+    EXPECT_NE(pFirst->getId(), pSecond->getId());
+    EXPECT_EQ(firstModel.remoteIdForTrack(pFirst), QStringLiteral("shared"));
+    EXPECT_TRUE(firstModel.remoteIdForTrack(pSecond).isEmpty());
+}
+
+TEST_F(RestLibraryTableModelTest, EvictedArtifactNeverReturnsToTracks) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString filePath = QDir(tempDir.path()).filePath(QStringLiteral("cached.mp3"));
+    {
+        QFile file(filePath);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("audio");
+    }
+
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setCacheIdentity(kCacheIdentity);
+    model.setTracks({newTrack(
+            QStringLiteral("remote-1"),
+            QStringLiteral("Artist"),
+            QStringLiteral("Cached"))});
+    model.updateTrackCacheState({QStringLiteral("remote-1"),
+            RestLibraryCacheState::Ready,
+            filePath,
+            {},
+            0,
+            0,
+            kCacheIdentity});
+    const TrackPointer pTrack = model.materializeTrack(QStringLiteral("remote-1"));
+    ASSERT_TRUE(pTrack);
+    ASSERT_TRUE(QFile::remove(filePath));
+    model.updateTrackCacheState({QStringLiteral("remote-1"),
+            RestLibraryCacheState::Stale,
+            {},
+            {},
+            0,
+            0,
+            kCacheIdentity});
+
+    LibraryTableModel libraryModel(
+            nullptr, trackCollectionManager(), "mixxx.db.model.library.rest-eviction-test");
+    libraryModel.select();
+    EXPECT_EQ(libraryModel.rowCount(), 0);
+    EXPECT_TRUE(model.isCacheArtifact(pTrack->getId()));
+}
+
+TEST_F(RestLibraryTableModelTest, RedownloadWithNewExtensionKeepsBothArtifactsHidden) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString mp3Path = QDir(tempDir.path()).filePath(QStringLiteral("cached.mp3"));
+    {
+        QFile file(mp3Path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("mp3 audio");
+    }
+
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setCacheIdentity(kCacheIdentity);
+    model.setTracks({newTrack(
+            QStringLiteral("remote-1"),
+            QStringLiteral("Artist"),
+            QStringLiteral("Cached"))});
+    model.updateTrackCacheState({QStringLiteral("remote-1"),
+            RestLibraryCacheState::Ready,
+            mp3Path,
+            {},
+            0,
+            0,
+            kCacheIdentity});
+    const TrackPointer pMp3Track = model.materializeTrack(QStringLiteral("remote-1"));
+    ASSERT_TRUE(pMp3Track);
+    ASSERT_TRUE(QFile::remove(mp3Path));
+
+    const QString flacPath = QDir(tempDir.path()).filePath(QStringLiteral("cached.flac"));
+    {
+        QFile file(flacPath);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("flac audio");
+    }
+    model.updateTrackCacheState({QStringLiteral("remote-1"),
+            RestLibraryCacheState::Ready,
+            flacPath,
+            {},
+            0,
+            0,
+            kCacheIdentity});
+    const TrackPointer pFlacTrack = model.materializeTrack(QStringLiteral("remote-1"));
+    ASSERT_TRUE(pFlacTrack);
+    EXPECT_NE(pMp3Track->getId(), pFlacTrack->getId());
+    EXPECT_TRUE(model.isCacheArtifact(pMp3Track->getId()));
+    EXPECT_TRUE(model.isCacheArtifact(pFlacTrack->getId()));
+
+    LibraryTableModel libraryModel(
+            nullptr, trackCollectionManager(), "mixxx.db.model.library.rest-redownload-test");
+    libraryModel.select();
+    EXPECT_EQ(libraryModel.rowCount(), 0);
 }
 
 TEST_F(RestLibraryTableModelTest, UncachedRowsDoNotExposeTrackIdsForAutoDJ) {

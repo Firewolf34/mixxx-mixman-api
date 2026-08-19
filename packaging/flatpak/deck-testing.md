@@ -290,6 +290,14 @@ bundle. If neither path restores the prior build, status remains
   completes. Reload the track and confirm the stored result is reused. Force
   an analysis failure and confirm the track is skipped/refused with an explicit
   diagnostic; an already playing deck must never receive a late gain jump.
+- Load one REST catalog track to a deck, preview, sampler, and Auto DJ, then
+  confirm it is recorded in history but never appears in the main Tracks view.
+  Repeat the load and confirm it reuses one internal track ID. Verify a local
+  recording remains the only visible Tracks row both before and after loading
+  an unrelated REST cache copy; when server lookup explicitly maps that local
+  recording, confirm REST loading reuses it without creating a cache-track
+  duplicate. Evict and redownload a cache file and confirm the artifact does
+  not become visible in Tracks.
 - For MixMan v3, verify both a configured bearer-token deployment and an
   explicitly auth-disabled trusted-LAN deployment. Confirm the same stable room
   is resumed after restarting Mixxx, recommendation controls use the

@@ -593,4 +593,25 @@ reapplying those migrations.
       ALTER TABLE library ADD COLUMN tuning_frequency_hz FLOAT DEFAULT 0.0;
     </sql>
   </revision>
+  <revision version="41" min_compatible="3">
+    <description>
+      Track REST Library cache artifacts separately from ordinary library tracks.
+    </description>
+    <sql>
+      CREATE TABLE IF NOT EXISTS rest_library_cache_tracks (
+        track_id INTEGER PRIMARY KEY REFERENCES library(id) ON DELETE CASCADE,
+        cache_identity TEXT NOT NULL,
+        remote_id TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_rest_library_cache_identity_remote_id
+        ON rest_library_cache_tracks (cache_identity, remote_id);
+      CREATE TABLE IF NOT EXISTS rest_library_track_mappings (
+        cache_identity TEXT NOT NULL,
+        remote_id TEXT NOT NULL,
+        track_id INTEGER NOT NULL REFERENCES library(id) ON DELETE CASCADE,
+        PRIMARY KEY (cache_identity, remote_id),
+        UNIQUE (cache_identity, track_id)
+      );
+    </sql>
+  </revision>
 </schema>

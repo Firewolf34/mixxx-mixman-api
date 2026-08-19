@@ -5,12 +5,14 @@
 #include <utility>
 
 #include <QDir>
+#include <QFileInfo>
 #include <QTableView>
 #include <QUrl>
 
 #include "control/controlobject.h"
 #include "library/library_prefs.h"
 #include "library/rest/restlibrarycachestatedelegate.h"
+#include "library/rest/restlibrarytrackstore.h"
 #include "library/tabledelegates/percentagedelegate.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
@@ -90,7 +92,9 @@ RestLibraryTableModel::RestLibraryTableModel(
                   pTrackCollectionManager->internalCollection()->database(),
                   "mixxx.db.model.restlibrary"),
           m_pTrackCollectionManager(pTrackCollectionManager),
-          m_mode(mode) {
+          m_mode(mode),
+          m_pTrackStore(
+                  std::make_unique<RestLibraryTrackStore>(pTrackCollectionManager)) {
     if (m_mode == Mode::Catalog) {
         m_pSearchQueryParser = std::make_unique<SearchQueryParser>(
                 pTrackCollectionManager->internalCollection(),
@@ -155,6 +159,15 @@ void RestLibraryTableModel::setTracks(QList<RestLibraryTrack> tracks) {
         m_pSearchQuery = m_pSearchQueryParser->parseQuery(m_currentSearch, {});
     }
     rebuildVisibleRows();
+    endResetModel();
+}
+
+void RestLibraryTableModel::setCacheIdentity(const QString& cacheIdentity) {
+    if (m_cacheIdentity == cacheIdentity) {
+        return;
+    }
+    beginResetModel();
+    m_cacheIdentity = cacheIdentity;
     endResetModel();
 }
 
@@ -403,36 +416,28 @@ TrackPointer RestLibraryTableModel::getTrack(const QModelIndex& index) const {
 
 TrackPointer RestLibraryTableModel::materializeTrack(const QString& remoteId) const {
     const RestLibraryTrack remoteTrack = trackForRemoteId(remoteId);
-    if (remoteTrack.remoteId.isEmpty() ||
-            remoteTrack.cacheState != RestLibraryCacheState::Ready ||
-            remoteTrack.cachedFilePath.isEmpty()) {
+    if (remoteTrack.remoteId.isEmpty()) {
         return {};
     }
-    const QString location = QDir::fromNativeSeparators(remoteTrack.cachedFilePath);
-    bool alreadyInLibrary = false;
-    TrackPointer pTrack = m_pTrackCollectionManager->getOrAddTrack(
-            TrackRef::fromFilePath(location), &alreadyInLibrary);
-    if (pTrack && !alreadyInLibrary) {
-        pTrack->setArtist(remoteTrack.artist);
-        pTrack->setTitle(remoteTrack.title);
-        pTrack->setAlbum(remoteTrack.album);
-        pTrack->updateGenre(remoteTrack.genre);
-        pTrack->setComposer(remoteTrack.composer);
-        pTrack->setComment(remoteTrack.comment);
-        pTrack->setTrackNumber(remoteTrack.trackNumber);
-        pTrack->setKeyText(remoteTrack.keyText);
-        if (pTrack->getSampleRate().isValid()) {
-            pTrack->trySetBpm(remoteTrack.bpm);
-        }
-        pTrack->setDuration(remoteTrack.durationSeconds);
-        pTrack->setRating(remoteTrack.rating);
-        pTrack->setYear(remoteTrack.releaseDate.isValid()
-                        ? remoteTrack.releaseDate.toString(Qt::ISODate)
-                        : QString());
-        pTrack->setType(remoteTrack.audioFileExtension);
-        m_pTrackCollectionManager->saveTrack(pTrack);
-    }
-    return pTrack;
+    return m_pTrackStore->materializeTrack(remoteTrack, m_cacheIdentity);
+}
+
+TrackPointer RestLibraryTableModel::mappedTrack(const QString& remoteId) const {
+    return m_pTrackStore->mappedTrack(m_cacheIdentity, remoteId);
+}
+
+bool RestLibraryTableModel::rememberLocalMapping(
+        const QString& remoteId,
+        const TrackPointer& pTrack) const {
+    return m_pTrackStore->rememberLocalMapping(m_cacheIdentity, remoteId, pTrack);
+}
+
+QString RestLibraryTableModel::remoteIdForTrack(const TrackPointer& pTrack) const {
+    return m_pTrackStore->remoteIdForTrack(m_cacheIdentity, pTrack);
+}
+
+bool RestLibraryTableModel::isCacheArtifact(TrackId trackId) const {
+    return m_pTrackStore->isCacheArtifact(trackId);
 }
 
 TrackPointer RestLibraryTableModel::getTrackByRef(const TrackRef& trackRef) const {
@@ -445,6 +450,10 @@ QUrl RestLibraryTableModel::getTrackUrl(const QModelIndex& index) const {
     if (!pTrack) {
         return {};
     }
+    const TrackPointer pMappedTrack = mappedTrack(pTrack->remoteId);
+    if (pMappedTrack && QFileInfo::exists(pMappedTrack->getLocation())) {
+        return QUrl::fromLocalFile(pMappedTrack->getLocation());
+    }
     if (!pTrack->cachedFilePath.isEmpty()) {
         return QUrl::fromLocalFile(pTrack->cachedFilePath);
     }
@@ -452,6 +461,10 @@ QUrl RestLibraryTableModel::getTrackUrl(const QModelIndex& index) const {
 }
 
 QString RestLibraryTableModel::getTrackLocation(const QModelIndex& index) const {
+    const TrackPointer pMappedTrack = getTrack(index);
+    if (pMappedTrack) {
+        return QDir::fromNativeSeparators(pMappedTrack->getLocation());
+    }
     const RestLibraryTrack* pTrack = trackForIndex(index);
     if (!pTrack ||
             pTrack->cacheState != RestLibraryCacheState::Ready ||

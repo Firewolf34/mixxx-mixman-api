@@ -5,6 +5,7 @@
 
 #include <QDir>
 #include <QEventLoop>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMenu>
@@ -144,6 +145,10 @@ RestLibraryFeature::RestLibraryFeature(
           m_pLoudnessManager(pLoudnessManager),
           m_client(pBackend->networkAccessManager(), this),
           m_pCacheManager(pBackend->cacheManager()) {
+    const RestLibrarySettings initialSettings =
+            RestLibrarySettings::fromConfig(m_pConfig);
+    m_pTableModel->setCacheIdentity(
+            RestLibraryCacheManager::cacheIdentity(initialSettings));
     m_sessionHeartbeatTimer.setInterval(kSessionHeartbeatIntervalMillis);
     m_sessionHeartbeatTimer.setSingleShot(false);
     connect(&m_sessionHeartbeatTimer,
@@ -457,6 +462,8 @@ void RestLibraryFeature::slotCurrentPlayingDeckChanged(int deck) {
 void RestLibraryFeature::refreshForTrack(
         const TrackPointer& pTrack, bool force, bool publishPlayback) {
     RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    m_pTableModel->setCacheIdentity(
+            RestLibraryCacheManager::cacheIdentity(settings));
     if (settings.isConfigured() && settings.useMixManDefaults &&
             settings.mixManSessionId.isEmpty()) {
         settings.mixManSessionId = generateMixManSessionId();
@@ -464,6 +471,7 @@ void RestLibraryFeature::refreshForTrack(
     }
     refreshMixManControls(settings);
     if (!settings.isConfigured()) {
+        m_pendingTrackLookup.reset();
         resetMixManSessionState();
         m_pTableModel->setCacheLoadCapabilitiesEnabled(false);
         clearRecommendations();
@@ -502,6 +510,7 @@ void RestLibraryFeature::refreshForTrack(
     m_lastRequestedTrackLocation = trackLocation;
 
     if (!pTrack) {
+        m_pendingTrackLookup.reset();
         m_currentRemoteId.clear();
         clearRecommendations();
         setStatusText(tr(
@@ -511,6 +520,7 @@ void RestLibraryFeature::refreshForTrack(
 
     const QString remoteId = remoteIdForTrack(pTrack);
     if (!remoteId.isEmpty()) {
+        m_pendingTrackLookup.reset();
         rememberRemoteId(remoteId);
         if (publishPlayback) {
             publishMixManPlayback(settings, pTrack, remoteId, QStringLiteral("playing"));
@@ -535,6 +545,7 @@ void RestLibraryFeature::refreshForTrack(
     }
 
     if (settings.hasTrackLookupConfigured()) {
+        m_pendingTrackLookup = pTrack;
         m_currentRemoteId.clear();
         setStatusText(tr("Looking up the current track in the REST Library."));
         m_client.lookupTrack(settings, pTrack);
@@ -542,6 +553,7 @@ void RestLibraryFeature::refreshForTrack(
     }
 
     m_currentRemoteId.clear();
+    m_pendingTrackLookup.reset();
     clearRecommendations();
     setStatusText(tr("Current track is not mapped to a REST Library track."));
     kLogger.info() << "Current track is not mapped to a REST library remote id";
@@ -553,10 +565,15 @@ void RestLibraryFeature::slotTracksFetched(const QList<RestLibraryTrack>& tracks
 
 void RestLibraryFeature::slotTrackLookupSucceeded(const QString& remoteId) {
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    const TrackPointer pMappedTrack = m_pendingTrackLookup;
+    m_pendingTrackLookup.reset();
+    if (pMappedTrack) {
+        m_pTableModel->rememberLocalMapping(remoteId, pMappedTrack);
+    }
     rememberRemoteId(remoteId);
     publishMixManPlayback(
             settings,
-            PlayerInfo::instance().getCurrentPlayingTrack(),
+            pMappedTrack ? pMappedTrack : PlayerInfo::instance().getCurrentPlayingTrack(),
             remoteId,
             QStringLiteral("playing"));
     if (settings.useMixManDefaults && !m_mixManSession.id.isEmpty()) {
@@ -567,6 +584,7 @@ void RestLibraryFeature::slotTrackLookupSucceeded(const QString& remoteId) {
 }
 
 void RestLibraryFeature::slotTrackLookupMissed(const QString& message) {
+    m_pendingTrackLookup.reset();
     m_currentRemoteId.clear();
     clearRecommendations();
     setStatusText(message.isEmpty()
@@ -1100,8 +1118,9 @@ void RestLibraryFeature::queueRecommendationsForAutoDJ() {
         }
         m_autoDJRemoteIds.append(remoteId);
         const RestLibraryTrack track = m_pTableModel->trackForRemoteId(remoteId);
-        if (track.cacheState != RestLibraryCacheState::Ready ||
-                track.cachedFilePath.isEmpty()) {
+        if (!m_pTableModel->materializeTrack(remoteId) &&
+                (track.cacheState != RestLibraryCacheState::Ready ||
+                        track.cachedFilePath.isEmpty())) {
             m_autoDJPendingIds.insert(remoteId);
             tracksToCache.append(track);
         } else {
@@ -1179,7 +1198,6 @@ void RestLibraryFeature::finishRecommendationsAutoDJIfReady() {
         return;
     }
 
-    m_pTrackCollectionManager->unhideTracks(trackIds);
     m_pTrackCollectionManager->internalCollection()
             ->getPlaylistDAO()
             .addTracksToAutoDJQueue(trackIds, PlaylistDAO::AutoDJSendLoc::REPLACE);
@@ -1393,6 +1411,8 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
     cancelRecommendationsAutoDJ();
     m_recommendationRemoteIds = std::move(remoteIds);
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    m_pTableModel->setCacheIdentity(
+            RestLibraryCacheManager::cacheIdentity(settings));
     m_pCacheManager->cancelRequests(
             RestLibraryCacheRequestOwner::RecommendationPrefetch);
     m_pTableModel->setTracks(tracks);
@@ -1423,7 +1443,11 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
     const int cacheLimit = std::min(settings.recommendationLimit, static_cast<int>(tracks.size()));
     tracksToCache.reserve(cacheLimit);
     for (int i = 0; i < cacheLimit; ++i) {
-        tracksToCache.append(tracks.at(i));
+        const TrackPointer pMappedTrack =
+                m_pTableModel->mappedTrack(tracks.at(i).remoteId);
+        if (!pMappedTrack || !QFileInfo::exists(pMappedTrack->getLocation())) {
+            tracksToCache.append(tracks.at(i));
+        }
     }
     m_pCacheManager->cacheTracks(
             tracksToCache,
@@ -1956,12 +1980,6 @@ void RestLibraryFeature::slotTrackCacheStateChanged(const RestLibraryCacheResult
     if (result.cacheIdentity != RestLibraryCacheManager::cacheIdentity(settings)) {
         return;
     }
-    if (result.cacheState == RestLibraryCacheState::Ready &&
-            !result.cachedFilePath.trimmed().isEmpty()) {
-        m_cachedPathToRemoteId.insert(
-                normalizedTrackLocation(result.cachedFilePath),
-                result.remoteId);
-    }
     const bool isDisplayedTrack =
             !result.remoteId.isEmpty() && m_cacheStates.contains(result.remoteId);
     if (isDisplayedTrack) {
@@ -2087,10 +2105,7 @@ void RestLibraryFeature::clearRecommendations() {
 }
 
 QString RestLibraryFeature::remoteIdForTrack(const TrackPointer& pTrack) const {
-    if (!pTrack) {
-        return {};
-    }
-    return m_cachedPathToRemoteId.value(normalizedTrackLocation(pTrack->getLocation()));
+    return m_pTableModel->remoteIdForTrack(pTrack);
 }
 
 QString RestLibraryFeature::normalizedTrackLocation(const QString& location) {
