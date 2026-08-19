@@ -58,6 +58,13 @@ Agent tool selection:
   ```
 
 - Do not force-push shared development branches for deployment.
+- If a provider candidate ref has diverged, first fetch it, require the target
+  commit to be reachable from `origin/dev`, and inspect every candidate-only
+  commit with `git cherry`. Stop if any candidate-only patch is not already
+  represented in the reviewed development history. Recover only the dedicated
+  release pointer with an exact `--force-with-lease=<ref>:<observed-old-sha>`;
+  dry-run that command first, never use an unleased force, and never apply this
+  recovery to `dev` or `main`.
 - The two promotions are independent and may point to different reviewed
   commits. Push only the provider-specific candidate ref whose build is wanted.
 - A manual workflow dispatch must select `deck/candidate`.

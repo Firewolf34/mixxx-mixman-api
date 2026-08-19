@@ -163,6 +163,34 @@ refs/heads/deck/candidate
 Do not force-push shared development branches to promote a build. Moving the
 dedicated candidate ref is the promotion operation.
 
+### Diverged candidate-pointer recovery
+
+A candidate ref may occasionally retain a patch-equivalent commit from an old
+development history. A normal exact-SHA promotion then fails as a
+non-fast-forward even though the release pointer has no unique source change.
+Do not merge that obsolete release history into `dev`, delete the ref, or use
+an unleased force. From a clean current `dev` checkout:
+
+```bash
+git fetch origin
+git merge-base --is-ancestor <reviewed-dev-sha> origin/dev
+git rev-parse origin/deck/candidate
+git cherry <reviewed-dev-sha> origin/deck/candidate
+git push --dry-run \
+  --force-with-lease=refs/heads/deck/candidate:<observed-old-sha> \
+  origin <reviewed-dev-sha>:refs/heads/deck/candidate
+git push \
+  --force-with-lease=refs/heads/deck/candidate:<observed-old-sha> \
+  origin <reviewed-dev-sha>:refs/heads/deck/candidate
+```
+
+The ancestry check must succeed, and every line from `git cherry` must begin
+with `-`, meaning the candidate-only patch is already represented in the
+reviewed development history. Any `+` line, changed observed SHA, failed dry
+run, or unexpected remote state is a stop condition. The final command updates
+only the dedicated candidate pointer and triggers its normal build; it does not
+authorize a non-fast-forward update of `dev` or `main`.
+
 ## GitHub Fallback Workflow
 
 The GitHub fork keeps `main` synchronized exactly with official upstream and
@@ -695,6 +723,10 @@ git push origin <candidate-sha>:refs/heads/deck/candidate
 # Optional expedited artifact-only build:
 git push github <candidate-sha>:refs/heads/github/candidate
 ```
+
+If the normal candidate push is rejected as non-fast-forward, use the bounded
+candidate-pointer recovery procedure above. Do not merge a release pointer
+back into `dev` merely to make the push fast-forward.
 
 Open the newest **Deck Flatpak Build** in Forgejo Actions and validate the
 runner, exact SHA, preflight, one-job build, absence of PSI/OOM termination,

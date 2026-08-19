@@ -33,6 +33,17 @@ source subject before importing it into the GPG-signed public Flatpak
 repository. The release refs are pointers only and must never receive direct
 development commits.
 
+If a normal candidate push is non-fast-forward, fetch the provider ref and
+confirm the reviewed target is reachable from `origin/dev`. Use
+`git cherry <reviewed-dev-sha> origin/deck/candidate` to require every
+candidate-only patch to be already represented (`-`, never `+`). Then dry-run
+and perform an exact
+`--force-with-lease=refs/heads/deck/candidate:<observed-old-sha>` update of only
+the release pointer. Stop if the observed SHA changes or any candidate-only
+patch is unique. Never merge obsolete candidate history into `dev`, use an
+unleased force, or apply this recovery to `dev` or `main`; the full command
+sequence is in `deck-vps-pipeline.md`.
+
 The hardened promoter creates atomic staging directories with mode `0775` and
 inherits the shared group from the setgid artifact root. Do not request an
 explicit setgid bit from inside its `RestrictSUIDSGID=yes` systemd sandbox.
