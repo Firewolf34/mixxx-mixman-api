@@ -70,6 +70,10 @@ Agent tool selection:
 - The two promotions are independent and may point to different reviewed
   commits. Push only the provider-specific candidate ref whose build is wanted.
 - A manual workflow dispatch must select `deck/candidate`.
+- Confirm a manual dispatch from a newly created run ID, exact candidate SHA,
+  bare workflow filename, and candidate ref. Forgejo 16 may leave the run
+  summary's `event` empty; in that case require the same run number's Actions
+  task to report `workflow_dispatch` with the exact branch, SHA, and workflow.
 
 ## Branch Model
 

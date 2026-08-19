@@ -95,6 +95,15 @@ case "${url}" in
         : >"${MIXXX_TEST_DISPATCH_STATE}"
         printf '{"accepted":true}\n'
         ;;
+    */actions/tasks\?*)
+        if [[ "${MIXXX_TEST_MODE}" == live-empty-event ]]; then
+            printf '{"workflow_runs":[{"id":429,"run_number":46,"status":"waiting","event":"workflow_dispatch","head_branch":"deck/candidate","head_sha":"%s","workflow_id":"deck-flatpak.yml","url":"https://forge.test/runs/206"}]}\n' "${candidate_sha}"
+        elif [[ "${MIXXX_TEST_MODE}" == mismatch-task ]]; then
+            printf '{"workflow_runs":[{"id":430,"run_number":47,"status":"waiting","event":"push","head_branch":"dev","head_sha":"%s","workflow_id":"deck-flatpak.yml","url":"https://forge.test/runs/207"}]}\n' "${candidate_sha}"
+        else
+            printf '{"workflow_runs":[]}\n'
+        fi
+        ;;
     */actions/runs\?*)
         if [[ "${MIXXX_TEST_MODE}" == active ]]; then
             printf '{"workflow_runs":[{"id":200,"index_in_repo":41,"status":"running","event":"workflow_dispatch","prettyref":"deck/candidate","commit_sha":"%s","created":"2026-08-19T01:00:00Z","html_url":"https://forge.test/runs/200"}]}\n' "${candidate_sha}"
@@ -103,19 +112,25 @@ case "${url}" in
         else
             case "${MIXXX_TEST_MODE}" in
                 success)
-                    new_run="{\"id\":201,\"index_in_repo\":42,\"status\":\"waiting\",\"event\":\"workflow_dispatch\",\"prettyref\":\"deck/candidate\",\"commit_sha\":\"${candidate_sha}\",\"created\":\"2026-08-19T02:00:00Z\",\"html_url\":\"https://forge.test/runs/201\"}"
+                    new_run="{\"id\":201,\"index_in_repo\":42,\"status\":\"waiting\",\"event\":\"workflow_dispatch\",\"prettyref\":\"deck/candidate\",\"commit_sha\":\"${candidate_sha}\",\"workflow_id\":\"deck-flatpak.yml\",\"created\":\"2026-08-19T02:00:00Z\",\"html_url\":\"https://forge.test/runs/201\"}"
                     ;;
                 mismatch-sha)
-                    new_run="{\"id\":202,\"index_in_repo\":43,\"status\":\"waiting\",\"event\":\"workflow_dispatch\",\"prettyref\":\"deck/candidate\",\"commit_sha\":\"${other_sha}\",\"created\":\"2026-08-19T02:00:00Z\",\"html_url\":\"https://forge.test/runs/202\"}"
+                    new_run="{\"id\":202,\"index_in_repo\":43,\"status\":\"waiting\",\"event\":\"workflow_dispatch\",\"prettyref\":\"deck/candidate\",\"commit_sha\":\"${other_sha}\",\"workflow_id\":\"deck-flatpak.yml\",\"created\":\"2026-08-19T02:00:00Z\",\"html_url\":\"https://forge.test/runs/202\"}"
                     ;;
                 mismatch-ref)
-                    new_run="{\"id\":203,\"index_in_repo\":44,\"status\":\"waiting\",\"event\":\"workflow_dispatch\",\"prettyref\":\"dev\",\"commit_sha\":\"${candidate_sha}\",\"created\":\"2026-08-19T02:00:00Z\",\"html_url\":\"https://forge.test/runs/203\"}"
+                    new_run="{\"id\":203,\"index_in_repo\":44,\"status\":\"waiting\",\"event\":\"workflow_dispatch\",\"prettyref\":\"dev\",\"commit_sha\":\"${candidate_sha}\",\"workflow_id\":\"deck-flatpak.yml\",\"created\":\"2026-08-19T02:00:00Z\",\"html_url\":\"https://forge.test/runs/203\"}"
                     ;;
                 mismatch-event)
-                    new_run="{\"id\":204,\"index_in_repo\":45,\"status\":\"waiting\",\"event\":\"push\",\"prettyref\":\"deck/candidate\",\"commit_sha\":\"${candidate_sha}\",\"created\":\"2026-08-19T02:00:00Z\",\"html_url\":\"https://forge.test/runs/204\"}"
+                    new_run="{\"id\":204,\"index_in_repo\":45,\"status\":\"waiting\",\"event\":\"push\",\"prettyref\":\"deck/candidate\",\"commit_sha\":\"${candidate_sha}\",\"workflow_id\":\"deck-flatpak.yml\",\"created\":\"2026-08-19T02:00:00Z\",\"html_url\":\"https://forge.test/runs/204\"}"
                     ;;
                 malformed)
-                    new_run="{\"id\":205,\"status\":\"waiting\",\"event\":\"workflow_dispatch\",\"prettyref\":\"deck/candidate\",\"commit_sha\":\"${candidate_sha}\",\"created\":\"2026-08-19T02:00:00Z\"}"
+                    new_run="{\"id\":205,\"status\":\"waiting\",\"event\":\"workflow_dispatch\",\"prettyref\":\"deck/candidate\",\"commit_sha\":\"${candidate_sha}\",\"workflow_id\":\"deck-flatpak.yml\",\"created\":\"2026-08-19T02:00:00Z\"}"
+                    ;;
+                live-empty-event)
+                    new_run="{\"id\":206,\"index_in_repo\":46,\"status\":\"waiting\",\"event\":\"\",\"prettyref\":\"deck/candidate\",\"commit_sha\":\"${candidate_sha}\",\"workflow_id\":\"deck-flatpak.yml\",\"created\":\"2026-08-19T02:00:00Z\",\"html_url\":\"https://forge.test/runs/206\"}"
+                    ;;
+                mismatch-task)
+                    new_run="{\"id\":207,\"index_in_repo\":47,\"status\":\"waiting\",\"event\":\"\",\"prettyref\":\"deck/candidate\",\"commit_sha\":\"${candidate_sha}\",\"workflow_id\":\"deck-flatpak.yml\",\"created\":\"2026-08-19T02:00:00Z\",\"html_url\":\"https://forge.test/runs/207\"}"
                     ;;
                 *)
                     echo "Unknown fake mode ${MIXXX_TEST_MODE}" >&2
@@ -170,6 +185,19 @@ if grep -Fq ".forgejo/workflows" "${test_root}/dispatch-success.requests"; then
     exit 1
 fi
 
+empty_event_output="$(run_dispatch live-empty-event)"
+jq -e \
+    --arg sha "${candidate_sha}" '
+        .result == "dispatch-confirmed" and
+        .workflow == "deck-flatpak.yml" and
+        .event == "workflow_dispatch" and
+        .ref == "refs/heads/deck/candidate" and
+        .commit_sha == $sha and
+        .run_id == 206 and
+        .run_number == 46
+    ' <<<"${empty_event_output}" >/dev/null
+grep -Fq "/actions/tasks?limit=50" "${test_root}/dispatch-live-empty-event.requests"
+
 if run_dispatch active >"${test_root}/active.stdout" 2>"${test_root}/active.stderr"; then
     echo "Expected an active-run refusal." >&2
     exit 1
@@ -193,6 +221,12 @@ for mode in mismatch-sha mismatch-ref mismatch-event; do
     fi
     grep -Fq "did not match workflow_dispatch, deck/candidate" "${test_root}/${mode}.stderr"
 done
+
+if run_dispatch mismatch-task >"${test_root}/mismatch-task.stdout" 2>"${test_root}/mismatch-task.stderr"; then
+    echo "Expected mismatched task confirmation failure." >&2
+    exit 1
+fi
+grep -Fq "task metadata did not confirm workflow_dispatch" "${test_root}/mismatch-task.stderr"
 
 if run_dispatch malformed >"${test_root}/malformed.stdout" 2>"${test_root}/malformed.stderr"; then
     echo "Expected malformed run metadata failure." >&2

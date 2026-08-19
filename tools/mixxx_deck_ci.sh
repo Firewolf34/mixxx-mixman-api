@@ -171,6 +171,11 @@ runs_json() {
     api_request GET "${path}"
 }
 
+tasks_json() {
+    api_request GET \
+        "/repos/${FORGEJO_OWNER}/${FORGEJO_REPO}/actions/tasks?limit=50"
+}
+
 candidate_sha() {
     local response sha
     response="$(api_request GET \
@@ -242,8 +247,7 @@ command_status() {
 command_tasks() {
     local sha="$1"
     require_sha "${sha}"
-    api_request GET \
-        "/repos/${FORGEJO_OWNER}/${FORGEJO_REPO}/actions/tasks?limit=50" |
+    tasks_json |
         jq --arg sha "${sha}" '
             [.workflow_runs[] | select(.head_sha == $sha)]
             | sort_by(.created_at)
@@ -309,7 +313,8 @@ command_dispatch() {
     [[ "${WORKFLOW_FILE}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]] ||
         die "workflow filename is invalid"
 
-    local sha before_runs before_ids active_runs response deadline current_runs new_runs run
+    local sha before_runs before_ids active_runs response deadline current_runs new_runs
+    local run summary_run tasks matching_tasks run_number
     sha="$(candidate_sha)"
     before_runs="$(runs_json "${sha}")"
     jq -e '.workflow_runs | type == "array"' <<<"${before_runs}" >/dev/null ||
@@ -353,44 +358,99 @@ command_dispatch() {
             | reverse
             ' <<<"${current_runs}")"
         if [[ "$(jq 'length' <<<"${new_runs}")" -ne 0 ]]; then
-            if ! run="$(jq -ce --arg sha "${sha}" '
+            run="$(jq -ce --arg sha "${sha}" --arg workflow "${WORKFLOW_FILE}" '
+                def candidate_ref:
+                    .prettyref == "deck/candidate" or
+                    .head_branch == "deck/candidate" or
+                    .ref == "refs/heads/deck/candidate";
+                [.[]
+                 | select(.event == "workflow_dispatch")
+                 | select(.commit_sha == $sha)
+                 | select(.workflow_id == $workflow)
+                 | select(candidate_ref)]
+                | first // empty
+                ' <<<"${new_runs}" 2>/dev/null || true)"
+
+            summary_run=""
+            if [[ -z "${run}" ]]; then
+                summary_run="$(jq -ce --arg sha "${sha}" --arg workflow "${WORKFLOW_FILE}" '
                     def candidate_ref:
                         .prettyref == "deck/candidate" or
                         .head_branch == "deck/candidate" or
                         .ref == "refs/heads/deck/candidate";
                     [.[]
-                     | select(.event == "workflow_dispatch")
+                     | select(.event == "")
                      | select(.commit_sha == $sha)
+                     | select(.workflow_id == $workflow)
                      | select(candidate_ref)]
-                    | first
-                    ' <<<"${new_runs}")"; then
-                jq '{error: "dispatch-run-mismatch", observed_new_runs: map({id, event, status, commit_sha, ref: (.prettyref // .head_branch // .ref)})}' \
-                    <<<"${new_runs}" >&2
-                die "Forgejo created a new run, but it did not match workflow_dispatch, deck/candidate, and ${sha}"
+                    | first // empty
+                    ' <<<"${new_runs}" 2>/dev/null || true)"
+                if [[ -n "${summary_run}" ]]; then
+                    run_number="$(jq -er '.index_in_repo | select(type == "number" and . > 0)' \
+                        <<<"${summary_run}")" ||
+                        die "Forgejo returned malformed empty-event run metadata"
+                    tasks="$(tasks_json)"
+                    jq -e '.workflow_runs | type == "array"' <<<"${tasks}" >/dev/null ||
+                        die "Forgejo returned malformed Actions task data after dispatch"
+                    matching_tasks="$(jq -c \
+                        --argjson run_number "${run_number}" \
+                        '[.workflow_runs[] | select(.run_number == $run_number)]' \
+                        <<<"${tasks}")"
+                    if [[ "$(jq 'length' <<<"${matching_tasks}")" -ne 0 ]]; then
+                        if jq -e \
+                                --arg sha "${sha}" \
+                                --arg branch "${CANDIDATE_BRANCH}" \
+                                --arg workflow "${WORKFLOW_FILE}" '
+                                    any(.[];
+                                        .event == "workflow_dispatch" and
+                                        .head_branch == $branch and
+                                        .head_sha == $sha and
+                                        .workflow_id == $workflow)
+                                ' <<<"${matching_tasks}" >/dev/null; then
+                            run="$(jq '.event = "workflow_dispatch"' <<<"${summary_run}")"
+                        else
+                            jq '{error: "dispatch-task-mismatch", observed_tasks: map({id, run_number, event, status, head_branch, head_sha, workflow_id, url})}' \
+                                <<<"${matching_tasks}" >&2
+                            die "Forgejo task metadata did not confirm workflow_dispatch, deck/candidate, ${WORKFLOW_FILE}, and ${sha}"
+                        fi
+                    fi
+                fi
             fi
-            jq -e '
-                (.id | type == "number" and . > 0) and
-                (.index_in_repo | type == "number" and . > 0) and
-                (.status | type == "string" and length > 0) and
-                (.html_url | type == "string" and length > 0)
-                ' <<<"${run}" >/dev/null ||
-                die "Forgejo returned malformed confirmed run metadata"
-            jq \
-                --arg workflow "${WORKFLOW_FILE}" \
-                --arg ref "${EXPECTED_REF}" \
-                '{
-                    schema_version: 1,
-                    result: "dispatch-confirmed",
-                    workflow: $workflow,
-                    event,
-                    ref: $ref,
-                    commit_sha,
-                    run_id: .id,
-                    run_number: .index_in_repo,
-                    status,
-                    html_url
-                }' <<<"${run}"
-            return 0
+
+            if [[ -n "${run}" ]]; then
+                jq -e '
+                    (.id | type == "number" and . > 0) and
+                    (.index_in_repo | type == "number" and . > 0) and
+                    (.status | type == "string" and length > 0) and
+                    (.html_url | type == "string" and length > 0)
+                    ' <<<"${run}" >/dev/null || {
+                    jq '{error: "malformed-confirmed-run", observed_run: {id, index_in_repo, status, event, prettyref, commit_sha, workflow_id, html_url}}' \
+                        <<<"${run}" >&2
+                    die "Forgejo returned malformed confirmed run metadata"
+                }
+                jq \
+                    --arg workflow "${WORKFLOW_FILE}" \
+                    --arg ref "${EXPECTED_REF}" \
+                    '{
+                        schema_version: 1,
+                        result: "dispatch-confirmed",
+                        workflow: $workflow,
+                        event,
+                        ref: $ref,
+                        commit_sha,
+                        run_id: .id,
+                        run_number: .index_in_repo,
+                        status,
+                        html_url
+                    }' <<<"${run}"
+                return 0
+            fi
+
+            if [[ -z "${summary_run}" ]]; then
+                jq '{error: "dispatch-run-mismatch", observed_new_runs: map({id, event, status, commit_sha, workflow_id, ref: (.prettyref // .head_branch // .ref)})}' \
+                    <<<"${new_runs}" >&2
+                die "Forgejo created a new run, but its run/task metadata did not match workflow_dispatch, deck/candidate, ${WORKFLOW_FILE}, and ${sha}"
+            fi
         fi
         ((SECONDS < deadline)) || break
         sleep "${DISPATCH_POLL_INTERVAL_SECONDS}"

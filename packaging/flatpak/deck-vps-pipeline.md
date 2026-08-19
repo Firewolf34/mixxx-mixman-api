@@ -281,8 +281,14 @@ already has a nonterminal run. It sends the bare workflow filename
 exact source ref and SHA, run ID/number, status, and URL. A timeout, malformed
 run record, or mismatched event/ref/SHA is a failed dispatch confirmation; do
 not infer success from the HTTP request alone or enqueue another run blindly.
+Forgejo 16 currently leaves `event` empty in the Actions run-summary record
+for a manual dispatch while its task record correctly reports
+`workflow_dispatch`. The client accepts that representation only after the
+same run number's task independently matches the exact workflow filename,
+candidate branch, and source SHA. A missing or contradictory task remains a
+failed confirmation.
 
-The Forgejo 15 REST schema reports authoritative run and task state but does
+The Forgejo 16 REST schema reports authoritative run and task state but does
 not publish a raw job-log endpoint. A successful exact-SHA run plus complete
 immutable publication is machine-verifiable. If a run fails, use its returned
 `html_url` for the signed-in log view or obtain the isolated runner log from

@@ -92,6 +92,11 @@ run, then succeeds only after Forgejo exposes a new `workflow_dispatch` run for
 the resolved `deck/candidate` SHA. Preserve the returned JSON run ID, number,
 SHA, status, and URL as the dispatch confirmation.
 
+Forgejo 16 may expose an empty `event` in that run's summary even though the
+corresponding task reports `workflow_dispatch`. The client must correlate the
+same run number and require the task's exact branch, SHA, and workflow before
+reporting success; it must reject missing or contradictory task metadata.
+
 Create the token in Forgejo user settings with access restricted specifically
 to `total-infra/mixxx`. `read:repository` supports inspection; use
 `write:repository` only if this client must also perform the manual
