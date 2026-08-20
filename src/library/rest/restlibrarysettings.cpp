@@ -263,8 +263,9 @@ QUrl urlWithRestPath(const QUrl& baseUrl, const QString& path) {
     }
 
     QUrl url = baseUrl;
-    const QString basePath = url.path();
-    const QString relativePath = pathUrl.path().isEmpty() ? path : pathUrl.path();
+    const QString basePath = url.path(QUrl::FullyEncoded);
+    const QString encodedPath = pathUrl.path(QUrl::FullyEncoded);
+    const QString relativePath = encodedPath.isEmpty() ? path : encodedPath;
     QString joinedPath;
     if (relativePath.startsWith(QLatin1Char('/'))) {
         joinedPath = basePath;
@@ -282,8 +283,8 @@ QUrl urlWithRestPath(const QUrl& baseUrl, const QString& path) {
     if (joinedPath.isEmpty()) {
         joinedPath = QStringLiteral("/");
     }
-    url.setPath(joinedPath);
-    url.setQuery(pathUrl.query());
+    url.setPath(joinedPath, QUrl::TolerantMode);
+    url.setQuery(pathUrl.query(QUrl::FullyEncoded), QUrl::TolerantMode);
     return url;
 }
 

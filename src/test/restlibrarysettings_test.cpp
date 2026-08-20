@@ -3,6 +3,7 @@
 #include <limits>
 
 #include <QHash>
+#include <QUrlQuery>
 
 #include "library/rest/restlibrarysettings.h"
 #include "test/mixxxtest.h"
@@ -287,7 +288,29 @@ TEST_F(RestLibrarySettingsTest, MixManOpaqueIdsAreSingleEncodedPathSegments) {
             QStringLiteral(
                     "https://mixman.example/base/api/v3/sessions/"
                     "room%2Fpart%3Fview%23fragment%25done/state?"
-                    "instance_id=deck%2Fone%3Fmode%23cue%25ready"));
+                    "instance_id=deck/one?mode%23cue%25ready"));
+    EXPECT_EQ(
+            stateUrl.path(QUrl::FullyEncoded),
+            QStringLiteral(
+                    "/base/api/v3/sessions/"
+                    "room%2Fpart%3Fview%23fragment%25done/state"));
+    EXPECT_TRUE(stateUrl.fragment().isEmpty());
+    const auto stateQueryItems = QUrlQuery(stateUrl).queryItems(QUrl::FullyDecoded);
+    ASSERT_EQ(stateQueryItems.size(), 1);
+    EXPECT_EQ(stateQueryItems.constFirst().first, QStringLiteral("instance_id"));
+    EXPECT_EQ(stateQueryItems.constFirst().second, instanceId);
+
+    const QUrl candidateUrl = restConfig::urlWithRestPath(
+            QUrl(QStringLiteral("https://mixman.example/base")),
+            restConfig::mixManSessionCandidateSelectPath(sessionId, trackId));
+    EXPECT_EQ(
+            candidateUrl.toString(QUrl::FullyEncoded),
+            QStringLiteral(
+                    "https://mixman.example/base/api/v3/sessions/"
+                    "room%2Fpart%3Fview%23fragment%25done/candidates/"
+                    "track%2Fone%3Fsource%23crate%2542/select"));
+    EXPECT_TRUE(candidateUrl.query().isEmpty());
+    EXPECT_TRUE(candidateUrl.fragment().isEmpty());
 }
 
 TEST_F(RestLibrarySettingsTest, MixManOrdinaryIdsKeepExistingPaths) {
