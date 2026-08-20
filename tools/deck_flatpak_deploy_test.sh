@@ -29,6 +29,7 @@ case "$1" in
         fi
         ;;
     build-import-bundle)
+        echo "Importing bundle objects..."
         ;;
     build-bundle)
         for argument in "$@"; do
@@ -63,14 +64,16 @@ cat >"${TEMP_ROOT}/bin/ostree" <<'EOF'
 set -euo pipefail
 echo "ostree $*" >>"${TEST_COMMAND_LOG}"
 case "$*" in
-    *" pull-local "*|*" refs --create="*) ;;
+    *" pull-local "*) echo "Importing OSTree objects..." ;;
+    *" refs --create="*) ;;
     *" refs") echo app/org.mixxx.Mixxx/x86_64/master ;;
     *" rev-parse "*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
     *" show "*)
         printf 'commit aaaa\nDate: now\n    Built from %s and %s\n' \
             "$(<"${TEST_INSTALLED_SOURCE_FILE}")" "${TEST_ROLLBACK_SOURCE}"
         ;;
-    init*|*" fsck") ;;
+    *" fsck") echo "Validating OSTree repository..." ;;
+    init*) ;;
     *) echo "unexpected ostree command: $*" >&2; exit 2 ;;
 esac
 EOF

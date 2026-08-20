@@ -286,6 +286,10 @@ If deployment or validation fails, the updater verifies the restored commit and
 source SHA. A no-op commit rollback falls back to the checksum-verified cached
 bundle. If neither path restores the prior build, status remains
 `rollback-failed`; later checks must not relabel that installed build as current.
+After either a verified automatic rollback or a manually completed recovery,
+later timer checks leave that same signed repository commit rejected and wait
+for a different commit. This permits the timer to remain enabled without
+reinstalling a candidate that already failed validation.
 Successful updates share `repo:<source-sha>` current/previous state with the
 manual client and retain the three newest automatic snapshots.
 

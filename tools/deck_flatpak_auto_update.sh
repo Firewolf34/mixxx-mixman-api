@@ -84,6 +84,16 @@ previous_status_blocks_commit() {
     ' "${STATUS_FILE}" >/dev/null 2>&1
 }
 
+previous_status_rejects_available_commit() {
+    local commit="$1"
+    [[ -r "${STATUS_FILE}" ]] || return 1
+    jq -e --arg commit "${commit}" '
+        .schema_version == 1 and
+        (.result == "rolled-back" or .result == "rollback-failed") and
+        .available_commit == $commit
+    ' "${STATUS_FILE}" >/dev/null 2>&1
+}
+
 available_commit() {
     flatpak remote-info --user --show-commit "${REMOTE_NAME}" "${APP_ID}"
 }
@@ -197,12 +207,13 @@ snapshot_installed_commit() (
     mkdir -p "${snapshot_dir}"
     export_repo="$(mktemp -d)"
     trap 'rm -rf -- "${export_repo}" "${part}"' EXIT
-    ostree init --repo="${export_repo}" --mode=archive-z2
-    ostree --repo="${export_repo}" pull-local --depth=0 "${USER_REPO}" "${commit}"
-    ostree --repo="${export_repo}" refs --create="${EXPECTED_REF}" "${commit}"
+    ostree init --repo="${export_repo}" --mode=archive-z2 >&2
+    ostree --repo="${export_repo}" pull-local --depth=0 \
+        "${USER_REPO}" "${commit}" >&2
+    ostree --repo="${export_repo}" refs --create="${EXPECTED_REF}" "${commit}" >&2
     flatpak build-bundle --arch="${EXPECTED_ARCH}" \
         --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
-        "${export_repo}" "${part}" "${APP_ID}" master
+        "${export_repo}" "${part}" "${APP_ID}" master >&2
     [[ -s "${part}" ]] || die "Could not export the installed rollback build."
     mv -f -- "${part}" "${bundle}"
     sha256sum "${bundle}" | awk '{print $1}' >"${checksum}"
@@ -332,6 +343,10 @@ auto_update() {
         write_status up-to-date "Installed build is current." \
             "${old_commit}" "${new_commit}"
         echo "Mixxx is up to date at ${new_source}."
+        return 0
+    fi
+    if previous_status_rejects_available_commit "${new_commit}"; then
+        echo "Mixxx update ${new_source} previously failed validation; waiting for a new signed commit."
         return 0
     fi
     if ! on_ac_power; then

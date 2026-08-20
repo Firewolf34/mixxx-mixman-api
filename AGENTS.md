@@ -337,6 +337,9 @@ Agent tool selection:
 - Automatic rollback must verify the installed commit and source SHA, fall back
   to the checksum-verified snapshot bundle after a no-op commit rollback, and
   persist `rollback-failed` rather than later reporting that build up to date.
+- After automatic or manual recovery, unattended checks must not retry the same
+  repository commit recorded as `rolled-back` or `rollback-failed`; wait for a
+  different signed commit so the timer can remain enabled safely.
 - Automatic and manual rollback share provider-qualified current/previous
   state. Repository-update snapshots live at `repo:<source-sha>`, retain the
   three newest generations, and are the migration fallback when older client

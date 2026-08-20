@@ -482,9 +482,9 @@ verify_bundle_provenance() (
     validation_repo="$(mktemp -d)"
     trap 'rm -rf -- "${validation_repo}"' EXIT
 
-    ostree init --repo="${validation_repo}" --mode=archive-z2
-    flatpak build-import-bundle "${validation_repo}" "${bundle_path}"
-    ostree --repo="${validation_repo}" fsck
+    ostree init --repo="${validation_repo}" --mode=archive-z2 >&2
+    flatpak build-import-bundle "${validation_repo}" "${bundle_path}" >&2
+    ostree --repo="${validation_repo}" fsck >&2
     ostree --repo="${validation_repo}" refs | grep -Fxq "${EXPECTED_REF}" ||
         die "Bundle does not contain ${EXPECTED_REF}."
     flatpak_commit="$(ostree --repo="${validation_repo}" rev-parse "${EXPECTED_REF}")"
@@ -538,7 +538,7 @@ stage_forgejo_descriptor() (
     fi
     install -m 0644 "${manifest}" "${build_dir}/manifest.json"
     printf '%s\n' "${expected_sha}" >"${build_dir}/Mixxx.flatpak.sha256"
-    verify_bundle_provenance "${bundle_path}" "${source_sha}"
+    verify_bundle_provenance "${bundle_path}" "${source_sha}" >&2
     write_staged_state forgejo "${source_sha}"
     echo "Staged verified Forgejo build ${source_sha}."
     source_key forgejo "${source_sha}"
@@ -741,16 +741,17 @@ snapshot_installed_build() (
     rm -f -- "${bundle_part}"
     export_repo="$(mktemp -d)"
     trap 'rm -rf -- "${export_repo}" "${bundle_part}"' EXIT
-    ostree init --repo="${export_repo}" --mode=archive-z2
-    ostree --repo="${export_repo}" pull-local --depth=0 "${user_repo}" "${commit}"
-    ostree --repo="${export_repo}" refs --create="${EXPECTED_REF}" "${commit}"
+    ostree init --repo="${export_repo}" --mode=archive-z2 >&2
+    ostree --repo="${export_repo}" pull-local --depth=0 \
+        "${user_repo}" "${commit}" >&2
+    ostree --repo="${export_repo}" refs --create="${EXPECTED_REF}" "${commit}" >&2
     flatpak build-bundle --arch="${EXPECTED_ARCH}" \
         --runtime-repo="${FLATHUB_REPO_URL}" "${export_repo}" "${bundle_part}" \
-        "${APP_ID}" master
+        "${APP_ID}" master >&2
     [[ -s "${bundle_part}" ]] || die "Failed to save the installed rollback build."
     mv -f -- "${bundle_part}" "${bundle_path}"
     sha256sum "${bundle_path}" | awk '{print $1}' >"${checksum_path}"
-    verify_bundle_provenance "${bundle_path}" "${source_sha}"
+    verify_bundle_provenance "${bundle_path}" "${source_sha}" >&2
     printf '%s\n' "${key}"
 )
 

@@ -117,7 +117,8 @@ cat >"${TEMP_ROOT}/bin/ostree" <<'EOF'
 set -euo pipefail
 echo "ostree $*" >>"${TEST_COMMAND_LOG}"
 case "$*" in
-    init*|*" pull-local "*|*" refs --create="*) ;;
+    *" pull-local "*) echo "Importing OSTree objects..." ;;
+    init*|*" refs --create="*) ;;
     *) echo "unexpected ostree command: $*" >&2; exit 2 ;;
 esac
 EOF
@@ -255,6 +256,18 @@ if "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" auto-update; then
 fi
 jq -e '.result == "rollback-failed"' \
     "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json" >/dev/null
+
+printf '%s\n' "${TEST_ROLLBACK_COMMIT}" >"${TEST_INSTALLED_COMMIT_FILE}"
+printf '%s\n' "${TEST_ROLLBACK_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
+: >"${TEST_COMMAND_LOG}"
+"${SCRIPT_DIR}/deck_flatpak_auto_update.sh" auto-update
+jq -e --arg rejected "${TEST_AVAILABLE_COMMIT}" \
+    '.result == "rollback-failed" and .available_commit == $rejected' \
+    "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json" >/dev/null
+[[ ! -s "${TEST_COMMAND_LOG}" ]]
+
+printf '%s\n' "${TEST_AVAILABLE_COMMIT}" >"${TEST_INSTALLED_COMMIT_FILE}"
+printf '%s\n' "${TEST_AVAILABLE_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
 
 jq -n \
     --arg installed "${TEST_ROLLBACK_COMMIT}" \

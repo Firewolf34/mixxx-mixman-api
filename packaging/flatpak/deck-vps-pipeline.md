@@ -738,7 +738,10 @@ isolated temporary home. A failure first requests the previous commit from the
 local Flatpak repository, verifies the actual installed commit and source, then
 falls back to the checksum-verified cached bundle if the commit request was a
 no-op. An unverified rollback is recorded as `rollback-failed` and cannot be
-overwritten by a later `up-to-date` check. It never stops or restarts Mixxx.
+overwritten by a later `up-to-date` check. A candidate recorded as `rolled-back`
+or `rollback-failed` remains rejected after automatic or manual recovery; timer
+checks wait for a different signed repository commit instead of retrying it.
+It never stops or restarts Mixxx.
 After a successful update it records `repo:<new-source>` as current and the
 verified snapshot `repo:<old-source>` as previous. It retains the three newest
 repository snapshots and refreshes reused snapshot metadata so the immediate
