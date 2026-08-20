@@ -702,7 +702,7 @@ verify_cached_bundle() {
 verify_rollback_target() {
     local key="$1"
     local commit_file commit
-    verify_cached_bundle "${key}"
+    verify_cached_bundle "${key}" || return 1
     split_source_key "${key}"
     if [[ "${BUILD_PROVIDER}" == repo ]]; then
         commit_file="$(build_dir_for_key "${key}")/ostree-commit"
@@ -714,11 +714,14 @@ verify_rollback_target() {
     fi
 }
 
-snapshot_installed_build() {
+snapshot_installed_build() (
     local source_sha="$1"
+    local commit="$2"
     local user_repo="${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/repo"
-    local key build_dir bundle_path bundle_part checksum_path
+    local key build_dir bundle_path bundle_part checksum_path export_repo
     require_sha "${source_sha}"
+    [[ "${commit}" =~ ^[0-9a-f]{64}$ ]] ||
+        die "The installed OSTree commit is invalid for rollback export."
     [[ -d "${user_repo}" ]] || die "The user Flatpak repository is missing: ${user_repo}"
     key="$(source_key local "${source_sha}")"
     build_dir="$(build_dir_for_key "${key}")"
@@ -735,16 +738,21 @@ snapshot_installed_build() {
 
     echo "Saving installed build ${source_sha} for rollback..." >&2
     mkdir -p "${build_dir}"
-    rm -f -- "${bundle_path}" "${bundle_part}" "${checksum_path}"
+    rm -f -- "${bundle_part}"
+    export_repo="$(mktemp -d)"
+    trap 'rm -rf -- "${export_repo}" "${bundle_part}"' EXIT
+    ostree init --repo="${export_repo}" --mode=archive-z2
+    ostree --repo="${export_repo}" pull-local --depth=0 "${user_repo}" "${commit}"
+    ostree --repo="${export_repo}" refs --create="${EXPECTED_REF}" "${commit}"
     flatpak build-bundle --arch="${EXPECTED_ARCH}" \
-        --runtime-repo="${FLATHUB_REPO_URL}" "${user_repo}" "${bundle_part}" \
+        --runtime-repo="${FLATHUB_REPO_URL}" "${export_repo}" "${bundle_part}" \
         "${APP_ID}" master
     [[ -s "${bundle_part}" ]] || die "Failed to save the installed rollback build."
     mv -f -- "${bundle_part}" "${bundle_path}"
     sha256sum "${bundle_path}" | awk '{print $1}' >"${checksum_path}"
     verify_bundle_provenance "${bundle_path}" "${source_sha}"
     printf '%s\n' "${key}"
-}
+)
 
 target_cache_key() {
     local target="$1"
@@ -789,7 +797,7 @@ resolve_target_key() {
 
 activate_build() {
     local target="${1:-auto}"
-    local key build_dir bundle_path old_sha old_key="" verified_sha
+    local key build_dir bundle_path old_sha old_commit old_key="" verified_sha
     require_command flock
     ensure_flatpak
     ensure_directories
@@ -804,7 +812,8 @@ activate_build() {
     verify_cached_bundle "${key}"
     old_sha="$(installed_source_sha || true)"
     if [[ -n "${old_sha}" && "${old_sha}" != "${BUILD_SHA}" ]]; then
-        old_key="$(snapshot_installed_build "${old_sha}")"
+        old_commit="$(installed_commit || true)"
+        old_key="$(snapshot_installed_build "${old_sha}" "${old_commit}")"
     fi
 
     flatpak install --user --bundle --reinstall --noninteractive -y "${bundle_path}"
@@ -844,7 +853,7 @@ prune_local_builds() {
 }
 
 rollback_build() {
-    local installed_sha target_key target_commit="" old_key verified_sha verified_commit
+    local installed_sha installed_ostree_commit target_key target_commit="" old_key verified_sha verified_commit
     require_command flatpak
     require_command flock
     require_command ostree
@@ -855,6 +864,7 @@ rollback_build() {
     is_mixxx_running && die "Mixxx is running; stop it before rolling back."
 
     installed_sha="$(installed_source_sha || true)"
+    installed_ostree_commit="$(installed_commit || true)"
     require_sha "${installed_sha}"
     target_key="$(effective_rollback_key "${installed_sha}")" ||
         die "No cached rollback build is available."
@@ -868,7 +878,7 @@ rollback_build() {
             die "Cached OSTree commit is invalid for ${target_key}."
     fi
 
-    old_key="$(snapshot_installed_build "${installed_sha}")"
+    old_key="$(snapshot_installed_build "${installed_sha}" "${installed_ostree_commit}")"
     if [[ -n "${target_commit}" ]]; then
         flatpak update --user --app --no-pull --commit="${target_commit}" \
             --noninteractive -y "${APP_ID}" || true

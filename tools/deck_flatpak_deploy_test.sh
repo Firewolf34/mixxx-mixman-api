@@ -61,7 +61,9 @@ EOF
 cat >"${TEMP_ROOT}/bin/ostree" <<'EOF'
 #!/bin/bash
 set -euo pipefail
+echo "ostree $*" >>"${TEST_COMMAND_LOG}"
 case "$*" in
+    *" pull-local "*|*" refs --create="*) ;;
     *" refs") echo app/org.mixxx.Mixxx/x86_64/master ;;
     *" rev-parse "*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
     *" show "*)
@@ -108,6 +110,11 @@ grep -Fq "Current build: installed:${TEST_INSTALLED_SOURCE}" <<<"${status_output
 grep -Fq "Previous build: repo:${TEST_ROLLBACK_SOURCE}" <<<"${status_output}"
 grep -Fq 'Rollback bundle: verified' <<<"${status_output}"
 
+mv "${TEMP_ROOT}/bin/ostree" "${TEMP_ROOT}/bin/ostree.unavailable"
+status_output="$("${SCRIPT_DIR}/deck_flatpak_deploy.sh" status)"
+grep -Fq 'Rollback bundle: invalid' <<<"${status_output}"
+mv "${TEMP_ROOT}/bin/ostree.unavailable" "${TEMP_ROOT}/bin/ostree"
+
 : >"${TEST_COMMAND_LOG}"
 "${SCRIPT_DIR}/deck_flatpak_deploy.sh" rollback
 [[ "$(<"${TEST_INSTALLED_SOURCE_FILE}")" == "${TEST_ROLLBACK_SOURCE}" ]]
@@ -115,6 +122,10 @@ grep -Fq 'Rollback bundle: verified' <<<"${status_output}"
 [[ "$(<"${XDG_STATE_HOME}/mixxx-deck/previous-source-sha")" == "local:${TEST_INSTALLED_SOURCE}" ]]
 grep -q '^update .*--no-pull' "${TEST_COMMAND_LOG}"
 ! grep -q 'remote-add' "${TEST_COMMAND_LOG}"
+grep -Fq "pull-local --depth=0 ${XDG_DATA_HOME}/flatpak/repo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+    "${TEST_COMMAND_LOG}"
+grep -Fq 'refs --create=app/org.mixxx.Mixxx/x86_64/master aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "${TEST_COMMAND_LOG}"
 
 printf '%s\n' "${TEST_INSTALLED_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
 printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \

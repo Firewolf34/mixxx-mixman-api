@@ -157,6 +157,11 @@ From a current Mixxx checkout, install the lightweight client and USB rules:
 tools/deck_flatpak_deploy.sh setup
 ```
 
+The laptop must provide the `flatpak`, `ostree`, `jq`, `curl`, `unzip`, and
+`flock` commands. In particular, `ostree` is required for cached-bundle source
+provenance checks; status reports the rollback target invalid if that verifier
+is unavailable.
+
 This installs `~/.local/bin/mixxx-deck`, the thin `mixxx-break-glass` wrapper,
 the automatic updater and OSTree validator, the boot/four-hour user systemd
 units, and a user-local desktop entry that shares the deployment lock. It also
@@ -236,7 +241,10 @@ mixxx-deck run
 ```
 
 Before replacing a different installed build, activation exports it from the
-local Flatpak repository into the rollback cache. This does not compile Mixxx.
+local Flatpak repository into the rollback cache. The export uses a temporary
+ref pinned to the exact installed OSTree commit, so an already downloaded
+pending update cannot be mislabeled as the previous build. This does not
+compile Mixxx.
 
 The combined command still refuses to interrupt a running session:
 

@@ -331,6 +331,9 @@ Agent tool selection:
   and fail closed on inspection errors. A battery or running-session deferral
   is a successful no-change check.
 - Snapshot a different installed user Flatpak before replacing it.
+- Snapshot exports must pin the exact installed OSTree commit in a temporary
+  repository. Never build a rollback bundle from the user repository's moving
+  application ref, which may already point at a downloaded pending update.
 - Automatic rollback must verify the installed commit and source SHA, fall back
   to the checksum-verified snapshot bundle after a no-op commit rollback, and
   persist `rollback-failed` rather than later reporting that build up to date.
@@ -343,6 +346,9 @@ Agent tool selection:
   Flatpak operations, verify the installed commit/source afterward, preserve
   the profile, and never launch Mixxx. Do not silently skip a corrupt selected
   generation.
+- Status must report a rollback bundle as invalid when any verifier or
+  provenance check fails; conditional shell contexts must not mask a failed
+  verifier command.
 - Verify cached checksums before installation.
 - Verify installed source SHA after installation.
 - Protect current, previous, and staged bundles from pruning.

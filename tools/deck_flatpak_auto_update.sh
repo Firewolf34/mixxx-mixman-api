@@ -5,6 +5,7 @@ set -euo pipefail
 
 APP_ID="${MIXXX_DECK_APP_ID:-org.mixxx.Mixxx}"
 EXPECTED_ARCH="${MIXXX_DECK_ARCH:-x86_64}"
+EXPECTED_REF="app/${APP_ID}/${EXPECTED_ARCH}/master"
 REMOTE_NAME="${MIXXX_DECK_REMOTE_NAME:-polinaria-mixxx}"
 REMOTE_DESCRIPTOR_URL="${MIXXX_DECK_REMOTE_DESCRIPTOR_URL:-https://forge.polinaria.world/artifacts/flatpak/mixxx.flatpakrepo}"
 STATE_ROOT="${XDG_STATE_HOME:-${HOME}/.local/state}/mixxx-deck"
@@ -181,10 +182,10 @@ configure_remote() {
         die "Signed remote ${REMOTE_NAME} does not expose ${APP_ID}."
 }
 
-snapshot_installed_commit() {
+snapshot_installed_commit() (
     local source_sha="$1"
     local commit="$2"
-    local snapshot_dir bundle part checksum
+    local snapshot_dir bundle part checksum export_repo
     [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] ||
         die "Installed build has no valid source SHA for rollback."
     [[ "${commit}" =~ ^[0-9a-f]{64}$ ]] ||
@@ -194,23 +195,21 @@ snapshot_installed_commit() {
     part="${bundle}.part"
     checksum="${snapshot_dir}/Mixxx.flatpak.sha256"
     mkdir -p "${snapshot_dir}"
-    if [[ -s "${bundle}" && -s "${checksum}" ]] &&
-            [[ "$(sha256sum "${bundle}" | awk '{print $1}')" == "$(<"${checksum}")" ]]; then
-        printf '%s\n' "${commit}" >"${snapshot_dir}/ostree-commit"
-        touch "${snapshot_dir}"
-        printf '%s\n' "${snapshot_dir}"
-        return
-    fi
-    rm -f -- "${part}"
+    export_repo="$(mktemp -d)"
+    trap 'rm -rf -- "${export_repo}" "${part}"' EXIT
+    ostree init --repo="${export_repo}" --mode=archive-z2
+    ostree --repo="${export_repo}" pull-local --depth=0 "${USER_REPO}" "${commit}"
+    ostree --repo="${export_repo}" refs --create="${EXPECTED_REF}" "${commit}"
     flatpak build-bundle --arch="${EXPECTED_ARCH}" \
         --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
-        "${USER_REPO}" "${part}" "${APP_ID}" master
+        "${export_repo}" "${part}" "${APP_ID}" master
     [[ -s "${part}" ]] || die "Could not export the installed rollback build."
     mv -f -- "${part}" "${bundle}"
     sha256sum "${bundle}" | awk '{print $1}' >"${checksum}"
     printf '%s\n' "${commit}" >"${snapshot_dir}/ostree-commit"
+    touch "${snapshot_dir}"
     printf '%s\n' "${snapshot_dir}"
-}
+)
 
 rollback_commit() {
     local old_commit="$1"
@@ -301,6 +300,7 @@ auto_update() {
     require_command flock
     require_command jq
     require_command on_ac_power
+    require_command ostree
     require_command sha256sum
     require_command timeout
     [[ "${SMOKE_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||

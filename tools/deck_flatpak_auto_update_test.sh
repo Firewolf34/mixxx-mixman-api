@@ -112,7 +112,17 @@ cat >"${TEMP_ROOT}/bin/on_ac_power" <<'EOF'
 #!/bin/bash
 [[ "${TEST_AC_POWER:-yes}" == yes ]]
 EOF
-chmod 0755 "${TEMP_ROOT}/bin/flatpak" "${TEMP_ROOT}/bin/on_ac_power"
+cat >"${TEMP_ROOT}/bin/ostree" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+echo "ostree $*" >>"${TEST_COMMAND_LOG}"
+case "$*" in
+    init*|*" pull-local "*|*" refs --create="*) ;;
+    *) echo "unexpected ostree command: $*" >&2; exit 2 ;;
+esac
+EOF
+chmod 0755 "${TEMP_ROOT}/bin/flatpak" "${TEMP_ROOT}/bin/on_ac_power" \
+    "${TEMP_ROOT}/bin/ostree"
 
 export PATH="${TEMP_ROOT}/bin:/usr/bin:/bin"
 export HOME="${TEMP_ROOT}"
@@ -200,6 +210,10 @@ jq -e '.result == "updated"' \
 [[ -s "${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/${TEST_INSTALLED_SOURCE}/Mixxx.flatpak" ]]
 [[ "$(<"${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/${TEST_INSTALLED_SOURCE}/ostree-commit")" == \
     "${TEST_INSTALLED_COMMIT}" ]]
+grep -Fq "pull-local --depth=0 ${XDG_DATA_HOME}/flatpak/repo ${TEST_INSTALLED_COMMIT}" \
+    "${TEST_COMMAND_LOG}"
+grep -Fq "refs --create=app/org.mixxx.Mixxx/x86_64/master ${TEST_INSTALLED_COMMIT}" \
+    "${TEST_COMMAND_LOG}"
 
 source "${SCRIPT_DIR}/deck_flatpak_auto_update.sh"
 export TEST_ROLLBACK_COMMIT="${TEST_INSTALLED_COMMIT}"

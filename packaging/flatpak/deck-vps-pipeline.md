@@ -584,6 +584,10 @@ Install:
 tools/deck_flatpak_deploy.sh setup
 ```
 
+Client prerequisites include `flatpak`, `ostree`, `jq`, `curl`, `unzip`, and
+`flock`. Missing OSTree validation is fail-closed: status must not describe a
+rollback target as verified when its bundle provenance cannot be checked.
+
 Installed path:
 
 ```text
@@ -675,6 +679,11 @@ Takes a deployment lock and refuses while Mixxx is running. It verifies the
 cached checksum, snapshots a different installed app into the rollback cache,
 installs the user bundle, verifies its source SHA from Flatpak metadata, records
 state, and prunes unneeded cache entries.
+
+Snapshot creation copies the exact installed OSTree commit into a temporary
+archive repository and binds the canonical app ref to that commit before
+building the bundle. It must never export the moving ref directly from the
+user repository because download-only staging may already have advanced it.
 
 ### Deploy
 
