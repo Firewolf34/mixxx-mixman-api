@@ -11,6 +11,7 @@ CMAKE_FILE="${REPO_ROOT}/CMakeLists.txt"
 QML_CONTROLS_REGISTRATION_SOURCE="${REPO_ROOT}/src/qml/qmlcontrolsregistration.cpp"
 DECK_DEPLOY_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_deploy.sh"
 DECK_AUTO_UPDATE_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_auto_update.sh"
+DECK_BREAK_GLASS_SCRIPT="${REPO_ROOT}/tools/mixxx_break_glass.sh"
 DECK_REPO_PUBLISH_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_repo_publish.sh"
 FLATPAK_BUILD_SCRIPT="${REPO_ROOT}/packaging/flatpak/flatpak_build.sh"
 DECK_PUBLISH_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_publish.sh"
@@ -132,6 +133,12 @@ if ! grep -Fq 'install -m 0644 "${OSTREE_VALIDATION_HELPER}" "${installed_helper
     echo "Error: mixxx-deck setup does not install its OSTree validator." >&2
     exit 1
 fi
+if ! grep -Fq 'install -m 0755 "${SCRIPT_DIR}/mixxx_break_glass.sh" "${BREAK_GLASS_CLIENT}"' \
+        "${DECK_DEPLOY_SCRIPT}" ||
+    ! grep -Fq 'flatpak install --user --bundle --no-pull' "${DECK_DEPLOY_SCRIPT}"; then
+    echo "Error: offline manual rollback setup is incomplete." >&2
+    exit 1
+fi
 if ! grep -Fq 'flock -s 8' "${DECK_DEPLOY_SCRIPT}" ||
     ! grep -Fq 'deck_flatpak_auto_update.sh' "${DECK_DEPLOY_SCRIPT}" ||
     ! grep -Fq 'OnUnitInactiveSec=4h' "${DECK_UPDATE_TIMER}" ||
@@ -171,8 +178,10 @@ if ! grep -Fq '          build-dir: build_flatpak' "${GITHUB_DECK_WORKFLOW}" ||
     exit 1
 fi
 
-bash -n "${DECK_AUTO_UPDATE_SCRIPT}" "${DECK_REPO_PUBLISH_SCRIPT}"
+bash -n "${DECK_DEPLOY_SCRIPT}" "${DECK_AUTO_UPDATE_SCRIPT}" \
+    "${DECK_BREAK_GLASS_SCRIPT}" "${DECK_REPO_PUBLISH_SCRIPT}"
 bash "${SCRIPT_DIR}/deck_flatpak_auto_update_test.sh"
+bash "${SCRIPT_DIR}/deck_flatpak_deploy_test.sh"
 
 bash "${SCRIPT_DIR}/deck_ostree_validation_test.sh"
 

@@ -10,6 +10,8 @@ REMOTE_DESCRIPTOR_URL="${MIXXX_DECK_REMOTE_DESCRIPTOR_URL:-https://forge.polinar
 STATE_ROOT="${XDG_STATE_HOME:-${HOME}/.local/state}/mixxx-deck"
 CACHE_ROOT="${XDG_CACHE_HOME:-${HOME}/.cache}/mixxx-deck"
 STATUS_FILE="${STATE_ROOT}/auto-update-status.json"
+CURRENT_STATE="${STATE_ROOT}/current-source-sha"
+PREVIOUS_STATE="${STATE_ROOT}/previous-source-sha"
 UPDATE_LOCK="${STATE_ROOT}/auto-update.lock"
 DEPLOY_LOCK="${STATE_ROOT}/deploy.lock"
 ROLLBACK_ROOT="${CACHE_ROOT}/repo-rollback"
@@ -118,6 +120,56 @@ write_status() {
     mv -f -- "${temporary}" "${STATUS_FILE}"
 }
 
+write_state_key() {
+    local state_file="$1"
+    local source_sha="$2"
+    local temporary
+    [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] ||
+        die "Cannot record an invalid source SHA in shared rollback state."
+    temporary="$(mktemp "${STATE_ROOT}/state.XXXXXX")"
+    printf 'repo:%s\n' "${source_sha}" >"${temporary}"
+    mv -f -- "${temporary}" "${state_file}"
+}
+
+state_source_sha() {
+    local state_file="$1"
+    local value
+    [[ -r "${state_file}" ]] || return 1
+    value="$(<"${state_file}")"
+    value="${value##*:}"
+    [[ "${value}" =~ ^[0-9a-f]{40}$ ]] || return 1
+    printf '%s\n' "${value}"
+}
+
+newest_rollback_source() {
+    local excluded_source="$1"
+    local path source_sha
+    while IFS= read -r path; do
+        source_sha="${path##*/}"
+        [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] || continue
+        [[ "${source_sha}" != "${excluded_source}" ]] || continue
+        printf '%s\n' "${source_sha}"
+        return 0
+    done < <(
+        find "${ROLLBACK_ROOT}" -mindepth 1 -maxdepth 1 -type d \
+            -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-
+    )
+    return 1
+}
+
+reconcile_current_state() {
+    local installed_source="$1"
+    local recorded_source="" rollback_source=""
+    recorded_source="$(state_source_sha "${CURRENT_STATE}" 2>/dev/null || true)"
+    if [[ "${recorded_source}" != "${installed_source}" ]]; then
+        rollback_source="$(newest_rollback_source "${installed_source}" 2>/dev/null || true)"
+        if [[ -n "${rollback_source}" ]]; then
+            write_state_key "${PREVIOUS_STATE}" "${rollback_source}"
+        fi
+    fi
+    write_state_key "${CURRENT_STATE}" "${installed_source}"
+}
+
 remote_is_configured() {
     flatpak remote-info --user --show-commit "${REMOTE_NAME}" "${APP_ID}" >/dev/null 2>&1
 }
@@ -144,6 +196,8 @@ snapshot_installed_commit() {
     mkdir -p "${snapshot_dir}"
     if [[ -s "${bundle}" && -s "${checksum}" ]] &&
             [[ "$(sha256sum "${bundle}" | awk '{print $1}')" == "$(<"${checksum}")" ]]; then
+        printf '%s\n' "${commit}" >"${snapshot_dir}/ostree-commit"
+        touch "${snapshot_dir}"
         printf '%s\n' "${snapshot_dir}"
         return
     fi
@@ -179,7 +233,7 @@ rollback_commit() {
         echo "Cached rollback bundle is missing or failed checksum verification." >&2
         return 1
     fi
-    flatpak install --user --bundle --reinstall --noninteractive -y \
+    flatpak install --user --bundle --no-pull --reinstall --noninteractive -y \
         "${bundle}" || true
     if installed_build_matches "${old_commit}" "${old_source}"; then
         echo "Restored and verified the previous Mixxx build from its cached bundle." >&2
@@ -196,15 +250,21 @@ record_failed_update() {
     local old_source="$3"
     local new_commit="$4"
     local snapshot_dir="$5"
-    local current_commit
+    local current_commit current_source
 
     if rollback_commit "${old_commit}" "${old_source}" "${snapshot_dir}"; then
+        write_state_key "${CURRENT_STATE}" "${old_source}"
         write_status rolled-back "${reason} The previous build was restored and verified." \
             "${old_commit}" "${new_commit}" "${new_commit}"
         return 0
     fi
 
     current_commit="$(installed_commit || true)"
+    current_source="$(installed_source_sha || true)"
+    write_state_key "${PREVIOUS_STATE}" "${old_source}"
+    if [[ "${current_source}" =~ ^[0-9a-f]{40}$ ]]; then
+        write_state_key "${CURRENT_STATE}" "${current_source}"
+    fi
     write_status rollback-failed \
         "${reason} Rollback verification failed; do not launch this build automatically." \
         "${current_commit}" "${new_commit}" "${new_commit}"
@@ -268,6 +328,7 @@ auto_update() {
             echo "Error: the installed build previously failed validation and rollback; refusing to mark it up to date." >&2
             return 1
         fi
+        reconcile_current_state "${new_source}"
         write_status up-to-date "Installed build is current." \
             "${old_commit}" "${new_commit}"
         echo "Mixxx is up to date at ${new_source}."
@@ -321,6 +382,8 @@ auto_update() {
     fi
 
     prune_rollback_snapshots
+    write_state_key "${PREVIOUS_STATE}" "${old_source}"
+    write_state_key "${CURRENT_STATE}" "${new_source}"
     write_status updated "Signed update installed and validated." \
         "${new_commit}" "${new_commit}"
     echo "Activated and validated Mixxx ${new_source}."

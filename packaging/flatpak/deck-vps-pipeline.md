@@ -588,6 +588,7 @@ Installed path:
 
 ```text
 ~/.local/bin/mixxx-deck
+~/.local/bin/mixxx-break-glass
 ~/.local/bin/deck_ostree_validation.sh
 ```
 
@@ -595,11 +596,14 @@ Cache:
 
 ```text
 ~/.cache/mixxx-deck/builds/<provider>/<source-sha>/
+~/.cache/mixxx-deck/repo-rollback/<source-sha>/
 ```
 
 `provider` is `forgejo`, `github`, or `local` for an exported rollback
 snapshot. A pre-provider cache at `builds/<source-sha>/` remains readable as
 `legacy:<source-sha>` and is not destructively migrated.
+`repo:<source-sha>` identifies the automatic updater's offline snapshot. The
+automatic and manual clients share provider-qualified current/previous state.
 
 State:
 
@@ -645,9 +649,12 @@ manifest.
 
 ### Status
 
-Local, read-only view of installed/staged/previous provider-qualified builds,
-Forgejo manifest URL, GitHub fallback configuration state, running state, and
-Flatpak metadata.
+Local, read-only view of the actual installed source, staged build, effective
+offline rollback target and its verification state, Forgejo manifest URL,
+GitHub fallback configuration, running state, and Flatpak metadata. When
+pre-unification state disagrees with the installed source, status labels the
+actual build as `installed:<source-sha>` and selects the newest automatic
+snapshot instead of presenting contradictory stale state.
 
 ### Check
 
@@ -676,7 +683,21 @@ replacement. Prefer explicit staging followed by later activation.
 
 ### Rollback
 
-Activates the cached previous bundle. Mixxx must be stopped.
+Restores the effective previous bundle without network access. It takes the
+deployment lock, refuses while Mixxx runs, verifies the cached SHA-256 and
+OSTree source provenance, snapshots the rejected installed build, and uses
+only Flatpak `--no-pull` commit/bundle operations. It verifies the installed
+source and, for repository snapshots, exact OSTree commit before swapping
+current/previous state. A corrupt selected generation fails closed rather than
+silently skipping backward. It neither edits `~/.mixxx` nor launches Mixxx.
+
+`mixxx-break-glass` is a deliberately small installed wrapper around the same
+canonical client:
+
+```bash
+mixxx-break-glass status
+mixxx-break-glass rollback
+```
 
 ### Run
 
@@ -709,6 +730,10 @@ local Flatpak repository, verifies the actual installed commit and source, then
 falls back to the checksum-verified cached bundle if the commit request was a
 no-op. An unverified rollback is recorded as `rollback-failed` and cannot be
 overwritten by a later `up-to-date` check. It never stops or restarts Mixxx.
+After a successful update it records `repo:<new-source>` as current and the
+verified snapshot `repo:<old-source>` as previous. It retains the three newest
+repository snapshots and refreshes reused snapshot metadata so the immediate
+predecessor remains the manual break-glass target.
 
 `loginctl enable-linger <deck-user>` is required once so the user timer and its
 service run without a graphical login. Status is written atomically under
@@ -836,6 +861,10 @@ Close Mixxx and run:
 mixxx-deck rollback
 mixxx-deck run
 ```
+
+If networking is unavailable, use `mixxx-break-glass status` followed by
+`mixxx-break-glass rollback`; the rollback itself performs no pull. Launch
+Mixxx separately only after the command reports verified success.
 
 Record the candidate SHA and logs. Fix forward with a new commit.
 

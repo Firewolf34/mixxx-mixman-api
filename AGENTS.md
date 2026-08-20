@@ -334,6 +334,15 @@ Agent tool selection:
 - Automatic rollback must verify the installed commit and source SHA, fall back
   to the checksum-verified snapshot bundle after a no-op commit rollback, and
   persist `rollback-failed` rather than later reporting that build up to date.
+- Automatic and manual rollback share provider-qualified current/previous
+  state. Repository-update snapshots live at `repo:<source-sha>`, retain the
+  three newest generations, and are the migration fallback when older client
+  state does not match the installed source SHA.
+- Manual rollback must be network-independent: refuse while Mixxx runs, verify
+  checksum and OSTree source provenance before mutation, use only `--no-pull`
+  Flatpak operations, verify the installed commit/source afterward, preserve
+  the profile, and never launch Mixxx. Do not silently skip a corrupt selected
+  generation.
 - Verify cached checksums before installation.
 - Verify installed source SHA after installation.
 - Protect current, previous, and staged bundles from pruning.

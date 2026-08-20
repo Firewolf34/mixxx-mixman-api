@@ -157,10 +157,11 @@ From a current Mixxx checkout, install the lightweight client and USB rules:
 tools/deck_flatpak_deploy.sh setup
 ```
 
-This installs `~/.local/bin/mixxx-deck`, the automatic updater and OSTree
-validator, the boot/four-hour user systemd units, and a user-local desktop entry
-that shares the deployment lock. It also adds the signed `polinaria-mixxx`
-remote. Reconnect controllers after the first udev setup.
+This installs `~/.local/bin/mixxx-deck`, the thin `mixxx-break-glass` wrapper,
+the automatic updater and OSTree validator, the boot/four-hour user systemd
+units, and a user-local desktop entry that shares the deployment lock. It also
+adds the signed `polinaria-mixxx` remote. Reconnect controllers after the first
+udev setup.
 
 Enable the user manager at boot once, then enable the timer:
 
@@ -246,12 +247,22 @@ mixxx-deck deploy
 Return to the previously cached build with:
 
 ```bash
-mixxx-deck rollback
+mixxx-break-glass status
+mixxx-break-glass rollback
 ```
 
-Use `mixxx-deck status` to show installed, staged, and rollback
-provider-qualified builds. `mixxx-deck check` shows the current available
-provider and source revision.
+This is the manual, offline break-glass path. It refuses while Mixxx runs,
+verifies the selected bundle's checksum and OSTree source provenance before
+changing the app, snapshots the rejected build, and performs only `--no-pull`
+Flatpak operations. It verifies the restored source and repository commit,
+does not touch `~/.mixxx`, and does not launch Mixxx. A corrupt selected
+generation stops the procedure; it is never skipped silently.
+
+Use `mixxx-deck status` or `mixxx-break-glass status` to show the actual
+installed source, staged build, effective rollback target, and whether its
+bundle verifies. On older installations with stale state, the newest retained
+automatic snapshot becomes the migration target. `mixxx-deck check` shows the
+current available provider and source revision.
 
 For the unattended path:
 
@@ -267,6 +278,8 @@ If deployment or validation fails, the updater verifies the restored commit and
 source SHA. A no-op commit rollback falls back to the checksum-verified cached
 bundle. If neither path restores the prior build, status remains
 `rollback-failed`; later checks must not relabel that installed build as current.
+Successful updates share `repo:<source-sha>` current/previous state with the
+manual client and retain the three newest automatic snapshots.
 
 ## Acceptance Checklist
 

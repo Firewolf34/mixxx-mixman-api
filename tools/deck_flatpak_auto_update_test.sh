@@ -69,7 +69,21 @@ case "$1" in
                     exit 2
                     ;;
             esac
+        elif [[ "$*" == *--no-pull* ]]; then
+            printf '%s\n' "${TEST_AVAILABLE_COMMIT}" >"${TEST_INSTALLED_COMMIT_FILE}"
+            printf '%s\n' "${TEST_AVAILABLE_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
         fi
+        ;;
+    build-bundle)
+        for argument in "$@"; do
+            if [[ "${argument}" == *.part ]]; then
+                printf 'automatic rollback bundle\n' >"${argument}"
+                exit 0
+            fi
+        done
+        exit 2
+        ;;
+    run)
         ;;
     install)
         echo "install $*" >>"${TEST_COMMAND_LOG}"
@@ -136,7 +150,22 @@ TEST_PROCESS_STATE=error bash -c \
 "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" auto-update
 jq -e '.result == "up-to-date"' \
     "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json" >/dev/null
+[[ "$(<"${XDG_STATE_HOME}/mixxx-deck/current-source-sha")" == \
+    "repo:${TEST_INSTALLED_SOURCE}" ]]
 [[ ! -e "${TEST_COMMAND_LOG}" ]]
+
+migration_source=9999999999999999999999999999999999999999
+mkdir -p "${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/${migration_source}"
+printf '%s\n' legacy:3333333333333333333333333333333333333333 \
+    >"${XDG_STATE_HOME}/mixxx-deck/current-source-sha"
+printf '%s\n' legacy:4444444444444444444444444444444444444444 \
+    >"${XDG_STATE_HOME}/mixxx-deck/previous-source-sha"
+"${SCRIPT_DIR}/deck_flatpak_auto_update.sh" auto-update
+[[ "$(<"${XDG_STATE_HOME}/mixxx-deck/current-source-sha")" == \
+    "repo:${TEST_INSTALLED_SOURCE}" ]]
+[[ "$(<"${XDG_STATE_HOME}/mixxx-deck/previous-source-sha")" == \
+    "repo:${migration_source}" ]]
+rm -rf -- "${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/${migration_source}"
 
 export TEST_AVAILABLE_COMMIT="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 export TEST_AVAILABLE_SOURCE="2222222222222222222222222222222222222222"
@@ -153,6 +182,24 @@ export TEST_LIVE_PID=$$
 jq -e '.result == "deferred-running" and .pending_commit != ""' \
     "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json" >/dev/null
 [[ ! -e "${TEST_COMMAND_LOG}" ]]
+
+export TEST_PROCESS_STATE=idle
+for index in 1 2 3 4; do
+    old_dir="${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/000000000000000000000000000000000000000${index}"
+    mkdir -p "${old_dir}"
+    touch -d "2020-01-0${index} 00:00:00 UTC" "${old_dir}"
+done
+"${SCRIPT_DIR}/deck_flatpak_auto_update.sh" auto-update
+jq -e '.result == "updated"' \
+    "${XDG_STATE_HOME}/mixxx-deck/auto-update-status.json" >/dev/null
+[[ "$(<"${XDG_STATE_HOME}/mixxx-deck/current-source-sha")" == \
+    "repo:${TEST_AVAILABLE_SOURCE}" ]]
+[[ "$(<"${XDG_STATE_HOME}/mixxx-deck/previous-source-sha")" == \
+    "repo:${TEST_INSTALLED_SOURCE}" ]]
+[[ "$(find "${XDG_CACHE_HOME}/mixxx-deck/repo-rollback" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 3 ]]
+[[ -s "${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/${TEST_INSTALLED_SOURCE}/Mixxx.flatpak" ]]
+[[ "$(<"${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/${TEST_INSTALLED_SOURCE}/ostree-commit")" == \
+    "${TEST_INSTALLED_COMMIT}" ]]
 
 source "${SCRIPT_DIR}/deck_flatpak_auto_update.sh"
 export TEST_ROLLBACK_COMMIT="${TEST_INSTALLED_COMMIT}"

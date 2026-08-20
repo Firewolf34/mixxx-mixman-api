@@ -27,6 +27,7 @@ UDEV_RULE_SOURCE="res/linux/mixxx-usb-uaccess.rules"
 UDEV_RULE_TARGET="/etc/udev/rules.d/69-mixxx-usb-uaccess.rules"
 GITHUB_AUTH_CONFIG=""
 AUTO_UPDATE_CLIENT="${HOME}/.local/bin/deck_flatpak_auto_update.sh"
+BREAK_GLASS_CLIENT="${HOME}/.local/bin/mixxx-break-glass"
 SYSTEMD_USER_ROOT="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
 DESKTOP_USER_ROOT="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
 EXPORTED_DESKTOP="${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/exports/share/applications/${APP_ID}.desktop"
@@ -85,7 +86,7 @@ require_sha() {
 
 require_provider() {
     case "${1:-}" in
-        forgejo|github|local|legacy) ;;
+        forgejo|github|local|repo|legacy) ;;
         *) die "Unknown build provider: ${1:-}" ;;
     esac
 }
@@ -126,6 +127,8 @@ build_dir_for_key() {
     split_source_key "${key}"
     if [[ "${BUILD_PROVIDER}" == legacy ]]; then
         printf '%s/builds/%s\n' "${CACHE_ROOT}" "${BUILD_SHA}"
+    elif [[ "${BUILD_PROVIDER}" == repo ]]; then
+        printf '%s/repo-rollback/%s\n' "${CACHE_ROOT}" "${BUILD_SHA}"
     else
         printf '%s/builds/%s/%s\n' "${CACHE_ROOT}" "${BUILD_PROVIDER}" "${BUILD_SHA}"
     fi
@@ -193,6 +196,10 @@ installed_source_sha() {
     flatpak info --user "${APP_ID}" 2>/dev/null |
         sed -nE 's/^[[:space:]]*Subject:[[:space:]]*Built from ([0-9a-f]{40}).*/\1/p' |
         head -n 1
+}
+
+installed_commit() {
+    flatpak info --user --show-commit "${APP_ID}" 2>/dev/null
 }
 
 release_github_auth() {
@@ -455,7 +462,7 @@ descriptors_for_target() {
                 github_descriptor_for_sha "${sha}"
             fi
             ;;
-        local:*|legacy:*)
+        local:*|repo:*|legacy:*)
             split_source_key "${target}"
             printf '{"provider":"%s","source_sha":"%s"}\n' \
                 "${BUILD_PROVIDER}" "${BUILD_SHA}"
@@ -629,7 +636,7 @@ stage_descriptor() {
     case "$(jq -r '.provider' <<<"${descriptor}")" in
         forgejo) stage_forgejo_descriptor "${descriptor}" ;;
         github) stage_github_descriptor "${descriptor}" ;;
-        local|legacy)
+        local|repo|legacy)
             local provider source_sha key bundle_path
             provider="$(jq -r '.provider' <<<"${descriptor}")"
             source_sha="$(jq -r '.source_sha' <<<"${descriptor}")"
@@ -692,6 +699,21 @@ verify_cached_bundle() {
     verify_bundle_provenance "${bundle_path}" "${BUILD_SHA}"
 }
 
+verify_rollback_target() {
+    local key="$1"
+    local commit_file commit
+    verify_cached_bundle "${key}"
+    split_source_key "${key}"
+    if [[ "${BUILD_PROVIDER}" == repo ]]; then
+        commit_file="$(build_dir_for_key "${key}")/ostree-commit"
+        [[ -s "${commit_file}" ]] ||
+            die "Cached OSTree commit is missing for ${key}."
+        commit="$(<"${commit_file}")"
+        [[ "${commit}" =~ ^[0-9a-f]{64}$ ]] ||
+            die "Cached OSTree commit is invalid for ${key}."
+    fi
+}
+
 snapshot_installed_build() {
     local source_sha="$1"
     local user_repo="${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/repo"
@@ -704,12 +726,14 @@ snapshot_installed_build() {
     bundle_part="${bundle_path}.part"
     checksum_path="${build_dir}/Mixxx.flatpak.sha256"
     if [[ -s "${bundle_path}" && -f "${checksum_path}" ]] &&
-            [[ "$(sha256sum "${bundle_path}" | awk '{print $1}')" == "$(<"${checksum_path}")" ]]; then
+            [[ "$(sha256sum "${bundle_path}" | awk '{print $1}')" == "$(<"${checksum_path}")" ]] &&
+            verify_bundle_provenance "${bundle_path}" "${source_sha}" >/dev/null 2>&1; then
+        touch "${build_dir}"
         printf '%s\n' "${key}"
         return
     fi
 
-    echo "Saving installed build ${source_sha} for rollback..."
+    echo "Saving installed build ${source_sha} for rollback..." >&2
     mkdir -p "${build_dir}"
     rm -f -- "${bundle_path}" "${bundle_part}" "${checksum_path}"
     flatpak build-bundle --arch="${EXPECTED_ARCH}" \
@@ -726,7 +750,7 @@ target_cache_key() {
     local target="$1"
     local provider sha
     case "${target}" in
-        forgejo:*|github:*|local:*|legacy:*)
+        forgejo:*|github:*|local:*|repo:*|legacy:*)
             provider="${target%%:*}"
             sha="${target#*:}"
             source_key "${provider}" "${sha}"
@@ -756,7 +780,7 @@ resolve_target_key() {
     build_dir="$(build_dir_for_key "${key}")"
     if [[ -s "${build_dir}/Mixxx.flatpak" ]]; then
         printf '%s\n' "${key}"
-    elif [[ "${key}" == local:* || "${key}" == legacy:* ]]; then
+    elif [[ "${key}" == local:* || "${key}" == repo:* || "${key}" == legacy:* ]]; then
         die "No cached build exists for ${key}."
     else
         stage_build "${target}" | tail -n 1
@@ -820,10 +844,95 @@ prune_local_builds() {
 }
 
 rollback_build() {
-    local previous_key
-    previous_key="$(read_state_key "${PREVIOUS_STATE}")" ||
-        die "No cached rollback build is recorded."
-    activate_build "${previous_key}"
+    local installed_sha target_key target_commit="" old_key verified_sha verified_commit
+    require_command flatpak
+    require_command flock
+    require_command ostree
+    require_command sha256sum
+    ensure_directories
+    exec 9>"${LOCK_FILE}"
+    flock -n 9 || die "The Mixxx launch/updater lock is active; close Mixxx and retry."
+    is_mixxx_running && die "Mixxx is running; stop it before rolling back."
+
+    installed_sha="$(installed_source_sha || true)"
+    require_sha "${installed_sha}"
+    target_key="$(effective_rollback_key "${installed_sha}")" ||
+        die "No cached rollback build is available."
+    split_source_key "${target_key}"
+    [[ "${BUILD_SHA}" != "${installed_sha}" ]] ||
+        die "Rollback target ${target_key} is already installed."
+    verify_rollback_target "${target_key}"
+    if [[ "${BUILD_PROVIDER}" == repo ]]; then
+        target_commit="$(<"$(build_dir_for_key "${target_key}")/ostree-commit")"
+        [[ "${target_commit}" =~ ^[0-9a-f]{64}$ ]] ||
+            die "Cached OSTree commit is invalid for ${target_key}."
+    fi
+
+    old_key="$(snapshot_installed_build "${installed_sha}")"
+    if [[ -n "${target_commit}" ]]; then
+        flatpak update --user --app --no-pull --commit="${target_commit}" \
+            --noninteractive -y "${APP_ID}" || true
+    fi
+    verified_sha="$(installed_source_sha || true)"
+    verified_commit="$(installed_commit || true)"
+    if [[ "${verified_sha}" != "${BUILD_SHA}" ||
+            ( -n "${target_commit}" && "${verified_commit}" != "${target_commit}" ) ]]; then
+        flatpak install --user --bundle --no-pull --reinstall --noninteractive -y \
+            "$(build_dir_for_key "${target_key}")/Mixxx.flatpak"
+        verified_sha="$(installed_source_sha || true)"
+        verified_commit="$(installed_commit || true)"
+    fi
+    [[ "${verified_sha}" == "${BUILD_SHA}" ]] ||
+        die "Rollback installed source ${verified_sha:-unknown}, expected ${BUILD_SHA}."
+    if [[ -n "${target_commit}" ]]; then
+        [[ "${verified_commit}" == "${target_commit}" ]] ||
+            die "Rollback installed OSTree commit ${verified_commit:-unknown}, expected ${target_commit}."
+    fi
+    printf '%s\n' "${old_key}" >"${PREVIOUS_STATE}"
+    printf '%s\n' "${target_key}" >"${CURRENT_STATE}"
+    prune_local_builds
+    echo "Rolled back offline to ${target_key}. Mixxx was not launched."
+}
+
+newest_repo_rollback_key() {
+    local excluded_sha="${1:-}"
+    local path sha
+    while IFS= read -r path; do
+        sha="${path##*/}"
+        [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || continue
+        [[ "${sha}" != "${excluded_sha}" ]] || continue
+        source_key repo "${sha}"
+        return 0
+    done < <(
+        find "${CACHE_ROOT}/repo-rollback" -mindepth 1 -maxdepth 1 -type d \
+            -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-
+    )
+    return 1
+}
+
+effective_rollback_key() {
+    local installed_sha="$1"
+    local recorded_current="" recorded_previous="" candidate=""
+    recorded_current="$(read_state_key "${CURRENT_STATE}" 2>/dev/null || true)"
+    recorded_previous="$(read_state_key "${PREVIOUS_STATE}" 2>/dev/null || true)"
+    if [[ "${recorded_current##*:}" == "${installed_sha}" &&
+            -n "${recorded_previous}" && "${recorded_previous##*:}" != "${installed_sha}" ]]; then
+        candidate="${recorded_previous}"
+    else
+        candidate="$(newest_repo_rollback_key "${installed_sha}" 2>/dev/null || true)"
+        [[ -n "${candidate}" ]] || candidate="${recorded_previous}"
+    fi
+    [[ -n "${candidate}" ]] || return 1
+    printf '%s\n' "${candidate}"
+}
+
+rollback_bundle_status() {
+    local key="$1"
+    if (verify_rollback_target "${key}" >/dev/null 2>&1); then
+        echo verified
+    else
+        echo invalid
+    fi
 }
 
 check_build() (
@@ -846,15 +955,27 @@ check_build() (
 )
 
 print_status() {
-    local installed_sha staged_key previous_key current_key
+    local installed_sha staged_key current_key effective_current rollback_key rollback_status
     installed_sha="$(installed_source_sha || true)"
     staged_key="$(read_state_key "${STAGED_STATE}" 2>/dev/null || echo none)"
-    previous_key="$(read_state_key "${PREVIOUS_STATE}" 2>/dev/null || echo none)"
     current_key="$(read_state_key "${CURRENT_STATE}" 2>/dev/null || echo none)"
+    effective_current="${current_key}"
+    if [[ -n "${installed_sha}" && "${current_key##*:}" != "${installed_sha}" ]]; then
+        effective_current="installed:${installed_sha}"
+    fi
+    rollback_key="$(effective_rollback_key "${installed_sha}" 2>/dev/null || echo none)"
+    rollback_status=none
+    if [[ "${rollback_key}" != none ]]; then
+        rollback_status="$(rollback_bundle_status "${rollback_key}")"
+    fi
     echo "Installed source: ${installed_sha:-unknown}"
-    echo "Current build: ${current_key}"
+    echo "Current build: ${effective_current}"
+    if [[ "${effective_current}" != "${current_key}" ]]; then
+        echo "Recorded current: ${current_key} (stale; migration fallback active)"
+    fi
     echo "Staged build: ${staged_key}"
-    echo "Previous build: ${previous_key}"
+    echo "Previous build: ${rollback_key}"
+    echo "Rollback bundle: ${rollback_status}"
     echo "Forgejo manifest URL: ${MANIFEST_URL}"
     echo "GitHub fallback: $(github_token_configured && echo configured || echo not-configured)"
     echo "Mixxx running: $(is_mixxx_running && echo yes || echo no)"
@@ -878,6 +999,8 @@ setup_client() {
         die "Missing deck_flatpak_auto_update.sh beside the setup script."
     [[ -r "${ci_helper}" ]] ||
         die "Missing mixxx_deck_ci.sh beside the setup script."
+    [[ -r "${SCRIPT_DIR}/mixxx_break_glass.sh" ]] ||
+        die "Missing mixxx_break_glass.sh beside the setup script."
     [[ -r "${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.service" ]] ||
         die "Missing Mixxx updater systemd service."
     [[ -r "${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.timer" ]] ||
@@ -889,6 +1012,7 @@ setup_client() {
     fi
     install -m 0755 "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" "${AUTO_UPDATE_CLIENT}"
     install -m 0755 "${ci_helper}" "${HOME}/.local/bin/mixxx-deck-ci"
+    install -m 0755 "${SCRIPT_DIR}/mixxx_break_glass.sh" "${BREAK_GLASS_CLIENT}"
     install -m 0644 \
         "${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.service" \
         "${SYSTEMD_USER_ROOT}/mixxx-deck-update.service"
@@ -915,7 +1039,7 @@ setup_client() {
     systemctl --user disable mixxx-deck-update.service 2>/dev/null || true
     systemctl --user enable mixxx-deck-update.timer
     systemctl --user restart mixxx-deck-update.timer
-    echo "Installed mixxx-deck, mixxx-deck-ci, signed-repository updater, desktop lock, and user units."
+    echo "Installed mixxx-deck, mixxx-break-glass, mixxx-deck-ci, signed-repository updater, desktop lock, and user units."
     echo "Run 'sudo loginctl enable-linger ${USER}' once so boot checks run while signed out."
 }
 
