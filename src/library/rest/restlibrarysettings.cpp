@@ -99,6 +99,10 @@ int effectivePort(const QUrl& url) {
             : 80;
 }
 
+QString percentEncodedPathSegment(const QString& value) {
+    return QString::fromUtf8(QUrl::toPercentEncoding(value));
+}
+
 QString sessionCredentialAccount(
         const RestLibrarySettings& settings,
         const QString& sessionId) {
@@ -170,58 +174,86 @@ QString mixManSessionsPath() {
 }
 
 QString mixManSessionInstancesPath(const QString& sessionId) {
-    return QStringLiteral("/api/v3/sessions/%1/instances").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/instances");
 }
 
 QString mixManSessionInstanceHeartbeatPath(
         const QString& sessionId,
         const QString& instanceId) {
-    return QStringLiteral("/api/v3/sessions/%1/instances/%2/heartbeat")
-            .arg(sessionId, instanceId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/instances/") +
+            percentEncodedPathSegment(instanceId) +
+            QStringLiteral("/heartbeat");
 }
 
 QString mixManSessionInstanceDisconnectPath(
         const QString& sessionId,
         const QString& instanceId) {
-    return QStringLiteral("/api/v3/sessions/%1/instances/%2/disconnect")
-            .arg(sessionId, instanceId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/instances/") +
+            percentEncodedPathSegment(instanceId) +
+            QStringLiteral("/disconnect");
 }
 
 QString mixManSessionStatePath(const QString& sessionId, const QString& instanceId) {
-    return QStringLiteral("/api/v3/sessions/%1/state?instance_id=%2")
-            .arg(sessionId, QString::fromUtf8(QUrl::toPercentEncoding(instanceId)));
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/state?instance_id=") +
+            QString::fromUtf8(QUrl::toPercentEncoding(instanceId));
 }
 
 QString mixManSessionSnapshotPath(const QString& sessionId) {
-    return QStringLiteral("/api/v3/sessions/%1/snapshot").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/snapshot");
 }
 
 QString mixManSessionIntentPath(const QString& sessionId) {
-    return QStringLiteral("/api/v3/sessions/%1/intent").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/intent");
 }
 
 QString mixManSessionPlaybackPath(const QString& sessionId) {
-    return QStringLiteral("/api/v3/sessions/%1/playback").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/playback");
 }
 
 QString mixManSessionPlaybackControlClaimPath(const QString& sessionId) {
-    return QStringLiteral("/api/v3/sessions/%1/playback-control/claim").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/playback-control/claim");
 }
 
 QString mixManSessionPlaybackControlRenewPath(const QString& sessionId) {
-    return QStringLiteral("/api/v3/sessions/%1/playback-control/renew").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/playback-control/renew");
 }
 
 QString mixManSessionPlaybackControlReleasePath(const QString& sessionId) {
-    return QStringLiteral("/api/v3/sessions/%1/playback-control/release").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/playback-control/release");
 }
 
 QString mixManSessionCandidateSelectPath(const QString& sessionId, const QString& trackId) {
-    return QStringLiteral("/api/v3/sessions/%1/candidates/%2/select").arg(sessionId, trackId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/candidates/") +
+            percentEncodedPathSegment(trackId) +
+            QStringLiteral("/select");
 }
 
 QString mixManSessionActionsPath(const QString& sessionId) {
-    return QStringLiteral("/api/v3/sessions/%1/actions").arg(sessionId);
+    return QStringLiteral("/api/v3/sessions/") +
+            percentEncodedPathSegment(sessionId) +
+            QStringLiteral("/actions");
 }
 
 QUrl urlWithRestPath(const QUrl& baseUrl, const QString& path) {

@@ -254,6 +254,72 @@ TEST_F(RestLibrarySettingsTest, UrlWithRestPathPreservesBasePath) {
             false);
 }
 
+TEST_F(RestLibrarySettingsTest, MixManOpaqueIdsAreSingleEncodedPathSegments) {
+    const QString sessionId = QStringLiteral("room/part?view#fragment%done");
+    const QString instanceId = QStringLiteral("deck/one?mode#cue%ready");
+    const QString trackId = QStringLiteral("track/one?source#crate%42");
+
+    EXPECT_EQ(
+            restConfig::mixManSessionInstancesPath(sessionId),
+            QStringLiteral(
+                    "/api/v3/sessions/room%2Fpart%3Fview%23fragment%25done/instances"));
+    EXPECT_EQ(
+            restConfig::mixManSessionInstanceHeartbeatPath(sessionId, instanceId),
+            QStringLiteral(
+                    "/api/v3/sessions/room%2Fpart%3Fview%23fragment%25done/instances/"
+                    "deck%2Fone%3Fmode%23cue%25ready/heartbeat"));
+    EXPECT_EQ(
+            restConfig::mixManSessionInstanceDisconnectPath(sessionId, instanceId),
+            QStringLiteral(
+                    "/api/v3/sessions/room%2Fpart%3Fview%23fragment%25done/instances/"
+                    "deck%2Fone%3Fmode%23cue%25ready/disconnect"));
+    EXPECT_EQ(
+            restConfig::mixManSessionCandidateSelectPath(sessionId, trackId),
+            QStringLiteral(
+                    "/api/v3/sessions/room%2Fpart%3Fview%23fragment%25done/candidates/"
+                    "track%2Fone%3Fsource%23crate%2542/select"));
+
+    const QUrl stateUrl = restConfig::urlWithRestPath(
+            QUrl(QStringLiteral("https://mixman.example/base")),
+            restConfig::mixManSessionStatePath(sessionId, instanceId));
+    EXPECT_EQ(
+            stateUrl.toString(QUrl::FullyEncoded),
+            QStringLiteral(
+                    "https://mixman.example/base/api/v3/sessions/"
+                    "room%2Fpart%3Fview%23fragment%25done/state?"
+                    "instance_id=deck%2Fone%3Fmode%23cue%25ready"));
+}
+
+TEST_F(RestLibrarySettingsTest, MixManOrdinaryIdsKeepExistingPaths) {
+    const QString sessionId = QStringLiteral("stable-room");
+    const QString instanceId = QStringLiteral("deck-one");
+
+    EXPECT_EQ(
+            restConfig::mixManSessionStatePath(sessionId, instanceId),
+            QStringLiteral("/api/v3/sessions/stable-room/state?instance_id=deck-one"));
+    EXPECT_EQ(
+            restConfig::mixManSessionSnapshotPath(sessionId),
+            QStringLiteral("/api/v3/sessions/stable-room/snapshot"));
+    EXPECT_EQ(
+            restConfig::mixManSessionIntentPath(sessionId),
+            QStringLiteral("/api/v3/sessions/stable-room/intent"));
+    EXPECT_EQ(
+            restConfig::mixManSessionPlaybackPath(sessionId),
+            QStringLiteral("/api/v3/sessions/stable-room/playback"));
+    EXPECT_EQ(
+            restConfig::mixManSessionPlaybackControlClaimPath(sessionId),
+            QStringLiteral("/api/v3/sessions/stable-room/playback-control/claim"));
+    EXPECT_EQ(
+            restConfig::mixManSessionPlaybackControlRenewPath(sessionId),
+            QStringLiteral("/api/v3/sessions/stable-room/playback-control/renew"));
+    EXPECT_EQ(
+            restConfig::mixManSessionPlaybackControlReleasePath(sessionId),
+            QStringLiteral("/api/v3/sessions/stable-room/playback-control/release"));
+    EXPECT_EQ(
+            restConfig::mixManSessionActionsPath(sessionId),
+            QStringLiteral("/api/v3/sessions/stable-room/actions"));
+}
+
 TEST_F(RestLibrarySettingsTest, BearerTransportRequiresHttpsOrLoopback) {
     RestLibrarySettings settings;
     settings.bearerToken = QStringLiteral("secret");
