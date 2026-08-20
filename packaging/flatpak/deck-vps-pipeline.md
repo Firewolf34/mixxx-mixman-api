@@ -235,6 +235,28 @@ It has an eight-hour job timeout, checks out a shallow copy of the exact Forgejo
 event SHA without unused submodules, installs the required Flatpak SDK for the
 runner user, and calls the publisher through the PSI pressure guard.
 
+Every third-party `uses:` reference in `.forgejo/workflows` is pinned to a full
+lowercase commit SHA. The action URL must be the canonical upstream repository;
+tags, branches, short SHAs, and expression-selected revisions are not reviewable
+pins. Local actions may use `./`, while container actions must use a full
+`sha256` digest. `tools/check_forgejo_action_pins.sh` enforces this policy and is
+also part of the deck manifest preflight executed by the workflow.
+
+To update an action, resolve the intended release tag from its official
+repository. For the current checkout action, use:
+
+```bash
+git ls-remote https://data.forgejo.org/actions/checkout.git \
+  refs/tags/v6 'refs/tags/v6^{}'
+```
+
+If the tag is annotated, use its peeled commit. Inspect that exact upstream
+commit and the changes since the previously pinned commit, then replace the
+workflow SHA and its adjacent human-readable version comment in one reviewed
+change. Run `tools/check_forgejo_action_pins_test.sh` and
+`tools/check_forgejo_action_pins.sh` before promotion. Never copy a revision
+from an unofficial mirror or restore a mutable version tag after review.
+
 The runner is repository-scoped so unrelated repositories cannot schedule
 work. It accepts one job at a time.
 
@@ -1022,6 +1044,8 @@ When changing workflow, publisher, client, manifest, or infrastructure:
 - update `andrew/total-infra/docs/OPERATIONS.md` for server changes;
 - update deck-local `AGENTS.md` and operator docs for changed safety behavior;
 - run `bash -n` on shell scripts;
+- run `tools/check_forgejo_action_pins_test.sh` and
+  `tools/check_forgejo_action_pins.sh`;
 - run `tools/check_deck_flatpak_manifest.sh`;
 - run `tools/deck_flatpak_auto_update_test.sh`;
 - validate the systemd user units with `systemd-analyze verify`;

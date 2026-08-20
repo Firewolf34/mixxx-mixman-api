@@ -33,6 +33,21 @@ source subject before importing it into the GPG-signed public Flatpak
 repository. The release refs are pointers only and must never receive direct
 development commits.
 
+Forgejo workflow actions must use their canonical upstream URL and a full
+lowercase commit SHA, never a tag, branch, short SHA, or expression-selected
+revision. Container actions require a full `sha256` digest; repository-local
+actions may use `./`. When changing an action, resolve its release tag from the
+official repository, review the exact upstream commit and its diff from the old
+pin, update the SHA plus adjacent version comment, and run:
+
+```bash
+tools/check_forgejo_action_pins_test.sh
+tools/check_forgejo_action_pins.sh
+```
+
+The deck manifest preflight also runs the pin check, so a mutable reference
+stops the publication job before compilation.
+
 If a normal candidate push is non-fast-forward, fetch the provider ref and
 confirm the reviewed target is reachable from `origin/dev`. Use
 `git cherry <reviewed-dev-sha> origin/deck/candidate` to require every

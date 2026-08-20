@@ -371,12 +371,16 @@ Agent tool selection:
 5. Run lightweight validation:
 
    ```bash
-   bash -n tools/check_deck_flatpak_manifest.sh \
+   bash -n tools/check_forgejo_action_pins.sh \
+     tools/check_forgejo_action_pins_test.sh \
+     tools/check_deck_flatpak_manifest.sh \
      tools/deck_ostree_validation.sh tools/deck_ostree_validation_test.sh \
      tools/deck_build_preflight.sh tools/deck_pressure_guard.sh \
      tools/deck_flatpak_publish.sh tools/deck_flatpak_deploy.sh \
      tools/mixxx_deck_ci.sh tools/mixxx_deck_ci_test.sh
    tools/mixxx_deck_ci_test.sh
+   tools/check_forgejo_action_pins_test.sh
+   tools/check_forgejo_action_pins.sh
    tools/check_deck_flatpak_manifest.sh
    forgejo-runner validate --workflow \
      --path .forgejo/workflows/deck-flatpak.yml

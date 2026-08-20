@@ -58,7 +58,8 @@ jobs:
             jq -er '.lease' >"$HOSTED_DEPLOY_LEASE_FILE"
 
       - name: Check out the exact source commit
-        uses: https://data.forgejo.org/actions/checkout@v6
+        # actions/checkout v6 from the canonical Forgejo action repository.
+        uses: https://data.forgejo.org/actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 1
           submodules: false

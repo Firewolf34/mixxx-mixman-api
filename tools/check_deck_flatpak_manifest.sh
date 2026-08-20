@@ -16,6 +16,7 @@ DECK_REPO_PUBLISH_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_repo_publish.sh"
 FLATPAK_BUILD_SCRIPT="${REPO_ROOT}/packaging/flatpak/flatpak_build.sh"
 DECK_PUBLISH_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_publish.sh"
 GITHUB_DECK_WORKFLOW="${REPO_ROOT}/.github/workflows/github-deck-candidate.yml"
+FORGEJO_ACTION_PIN_CHECK="${SCRIPT_DIR}/check_forgejo_action_pins.sh"
 DECK_UPDATE_SERVICE="${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.service"
 DECK_UPDATE_TIMER="${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.timer"
 NORMALIZED_NORMAL_MANIFEST="$(mktemp)"
@@ -177,6 +178,8 @@ if ! grep -Fq '          build-dir: build_flatpak' "${GITHUB_DECK_WORKFLOW}" ||
     echo "Error: the GitHub workflow does not pin its validated Flatpak directories." >&2
     exit 1
 fi
+
+bash "${FORGEJO_ACTION_PIN_CHECK}"
 
 bash -n "${DECK_DEPLOY_SCRIPT}" "${DECK_AUTO_UPDATE_SCRIPT}" \
     "${DECK_BREAK_GLASS_SCRIPT}" "${DECK_REPO_PUBLISH_SCRIPT}"
