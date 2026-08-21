@@ -356,7 +356,8 @@ void RestLibraryCacheManager::consumeReplyBytes(QNetworkReply* pReply) {
     if (remainingDiagnosticBytes > 0) {
         pDownload->responsePrefix.append(bytes.left(remainingDiagnosticBytes));
     }
-    if (pDownload->writeFailed || pDownload->sizeLimitExceeded) {
+    if (pDownload->writeFailed || pDownload->sizeLimitExceeded ||
+            pDownload->quotaLimitExceeded) {
         return;
     }
 
@@ -365,6 +366,15 @@ void RestLibraryCacheManager::consumeReplyBytes(QNetworkReply* pReply) {
             kBytesPerMegabyte;
     if (bytes.size() > maxBytes - pDownload->bytesWritten) {
         pDownload->sizeLimitExceeded = true;
+        pReply->abort();
+        return;
+    }
+    const qint64 reservedByOtherDownloads =
+            reservedDownloadBytes(pDownload->settings, pDownload);
+    if (reservedByOtherDownloads >= maxBytes ||
+            pDownload->bytesWritten + bytes.size() >
+                    maxBytes - reservedByOtherDownloads) {
+        pDownload->quotaLimitExceeded = true;
         pReply->abort();
         return;
     }
@@ -481,8 +491,10 @@ void RestLibraryCacheManager::startDownload(PendingDownload pendingDownload) {
             pFile,
             tempFilePath,
             0,
+            0,
             {},
             {},
+            false,
             false,
             false});
     emitState(settings, track.remoteId, RestLibraryCacheState::Downloading);
@@ -490,7 +502,8 @@ void RestLibraryCacheManager::startDownload(PendingDownload pendingDownload) {
     connect(pReply, &QNetworkReply::readyRead, this, &RestLibraryCacheManager::slotReadyRead);
     connect(pReply, &QNetworkReply::metaDataChanged, this, [this, pReply] {
         ActiveDownload* pDownload = activeDownloadForReply(pReply);
-        if (!pDownload || pDownload->sizeLimitExceeded) {
+        if (!pDownload || pDownload->sizeLimitExceeded ||
+                pDownload->quotaLimitExceeded) {
             return;
         }
         bool validContentLength = false;
@@ -500,9 +513,21 @@ void RestLibraryCacheManager::startDownload(PendingDownload pendingDownload) {
         const qint64 maxBytes =
                 static_cast<qint64>(pDownload->settings.cacheMaxMegabytes) *
                 kBytesPerMegabyte;
-        if (validContentLength && contentLength > maxBytes) {
-            pDownload->sizeLimitExceeded = true;
-            pReply->abort();
+        if (validContentLength && contentLength >= 0) {
+            if (contentLength > maxBytes) {
+                pDownload->sizeLimitExceeded = true;
+                pReply->abort();
+                return;
+            }
+            const qint64 reservedByOtherDownloads =
+                    reservedDownloadBytes(pDownload->settings, pDownload);
+            if (reservedByOtherDownloads >= maxBytes ||
+                    contentLength > maxBytes - reservedByOtherDownloads) {
+                pDownload->quotaLimitExceeded = true;
+                pReply->abort();
+                return;
+            }
+            pDownload->expectedBytes = contentLength;
         }
     });
     connect(pReply, &QNetworkReply::finished, this, &RestLibraryCacheManager::slotDownloadFinished);
@@ -542,7 +567,7 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
     }
     const QByteArray responsePrefix = pDownload->responsePrefix;
     const bool success = replyMayContainAudio && !pDownload->writeFailed &&
-            !pDownload->sizeLimitExceeded &&
+            !pDownload->sizeLimitExceeded && !pDownload->quotaLimitExceeded &&
             pDownload->bytesWritten > 0;
 
     if (!success) {
@@ -564,12 +589,16 @@ void RestLibraryCacheManager::finishDownload(QNetworkReply* pReply) {
             diagnostic.success = false;
             diagnostic.statusCode = statusCode;
             const bool localFileFailure =
-                    pDownload->writeFailed || pDownload->sizeLimitExceeded;
+                    pDownload->writeFailed || pDownload->sizeLimitExceeded ||
+                    pDownload->quotaLimitExceeded;
             diagnostic.networkError =
                     localFileFailure ? static_cast<int>(QNetworkReply::NoError)
                                      : static_cast<int>(pReply->error());
             networkError = diagnostic.networkError;
-            if (pDownload->sizeLimitExceeded) {
+            if (pDownload->quotaLimitExceeded) {
+                diagnostic.errorText =
+                        tr("Concurrent audio downloads exceed the cache size limit.");
+            } else if (pDownload->sizeLimitExceeded) {
                 diagnostic.errorText =
                         tr("Cached audio file exceeds the cache size limit.");
             } else if (pDownload->writeFailed) {
@@ -699,6 +728,37 @@ RestLibraryCacheManager::ActiveDownload* RestLibraryCacheManager::activeDownload
     return nullptr;
 }
 
+qint64 RestLibraryCacheManager::reservedDownloadBytes(
+        const RestLibrarySettings& settings,
+        const ActiveDownload* pExcludedDownload) const {
+    const QString cacheDirectory = QDir(settings.cacheDirectoryPath).absolutePath();
+    qint64 totalBytes = 0;
+    for (const ActiveDownload& download : m_activeDownloads) {
+        if (&download == pExcludedDownload || download.writeFailed ||
+                download.sizeLimitExceeded || download.quotaLimitExceeded ||
+                QDir(download.settings.cacheDirectoryPath).absolutePath() !=
+                        cacheDirectory) {
+            continue;
+        }
+        totalBytes += std::max(download.bytesWritten, download.expectedBytes);
+    }
+    return totalBytes;
+}
+
+bool RestLibraryCacheManager::isActiveTempFilePath(
+        const QString& filePath) const {
+    const QString normalizedFilePath =
+            QDir::fromNativeSeparators(QFileInfo(filePath).absoluteFilePath());
+    for (const ActiveDownload& download : m_activeDownloads) {
+        if (QDir::fromNativeSeparators(
+                    QFileInfo(download.tempFilePath).absoluteFilePath()) ==
+                normalizedFilePath) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void RestLibraryCacheManager::pruneExpiredCachedFiles(
         const QList<RestLibraryTrack>& tracks,
         const RestLibrarySettings& settings) {
@@ -713,6 +773,9 @@ void RestLibraryCacheManager::pruneExpiredCachedFiles(
     }
 
     for (const QFileInfo& fileInfo : cachedFileInfos(settings)) {
+        if (isActiveTempFilePath(fileInfo.absoluteFilePath())) {
+            continue;
+        }
         if (fileInfo.lastModified().toUTC() >= cutoff) {
             continue;
         }
@@ -748,7 +811,8 @@ void RestLibraryCacheManager::pruneCacheSize(
 
     for (const QFileInfo& fileInfo : std::as_const(fileInfos)) {
         const QString filePath = QDir::fromNativeSeparators(fileInfo.absoluteFilePath());
-        if (filePath == normalizedPreservedFilePath) {
+        if (filePath == normalizedPreservedFilePath ||
+                isActiveTempFilePath(filePath)) {
             continue;
         }
         if (QFile::remove(filePath)) {

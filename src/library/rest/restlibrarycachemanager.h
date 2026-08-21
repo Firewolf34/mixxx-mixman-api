@@ -102,10 +102,12 @@ class RestLibraryCacheManager final : public QObject {
         QFile* pFile = nullptr;
         QString tempFilePath;
         qint64 bytesWritten = 0;
+        qint64 expectedBytes = 0;
         QByteArray responsePrefix;
         QString fileError;
         bool writeFailed = false;
         bool sizeLimitExceeded = false;
+        bool quotaLimitExceeded = false;
     };
 
     QNetworkRequest newDownloadRequest(
@@ -118,6 +120,10 @@ class RestLibraryCacheManager final : public QObject {
     void consumeReplyBytes(QNetworkReply* pReply);
     void finishDownload(QNetworkReply* pReply);
     ActiveDownload* activeDownloadForReply(QNetworkReply* pReply);
+    qint64 reservedDownloadBytes(
+            const RestLibrarySettings& settings,
+            const ActiveDownload* pExcludedDownload) const;
+    bool isActiveTempFilePath(const QString& filePath) const;
     void rememberTrackCacheStems(
             const QList<RestLibraryTrack>& tracks,
             const RestLibrarySettings& settings);
