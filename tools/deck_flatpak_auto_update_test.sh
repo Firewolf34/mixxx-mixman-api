@@ -83,6 +83,9 @@ case "$1" in
         done
         exit 2
         ;;
+    build-import-bundle)
+        echo "Importing bundle objects..."
+        ;;
     run)
         ;;
     install)
@@ -118,7 +121,15 @@ set -euo pipefail
 echo "ostree $*" >>"${TEST_COMMAND_LOG}"
 case "$*" in
     *" pull-local "*) echo "Importing OSTree objects..." ;;
-    init*|*" refs --create="*) ;;
+    *" refs --create="*) ;;
+    *" refs") echo app/org.mixxx.Mixxx/x86_64/master ;;
+    *" rev-parse "*) echo "${TEST_SNAPSHOT_COMMIT:-${TEST_INSTALLED_COMMIT}}" ;;
+    *" show "*)
+        printf 'commit fixture\nDate: now\n    Built from %s\n' \
+            "${TEST_INSTALLED_SOURCE}"
+        ;;
+    *" fsck") echo "Validating OSTree repository..." ;;
+    init*) ;;
     *) echo "unexpected ostree command: $*" >&2; exit 2 ;;
 esac
 EOF
@@ -130,6 +141,9 @@ export HOME="${TEMP_ROOT}"
 export XDG_STATE_HOME="${TEMP_ROOT}/state"
 export XDG_CACHE_HOME="${TEMP_ROOT}/cache"
 export XDG_DATA_HOME="${TEMP_ROOT}/data"
+export MIXXX_DECK_MAX_ARTIFACT_BYTES=1048576
+export MIXXX_DECK_MIN_FREE_RESERVE_BYTES=1048576
+export MIXXX_DECK_MAX_METADATA_BYTES=65536
 export TEST_COMMAND_LOG="${TEMP_ROOT}/commands.log"
 export TEST_INSTALLED_COMMIT_FILE="${TEMP_ROOT}/installed-commit"
 export TEST_INSTALLED_SOURCE_FILE="${TEMP_ROOT}/installed-source"
@@ -211,6 +225,17 @@ jq -e '.result == "updated"' \
 [[ -s "${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/${TEST_INSTALLED_SOURCE}/Mixxx.flatpak" ]]
 [[ "$(<"${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/${TEST_INSTALLED_SOURCE}/ostree-commit")" == \
     "${TEST_INSTALLED_COMMIT}" ]]
+jq -e \
+    --arg commit "${TEST_INSTALLED_COMMIT}" \
+    --arg source "${TEST_INSTALLED_SOURCE}" '
+    .schema_version == 1 and
+    .kind == "installed-flatpak-snapshot" and
+    .ostree_commit == $commit and
+    .source_sha == $source and
+    (.bundle_sha256 | test("^[0-9a-f]{64}$")) and
+    (.size_bytes > 0)
+' "${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/${TEST_INSTALLED_SOURCE}/provenance.json" \
+    >/dev/null
 grep -Fq "pull-local --depth=0 ${XDG_DATA_HOME}/flatpak/repo ${TEST_INSTALLED_COMMIT}" \
     "${TEST_COMMAND_LOG}"
 grep -Fq "refs --create=app/org.mixxx.Mixxx/x86_64/master ${TEST_INSTALLED_COMMIT}" \

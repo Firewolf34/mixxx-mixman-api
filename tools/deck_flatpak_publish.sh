@@ -22,6 +22,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=tools/deck_ostree_validation.sh
 source "${SCRIPT_DIR}/deck_ostree_validation.sh"
+TRACKED_SOURCE_HELPER="${SCRIPT_DIR}/deck_tracked_source.sh"
+[[ -r "${TRACKED_SOURCE_HELPER}" ]] || {
+    echo "Error: missing ${TRACKED_SOURCE_HELPER}." >&2
+    exit 1
+}
+# shellcheck source=tools/deck_tracked_source.sh
+source "${TRACKED_SOURCE_HELPER}"
 "${SCRIPT_DIR}/check_hosted_capacity_lease.sh"
 
 die() {
@@ -76,25 +83,36 @@ for command_name in \
 done
 
 cd "${REPO_ROOT}"
-tools/check_deck_flatpak_manifest.sh
-tools/deck_build_preflight.sh --phase=build
-ccache --set-config="max_size=${CCACHE_MAXSIZE:-512M}"
-ccache --set-config="compression=${CCACHE_COMPRESS:-true}"
-ccache --cleanup
-ccache --zero-stats
-
 report_ccache_stats() {
     echo "ccache statistics for this workflow attempt:"
     ccache --show-stats || true
 }
-trap report_ccache_stats EXIT
 SOURCE_SHA="$(git rev-parse --verify HEAD)"
 if [[ -n "${EVENT_SHA}" && "${SOURCE_SHA}" != "${EVENT_SHA}" ]]; then
     die "Checked-out SHA ${SOURCE_SHA} does not match event SHA ${EVENT_SHA}."
 fi
-if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
-    die "The build checkout contains tracked modifications."
-fi
+deck_require_pristine_build_checkout "${REPO_ROOT}" ||
+    die "Build checkout audit failed."
+SOURCE_ROOT="/data/tmp/mixxx-source-${SOURCE_SHA}-$$"
+TEMP_DIR=""
+cleanup_and_report_ccache_stats() {
+    [[ -z "${TEMP_DIR}" ]] || rm -rf -- "${TEMP_DIR}"
+    [[ -z "${SOURCE_ROOT}" ]] || rm -rf -- "${SOURCE_ROOT}"
+    report_ccache_stats
+}
+trap cleanup_and_report_ccache_stats EXIT
+deck_export_tracked_source "${REPO_ROOT}" "${SOURCE_SHA}" "${SOURCE_ROOT}" ||
+    die "Tracked-only source export failed."
+
+(
+    cd "${SOURCE_ROOT}"
+    tools/check_deck_flatpak_manifest.sh
+    tools/deck_build_preflight.sh --phase=build
+)
+ccache --set-config="max_size=${CCACHE_MAXSIZE:-512M}"
+ccache --set-config="compression=${CCACHE_COMPRESS:-true}"
+ccache --cleanup
+ccache --zero-stats
 
 mkdir -p "$(dirname -- "${LOCK_FILE}")" "${PUBLISH_ROOT}/builds"
 exec 9>"${LOCK_FILE}"
@@ -115,8 +133,9 @@ download_flatpak_sources() {
 
     while :; do
         echo "Downloading pinned Flatpak sources (attempt ${attempt}/${SOURCE_DOWNLOAD_ATTEMPTS})..."
-        if packaging/flatpak/flatpak_build.sh download \
-                --manifest packaging/flatpak/org.mixxx.Mixxx.deck.yaml \
+        if (cd "${SOURCE_ROOT}" && \
+                packaging/flatpak/flatpak_build.sh download \
+                --manifest packaging/flatpak/org.mixxx.Mixxx.deck.yaml) \
                 >"${download_log}" 2>&1; then
             cat "${download_log}"
             rm -f -- "${download_log}"
@@ -146,21 +165,13 @@ echo "Building ${APP_ID} from ${SOURCE_SHA}..."
 MIXXX_FLATPAK_SOURCE_SHA="${SOURCE_SHA}" \
 MIXXX_FLATPAK_DISABLE_DOWNLOAD=1 \
     MIXXX_FLATPAK_BUILDER_STATE_DIR="${BUILDER_STATE_DIR}" \
-    packaging/flatpak/flatpak_build.sh bundle \
-    --manifest packaging/flatpak/org.mixxx.Mixxx.deck.yaml
+    bash -c 'cd "$1" && packaging/flatpak/flatpak_build.sh bundle --manifest packaging/flatpak/org.mixxx.Mixxx.deck.yaml' \
+    _ "${SOURCE_ROOT}"
 
-BUNDLE_PATH="${REPO_ROOT}/Mixxx.flatpak"
+BUNDLE_PATH="${SOURCE_ROOT}/Mixxx.flatpak"
 [[ -s "${BUNDLE_PATH}" ]] || die "Flatpak bundle was not created."
 
 TEMP_DIR="$(mktemp -d)"
-cleanup() {
-    rm -rf -- "${TEMP_DIR}"
-}
-cleanup_and_report_ccache_stats() {
-    cleanup
-    report_ccache_stats
-}
-trap cleanup_and_report_ccache_stats EXIT
 
 VALIDATION_REPO="${TEMP_DIR}/validation-repo"
 ostree init --repo="${VALIDATION_REPO}" --mode=archive-z2
@@ -178,7 +189,7 @@ deck_ostree_commit_subject_contains_source \
 echo "Running headless Mixxx version smoke test..."
 timeout 30 flatpak build \
     --env=QT_QPA_PLATFORM=offscreen \
-    build_flatpak \
+    "${SOURCE_ROOT}/build_flatpak" \
     /app/bin/mixxx --version
 
 SOURCE_ARCHIVE="${TEMP_DIR}/source.tar.zst"

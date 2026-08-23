@@ -18,6 +18,21 @@ DEPLOY_LOCK="${STATE_ROOT}/deploy.lock"
 ROLLBACK_ROOT="${CACHE_ROOT}/repo-rollback"
 USER_REPO="${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/repo"
 SMOKE_TIMEOUT_SECONDS="${MIXXX_DECK_SMOKE_TIMEOUT_SECONDS:-90}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+STORAGE_BUDGET_HELPER="${SCRIPT_DIR}/deck_storage_budget.sh"
+OSTREE_VALIDATION_HELPER="${SCRIPT_DIR}/deck_ostree_validation.sh"
+[[ -r "${STORAGE_BUDGET_HELPER}" ]] || {
+    echo "Error: missing ${STORAGE_BUDGET_HELPER}. Re-run setup from the repository." >&2
+    exit 1
+}
+[[ -r "${OSTREE_VALIDATION_HELPER}" ]] || {
+    echo "Error: missing ${OSTREE_VALIDATION_HELPER}. Re-run setup from the repository." >&2
+    exit 1
+}
+# shellcheck source=tools/deck_storage_budget.sh
+source "${STORAGE_BUDGET_HELPER}"
+# shellcheck source=tools/deck_ostree_validation.sh
+source "${OSTREE_VALIDATION_HELPER}"
 
 die() {
     echo "Error: $*" >&2
@@ -192,10 +207,30 @@ configure_remote() {
         die "Signed remote ${REMOTE_NAME} does not expose ${APP_ID}."
 }
 
+verify_snapshot_bundle() (
+    local bundle="$1"
+    local source_sha="$2"
+    local expected_commit="$3"
+    local validation_repo actual_commit
+    validation_repo="$(mktemp -d "${CACHE_ROOT}/snapshot-validation.XXXXXX")"
+    trap 'rm -rf -- "${validation_repo}"' EXIT
+    ostree init --repo="${validation_repo}" --mode=archive-z2 >&2
+    flatpak build-import-bundle "${validation_repo}" "${bundle}" >&2
+    ostree --repo="${validation_repo}" fsck >&2
+    ostree --repo="${validation_repo}" refs | grep -Fxq "${EXPECTED_REF}" ||
+        die "Rollback snapshot does not contain ${EXPECTED_REF}."
+    actual_commit="$(ostree --repo="${validation_repo}" rev-parse "${EXPECTED_REF}")"
+    [[ "${actual_commit}" == "${expected_commit}" ]] ||
+        die "Rollback snapshot differs from the captured installed commit."
+    deck_ostree_commit_subject_contains_source \
+        "${validation_repo}" "${actual_commit}" "${source_sha}"
+)
+
 snapshot_installed_commit() (
     local source_sha="$1"
     local commit="$2"
-    local snapshot_dir bundle part checksum export_repo
+    local snapshot_dir bundle part checksum checksum_part commit_part export_repo provenance_part
+    local bundle_sha bundle_size
     [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] ||
         die "Installed build has no valid source SHA for rollback."
     [[ "${commit}" =~ ^[0-9a-f]{64}$ ]] ||
@@ -204,20 +239,49 @@ snapshot_installed_commit() (
     bundle="${snapshot_dir}/Mixxx.flatpak"
     part="${bundle}.part"
     checksum="${snapshot_dir}/Mixxx.flatpak.sha256"
+    checksum_part="${checksum}.part"
+    commit_part="${snapshot_dir}/ostree-commit.part"
     mkdir -p "${snapshot_dir}"
-    export_repo="$(mktemp -d)"
-    trap 'rm -rf -- "${export_repo}" "${part}"' EXIT
+    deck_require_free_space "${snapshot_dir}" "$(deck_snapshot_work_bytes)" \
+        "Automatic rollback snapshot" || die "Insufficient space for rollback snapshot."
+    export_repo="$(mktemp -d "${CACHE_ROOT}/snapshot-export.XXXXXX")"
+    provenance_part="${snapshot_dir}/provenance.json.part"
+    trap 'rm -rf -- "${export_repo}"; rm -f -- "${part}" "${checksum_part}" "${commit_part}" "${provenance_part}"' EXIT
     ostree init --repo="${export_repo}" --mode=archive-z2 >&2
     ostree --repo="${export_repo}" pull-local --depth=0 \
         "${USER_REPO}" "${commit}" >&2
     ostree --repo="${export_repo}" refs --create="${EXPECTED_REF}" "${commit}" >&2
-    flatpak build-bundle --arch="${EXPECTED_ARCH}" \
+    deck_run_with_artifact_limit flatpak build-bundle --arch="${EXPECTED_ARCH}" \
         --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
-        "${export_repo}" "${part}" "${APP_ID}" master >&2
-    [[ -s "${part}" ]] || die "Could not export the installed rollback build."
+        "${export_repo}" "${part}" "${APP_ID}" master >&2 ||
+        die "Automatic rollback snapshot exceeded its output budget."
+    deck_verify_bounded_file "${part}" "Automatic rollback snapshot" ||
+        die "Automatic rollback snapshot is outside its artifact budget."
+    verify_snapshot_bundle "${part}" "${source_sha}" "${commit}"
+    bundle_sha="$(sha256sum "${part}" | awk '{print $1}')"
+    bundle_size="$(stat -c '%s' "${part}")"
+    printf '%s\n' "${bundle_sha}" >"${checksum_part}"
+    printf '%s\n' "${commit}" >"${commit_part}"
+    jq -n \
+        --arg app_ref "${EXPECTED_REF}" \
+        --arg commit "${commit}" \
+        --arg source_sha "${source_sha}" \
+        --arg bundle_sha256 "${bundle_sha}" \
+        --argjson size_bytes "${bundle_size}" '
+        {
+            schema_version: 1,
+            kind: "installed-flatpak-snapshot",
+            app_ref: $app_ref,
+            ostree_commit: $commit,
+            source_sha: $source_sha,
+            bundle_sha256: $bundle_sha256,
+            size_bytes: $size_bytes
+        }
+    ' >"${provenance_part}"
     mv -f -- "${part}" "${bundle}"
-    sha256sum "${bundle}" | awk '{print $1}' >"${checksum}"
-    printf '%s\n' "${commit}" >"${snapshot_dir}/ostree-commit"
+    mv -f -- "${checksum_part}" "${checksum}"
+    mv -f -- "${commit_part}" "${snapshot_dir}/ostree-commit"
+    mv -f -- "${provenance_part}" "${snapshot_dir}/provenance.json"
     touch "${snapshot_dir}"
     printf '%s\n' "${snapshot_dir}"
 )
@@ -316,6 +380,7 @@ auto_update() {
     require_command timeout
     [[ "${SMOKE_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||
         die "MIXXX_DECK_SMOKE_TIMEOUT_SECONDS must be a positive integer."
+    deck_validate_storage_limits || die "Deck storage limits are invalid."
     mkdir -p "${STATE_ROOT}" "${ROLLBACK_ROOT}"
 
     exec 8>"${UPDATE_LOCK}"
@@ -363,6 +428,8 @@ auto_update() {
     fi
 
     echo "Downloading signed Mixxx update ${new_source} without deploying it..."
+    deck_require_free_space "${USER_REPO}" "${DECK_MAX_ARTIFACT_BYTES}" \
+        "Signed Flatpak download" || die "Insufficient space for signed update."
     flatpak update --user --app --no-deploy --noninteractive -y "${APP_ID}"
 
     exec 9>"${DEPLOY_LOCK}"

@@ -67,7 +67,7 @@ case "$*" in
     *" pull-local "*) echo "Importing OSTree objects..." ;;
     *" refs --create="*) ;;
     *" refs") echo app/org.mixxx.Mixxx/x86_64/master ;;
-    *" rev-parse "*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
+    *" rev-parse "*) echo "${TEST_IMPORTED_COMMIT:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" ;;
     *" show "*)
         printf 'commit aaaa\nDate: now\n    Built from %s and %s\n' \
             "$(<"${TEST_INSTALLED_SOURCE_FILE}")" "${TEST_ROLLBACK_SOURCE}"
@@ -85,6 +85,9 @@ export XDG_STATE_HOME="${TEMP_ROOT}/state"
 export XDG_CACHE_HOME="${TEMP_ROOT}/cache"
 export XDG_DATA_HOME="${TEMP_ROOT}/data"
 export XDG_CONFIG_HOME="${TEMP_ROOT}/config"
+export MIXXX_DECK_MAX_ARTIFACT_BYTES=1048576
+export MIXXX_DECK_MIN_FREE_RESERVE_BYTES=1048576
+export MIXXX_DECK_MAX_METADATA_BYTES=65536
 export TEST_COMMAND_LOG="${TEMP_ROOT}/commands.log"
 export TEST_INSTALLED_COMMIT_FILE="${TEMP_ROOT}/installed-commit"
 export TEST_INSTALLED_SOURCE_FILE="${TEMP_ROOT}/installed-source"
@@ -137,6 +140,37 @@ export TEST_ROLLBACK_UPDATE=noop
 : >"${TEST_COMMAND_LOG}"
 "${SCRIPT_DIR}/deck_flatpak_deploy.sh" rollback
 grep -q '^install .*--no-pull' "${TEST_COMMAND_LOG}"
+
+# An installed non-Deck Flatpak has no Built-from source SHA. It must still be
+# snapshotted under its exact OSTree commit with explicit provenance.
+: >"${TEST_INSTALLED_SOURCE_FILE}"
+printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    >"${TEST_INSTALLED_COMMIT_FILE}"
+: >"${TEST_COMMAND_LOG}"
+"${SCRIPT_DIR}/deck_flatpak_deploy.sh" rollback
+snapshot_dir="${XDG_CACHE_HOME}/mixxx-deck/snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+[[ "$(<"${XDG_STATE_HOME}/mixxx-deck/previous-source-sha")" == \
+    snapshot:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]]
+jq -e '
+    .schema_version == 1 and
+    .kind == "installed-flatpak-snapshot" and
+    .ostree_commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and
+    .source_sha == null
+' "${snapshot_dir}/provenance.json" >/dev/null
+
+# If the exported bundle resolves to a different commit than the captured
+# installed base, fail before any install/update mutation.
+: >"${TEST_INSTALLED_SOURCE_FILE}"
+printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    >"${TEST_INSTALLED_COMMIT_FILE}"
+export TEST_IMPORTED_COMMIT=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+: >"${TEST_COMMAND_LOG}"
+if "${SCRIPT_DIR}/deck_flatpak_deploy.sh" rollback 2>/dev/null; then
+    echo "rollback accepted a changed snapshot base" >&2
+    exit 1
+fi
+! grep -Eq '^(update|install) ' "${TEST_COMMAND_LOG}"
+unset TEST_IMPORTED_COMMIT
 
 printf '%s\n' "${TEST_INSTALLED_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
 printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \

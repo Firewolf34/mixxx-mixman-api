@@ -200,6 +200,11 @@ absent from `/proc` in the host PID namespace. An isolated maintenance
 namespace that cannot see the reported host PID fails closed, as do other
 inspection errors.
 
+Candidate metadata is capped at 1 MiB and bundles, GitHub archives, and
+rollback snapshots are capped at 2 GiB by default. Each operation must leave a
+1-GiB free-space reserve. A low-space or oversized operation fails before
+installation and removes only its known partial output.
+
 The signed Polinaria repository requires no provider credential on Coal. The
 legacy direct GitHub fallback remains available for manual recovery only; to
 configure it, create a fine-grained GitHub token restricted to
@@ -247,6 +252,11 @@ subject; the Forgejo publisher supplies the same subject through
 `MIXXX_FLATPAK_SOURCE_SHA` and Flatpak Builder's `--subject` option.
 The GitHub action explicitly uses `repo` and `build_flatpak`, which are the
 paths consumed by its bundle creation and headless smoke test.
+Initial and redirected URLs must use an approved HTTPS origin. After bundle
+import, the client requires the exact commit to match the source-qualified
+history ref in the configured GPG-verified Polinaria remote; a checksum from
+downloaded JSON alone is not deployment authority. The authenticated commit is
+then retained with the cache for network-independent activation and rollback.
 
 Activation is deliberately blocked while Mixxx runs. Stop Mixxx, then:
 
@@ -260,6 +270,9 @@ local Flatpak repository into the rollback cache. The export uses a temporary
 ref pinned to the exact installed OSTree commit, so an already downloaded
 pending update cannot be mislabeled as the previous build. This does not
 compile Mixxx.
+An installed Flatpak without a Deck source subject is retained as
+`snapshot:<ostree-commit>` with schema-1 provenance and can be restored by the
+same offline rollback path.
 
 The combined command still refuses to interrupt a running session:
 
@@ -309,6 +322,12 @@ Successful updates share `repo:<source-sha>` current/previous state with the
 manual client and retain the three newest automatic snapshots.
 
 ## Acceptance Checklist
+
+- Run `tools/deck_artifact_safety_test.sh`; confirm low-space, oversized,
+  untracked/ignored input, downgrade, cross-origin, unsigned, and commit
+  mismatch fixtures all fail closed.
+- Run `tools/deck_flatpak_deploy_test.sh`; confirm non-Deck snapshots record
+  exact-commit provenance and a changed exported base fails before mutation.
 
 - Confirm the authoritative Forgejo Actions run finished **Success** for the
   exact candidate SHA.

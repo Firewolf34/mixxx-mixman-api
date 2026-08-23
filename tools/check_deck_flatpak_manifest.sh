@@ -15,6 +15,11 @@ DECK_BREAK_GLASS_SCRIPT="${REPO_ROOT}/tools/mixxx_break_glass.sh"
 DECK_REPO_PUBLISH_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_repo_publish.sh"
 FLATPAK_BUILD_SCRIPT="${REPO_ROOT}/packaging/flatpak/flatpak_build.sh"
 DECK_PUBLISH_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_publish.sh"
+DECK_STORAGE_HELPER="${REPO_ROOT}/tools/deck_storage_budget.sh"
+DECK_HTTPS_HELPER="${REPO_ROOT}/tools/deck_https_fetch.sh"
+DECK_SIGNED_HELPER="${REPO_ROOT}/tools/deck_signed_candidate.sh"
+DECK_TRACKED_SOURCE_HELPER="${REPO_ROOT}/tools/deck_tracked_source.sh"
+DECK_ARTIFACT_SAFETY_TEST="${REPO_ROOT}/tools/deck_artifact_safety_test.sh"
 GITHUB_DECK_WORKFLOW="${REPO_ROOT}/.github/workflows/github-deck-candidate.yml"
 FORGEJO_ACTION_PIN_CHECK="${SCRIPT_DIR}/check_forgejo_action_pins.sh"
 DECK_UPDATE_SERVICE="${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.service"
@@ -134,6 +139,15 @@ if ! grep -Fq 'install -m 0644 "${OSTREE_VALIDATION_HELPER}" "${installed_helper
     echo "Error: mixxx-deck setup does not install its OSTree validator." >&2
     exit 1
 fi
+if ! grep -Fq 'install -m 0644 "${STORAGE_BUDGET_HELPER}" "${installed_storage_helper}"' \
+        "${DECK_DEPLOY_SCRIPT}" ||
+    ! grep -Fq 'install -m 0644 "${HTTPS_FETCH_HELPER}" "${installed_https_helper}"' \
+        "${DECK_DEPLOY_SCRIPT}" ||
+    ! grep -Fq 'install -m 0644 "${SIGNED_CANDIDATE_HELPER}" "${installed_signed_helper}"' \
+        "${DECK_DEPLOY_SCRIPT}"; then
+    echo "Error: mixxx-deck setup does not install its artifact safety helpers." >&2
+    exit 1
+fi
 if ! grep -Fq 'install -m 0755 "${SCRIPT_DIR}/mixxx_break_glass.sh" "${BREAK_GLASS_CLIENT}"' \
         "${DECK_DEPLOY_SCRIPT}" ||
     ! grep -Fq 'flatpak install --user --bundle --no-pull' "${DECK_DEPLOY_SCRIPT}"; then
@@ -171,6 +185,13 @@ if ! grep -Fq 'BUILD_OPTIONS+=("--subject=Built from ${FLATPAK_SOURCE_SHA}")' \
     echo "Error: the Forgejo publisher does not stamp source provenance." >&2
     exit 1
 fi
+if ! grep -Fq 'deck_require_pristine_build_checkout "${REPO_ROOT}"' \
+        "${DECK_PUBLISH_SCRIPT}" ||
+    ! grep -Fq 'deck_export_tracked_source "${REPO_ROOT}" "${SOURCE_SHA}" "${SOURCE_ROOT}"' \
+        "${DECK_PUBLISH_SCRIPT}"; then
+    echo "Error: the Forgejo publisher does not use a fresh tracked-only source tree." >&2
+    exit 1
+fi
 
 if ! grep -Fq '          build-dir: build_flatpak' "${GITHUB_DECK_WORKFLOW}" ||
     ! grep -Fq '          repo-dir: repo' "${GITHUB_DECK_WORKFLOW}" ||
@@ -182,7 +203,10 @@ fi
 bash "${FORGEJO_ACTION_PIN_CHECK}"
 
 bash -n "${DECK_DEPLOY_SCRIPT}" "${DECK_AUTO_UPDATE_SCRIPT}" \
-    "${DECK_BREAK_GLASS_SCRIPT}" "${DECK_REPO_PUBLISH_SCRIPT}"
+    "${DECK_BREAK_GLASS_SCRIPT}" "${DECK_REPO_PUBLISH_SCRIPT}" \
+    "${DECK_PUBLISH_SCRIPT}" "${DECK_STORAGE_HELPER}" "${DECK_HTTPS_HELPER}" \
+    "${DECK_SIGNED_HELPER}" "${DECK_TRACKED_SOURCE_HELPER}"
+bash "${DECK_ARTIFACT_SAFETY_TEST}"
 bash "${SCRIPT_DIR}/deck_flatpak_auto_update_test.sh"
 bash "${SCRIPT_DIR}/deck_flatpak_deploy_test.sh"
 

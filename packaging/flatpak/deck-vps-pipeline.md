@@ -436,6 +436,14 @@ The normal manifest retains its existing developer/debug behavior.
 differences and compares the result with the normal manifest. Both the workflow
 and publisher refuse to build if any other manifest content drifts.
 
+Before Flatpak Builder sees the Mixxx source, the publisher rejects every
+modified, untracked, or ignored checkout entry and materializes the exact
+candidate commit with `git archive` under `/data/tmp`. Source prefetch,
+compilation, bundle validation, and the headless smoke test all use that fresh
+tracked-only tree. The published source archive is made from the same Git
+revision. A trap removes the materialized tree after success, failure, or
+cancellation.
+
 `Mixxx.Controls` is a pure-QML module with no C++ types. Qt 6.10's
 `qmltyperegistrar` rejects generation of its empty C++ type metadata and its
 `qmlcachegen` fails while creating the cache loader in the constrained no-FUSE
@@ -616,6 +624,9 @@ Installed path:
 ~/.local/bin/mixxx-deck
 ~/.local/bin/mixxx-break-glass
 ~/.local/bin/deck_ostree_validation.sh
+~/.local/bin/deck_storage_budget.sh
+~/.local/bin/deck_https_fetch.sh
+~/.local/bin/deck_signed_candidate.sh
 ```
 
 Cache:
@@ -623,6 +634,7 @@ Cache:
 ```text
 ~/.cache/mixxx-deck/builds/<provider>/<source-sha>/
 ~/.cache/mixxx-deck/repo-rollback/<source-sha>/
+~/.cache/mixxx-deck/snapshots/<ostree-commit>/
 ```
 
 `provider` is `forgejo`, `github`, or `local` for an exported rollback
@@ -630,6 +642,9 @@ snapshot. A pre-provider cache at `builds/<source-sha>/` remains readable as
 `legacy:<source-sha>` and is not destructively migrated.
 `repo:<source-sha>` identifies the automatic updater's offline snapshot. The
 automatic and manual clients share provider-qualified current/previous state.
+`snapshot:<ostree-commit>` identifies an exact installed Flatpak that has no
+Deck source subject. Its schema-1 provenance records the app ref, exact OSTree
+commit, optional source SHA, bundle checksum, and byte size.
 
 State:
 
@@ -692,8 +707,15 @@ source SHA with the installed Flatpak. No bundle is downloaded.
 Fetches and verifies the selected provider's metadata and bundle. Forgejo uses
 the immutable public manifest/bundle contract; GitHub uses the authenticated
 Actions artifact contract. Both require local OSTree import/fsck and a source
-SHA in the bundle subject. Staging may run while Mixxx is active because it does
-not alter the installed app.
+SHA in the bundle subject. Initial and effective URLs must use configured HTTPS
+origins, metadata is limited to 1 MiB, and artifacts are limited to 2 GiB by
+default. Before recording a provider bundle as staged, the client also requires
+its imported commit to equal the source-qualified history ref in the configured
+GPG-verified `polinaria-mixxx` repository. JSON is therefore a locator rather
+than the artifact trust root. The authenticated commit is recorded beside the
+cached bundle so later activation and rollback revalidate it without requiring
+network access. Staging may run while Mixxx is active because it does not alter
+the installed app.
 
 ### Activate
 
@@ -706,6 +728,16 @@ Snapshot creation copies the exact installed OSTree commit into a temporary
 archive repository and binds the canonical app ref to that commit before
 building the bundle. It must never export the moving ref directly from the
 user repository because download-only staging may already have advanced it.
+This also covers non-Deck Flatpaks without a `Built from` subject. The snapshot
+is imported and checked against the captured commit before its checksum and
+provenance are committed to state.
+
+Downloads and snapshots default to a 2-GiB per-artifact limit and require 1 GiB
+to remain free after the expected output. The positive byte limits are
+overridable with `MIXXX_DECK_MAX_ARTIFACT_BYTES`,
+`MIXXX_DECK_MAX_METADATA_BYTES`, and
+`MIXXX_DECK_MIN_FREE_RESERVE_BYTES`. Cleanup removes only recognized partial
+files and unprotected old cache generations.
 
 ### Deploy
 

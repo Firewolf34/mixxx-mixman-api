@@ -13,6 +13,7 @@ GITHUB_OWNER="${MIXXX_GITHUB_OWNER:-Firewolf34}"
 GITHUB_REPO="${MIXXX_GITHUB_REPO:-mixxx-mixman-api}"
 GITHUB_WORKFLOW="${MIXXX_GITHUB_WORKFLOW:-github-deck-candidate.yml}"
 GITHUB_ARTIFACT_NAME="Mixxx-flatpak-x86_64"
+SIGNED_REMOTE_NAME="${MIXXX_DECK_REMOTE_NAME:-polinaria-mixxx}"
 CACHE_ROOT="${XDG_CACHE_HOME:-${HOME}/.cache}/mixxx-deck"
 STATE_ROOT="${XDG_STATE_HOME:-${HOME}/.local/state}/mixxx-deck"
 CONFIG_ROOT="${XDG_CONFIG_HOME:-${HOME}/.config}/mixxx-deck"
@@ -31,6 +32,7 @@ BREAK_GLASS_CLIENT="${HOME}/.local/bin/mixxx-break-glass"
 SYSTEMD_USER_ROOT="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
 DESKTOP_USER_ROOT="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
 EXPORTED_DESKTOP="${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/exports/share/applications/${APP_ID}.desktop"
+USER_FLATPAK_REPO="${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/repo"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -41,6 +43,27 @@ if [[ ! -r "${OSTREE_VALIDATION_HELPER}" ]]; then
 fi
 # shellcheck source=tools/deck_ostree_validation.sh
 source "${OSTREE_VALIDATION_HELPER}"
+STORAGE_BUDGET_HELPER="${SCRIPT_DIR}/deck_storage_budget.sh"
+HTTPS_FETCH_HELPER="${SCRIPT_DIR}/deck_https_fetch.sh"
+SIGNED_CANDIDATE_HELPER="${SCRIPT_DIR}/deck_signed_candidate.sh"
+[[ -r "${STORAGE_BUDGET_HELPER}" ]] || {
+    echo "Error: missing ${STORAGE_BUDGET_HELPER}. Re-run setup from the repository." >&2
+    exit 1
+}
+[[ -r "${HTTPS_FETCH_HELPER}" ]] || {
+    echo "Error: missing ${HTTPS_FETCH_HELPER}. Re-run setup from the repository." >&2
+    exit 1
+}
+[[ -r "${SIGNED_CANDIDATE_HELPER}" ]] || {
+    echo "Error: missing ${SIGNED_CANDIDATE_HELPER}. Re-run setup from the repository." >&2
+    exit 1
+}
+# shellcheck source=tools/deck_storage_budget.sh
+source "${STORAGE_BUDGET_HELPER}"
+# shellcheck source=tools/deck_https_fetch.sh
+source "${HTTPS_FETCH_HELPER}"
+# shellcheck source=tools/deck_signed_candidate.sh
+source "${SIGNED_CANDIDATE_HELPER}"
 
 usage() {
     cat <<'EOF'
@@ -84,9 +107,14 @@ require_sha() {
         die "Source SHA must be exactly 40 lowercase hexadecimal characters."
 }
 
+require_ostree_commit() {
+    [[ "${1:-}" =~ ^[0-9a-f]{64}$ ]] ||
+        die "OSTree commit must be exactly 64 lowercase hexadecimal characters."
+}
+
 require_provider() {
     case "${1:-}" in
-        forgejo|github|local|repo|legacy) ;;
+        forgejo|github|local|repo|legacy|snapshot) ;;
         *) die "Unknown build provider: ${1:-}" ;;
     esac
 }
@@ -95,7 +123,11 @@ source_key() {
     local provider="$1"
     local sha="$2"
     require_provider "${provider}"
-    require_sha "${sha}"
+    if [[ "${provider}" == snapshot ]]; then
+        require_ostree_commit "${sha}"
+    else
+        require_sha "${sha}"
+    fi
     printf '%s:%s\n' "${provider}" "${sha}"
 }
 
@@ -107,7 +139,11 @@ split_source_key() {
     [[ "${key}" == *:* && "${sha}" != "${key}" ]] ||
         die "Invalid cached build key: ${key}"
     require_provider "${provider}"
-    require_sha "${sha}"
+    if [[ "${provider}" == snapshot ]]; then
+        require_ostree_commit "${sha}"
+    else
+        require_sha "${sha}"
+    fi
     BUILD_PROVIDER="${provider}"
     BUILD_SHA="${sha}"
 }
@@ -129,6 +165,8 @@ build_dir_for_key() {
         printf '%s/builds/%s\n' "${CACHE_ROOT}" "${BUILD_SHA}"
     elif [[ "${BUILD_PROVIDER}" == repo ]]; then
         printf '%s/repo-rollback/%s\n' "${CACHE_ROOT}" "${BUILD_SHA}"
+    elif [[ "${BUILD_PROVIDER}" == snapshot ]]; then
+        printf '%s/snapshots/%s\n' "${CACHE_ROOT}" "${BUILD_SHA}"
     else
         printf '%s/builds/%s/%s\n' "${CACHE_ROOT}" "${BUILD_PROVIDER}" "${BUILD_SHA}"
     fi
@@ -143,7 +181,7 @@ read_state_key() {
 ensure_directories() {
     mkdir -p "${CACHE_ROOT}/builds/forgejo" \
         "${CACHE_ROOT}/builds/github" \
-        "${CACHE_ROOT}/builds/local" \
+        "${CACHE_ROOT}/builds/local" "${CACHE_ROOT}/snapshots" \
         "${STATE_ROOT}" "${CONFIG_ROOT}"
 }
 
@@ -235,8 +273,11 @@ github_api_request() {
     local method="$1"
     local path="$2"
     [[ -n "${GITHUB_AUTH_CONFIG}" ]] || die "GitHub API authentication is not prepared."
+    deck_require_approved_https_url "${GITHUB_API_ORIGIN}" \
+        "${GITHUB_API_BASE}${path}" || die "GitHub API URL validation failed."
     curl --config "${GITHUB_AUTH_CONFIG}" \
         --silent --show-error --fail --connect-timeout 15 \
+        --proto '=https' --max-filesize "${DECK_MAX_METADATA_BYTES}" \
         --request "${method}" \
         --header 'Accept: application/vnd.github+json' \
         --header 'X-GitHub-Api-Version: 2026-03-10' \
@@ -286,8 +327,9 @@ fetch_forgejo_manifest() {
     else
         url="$(manifest_url_for_sha "${target}")"
     fi
-    curl --fail --location --silent --show-error --retry 3 \
-        --connect-timeout 10 --output "${destination}" "${url}"
+    deck_curl_download "${FORGEJO_ARTIFACT_ORIGIN}" \
+        "${DECK_MAX_METADATA_BYTES}" "${destination}" "${url}" \
+        --retry 3 --connect-timeout 10 || die "Forgejo manifest download failed."
 }
 
 validate_forgejo_manifest() {
@@ -462,7 +504,7 @@ descriptors_for_target() {
                 github_descriptor_for_sha "${sha}"
             fi
             ;;
-        local:*|repo:*|legacy:*)
+        local:*|repo:*|legacy:*|snapshot:*)
             split_source_key "${target}"
             printf '{"provider":"%s","source_sha":"%s"}\n' \
                 "${BUILD_PROVIDER}" "${BUILD_SHA}"
@@ -474,11 +516,9 @@ descriptors_for_target() {
     esac
 }
 
-verify_bundle_provenance() (
+bundle_commit_for_expected_ref() (
     local bundle_path="$1"
-    local source_sha="$2"
     local validation_repo flatpak_commit
-    require_sha "${source_sha}"
     validation_repo="$(mktemp -d)"
     trap 'rm -rf -- "${validation_repo}"' EXIT
 
@@ -488,9 +528,69 @@ verify_bundle_provenance() (
     ostree --repo="${validation_repo}" refs | grep -Fxq "${EXPECTED_REF}" ||
         die "Bundle does not contain ${EXPECTED_REF}."
     flatpak_commit="$(ostree --repo="${validation_repo}" rev-parse "${EXPECTED_REF}")"
+    printf '%s\n' "${flatpak_commit}"
+)
+
+bundle_commit_for_provenance() (
+    local bundle_path="$1"
+    local source_sha="$2"
+    local validation_repo flatpak_commit
+    require_sha "${source_sha}"
+    validation_repo="$(mktemp -d)"
+    trap 'rm -rf -- "${validation_repo}"' EXIT
+    ostree init --repo="${validation_repo}" --mode=archive-z2 >&2
+    flatpak build-import-bundle "${validation_repo}" "${bundle_path}" >&2
+    ostree --repo="${validation_repo}" fsck >&2
+    ostree --repo="${validation_repo}" refs | grep -Fxq "${EXPECTED_REF}" ||
+        die "Bundle does not contain ${EXPECTED_REF}."
+    flatpak_commit="$(ostree --repo="${validation_repo}" rev-parse "${EXPECTED_REF}")"
     deck_ostree_commit_subject_contains_source \
         "${validation_repo}" "${flatpak_commit}" "${source_sha}"
+    printf '%s\n' "${flatpak_commit}"
 )
+
+verify_bundle_provenance() {
+    bundle_commit_for_provenance "$1" "$2" >/dev/null
+}
+
+verify_signed_provider_bundle() {
+    local bundle_path="$1"
+    local source_sha="$2"
+    local bundle_commit
+    bundle_commit="$(bundle_commit_for_provenance "${bundle_path}" "${source_sha}")"
+    deck_require_signed_bundle_commit "${USER_FLATPAK_REPO}" \
+        "${SIGNED_REMOTE_NAME}" "${source_sha}" "${bundle_commit}" >/dev/null ||
+        die "Provider bundle did not pass signed repository authentication."
+    printf '%s\n' "${bundle_commit}"
+}
+
+record_signed_provider_commit() {
+    local build_dir="$1"
+    local signed_commit="$2"
+    local signed_commit_part="${build_dir}/signed-ostree-commit.part"
+    [[ "${signed_commit}" =~ ^[0-9a-f]{64}$ ]] ||
+        die "Authenticated provider commit is invalid."
+    printf '%s\n' "${signed_commit}" >"${signed_commit_part}"
+    mv -f -- "${signed_commit_part}" "${build_dir}/signed-ostree-commit"
+}
+
+verify_cached_signed_provider_bundle() {
+    local key="$1"
+    local build_dir bundle_path signed_commit actual_commit
+    split_source_key "${key}"
+    [[ "${BUILD_PROVIDER}" == forgejo || "${BUILD_PROVIDER}" == github ]] ||
+        die "Signed provider verification requested for ${key}."
+    build_dir="$(build_dir_for_key "${key}")"
+    bundle_path="${build_dir}/Mixxx.flatpak"
+    [[ -s "${build_dir}/signed-ostree-commit" ]] ||
+        die "Cached signed commit is missing for ${key}; stage it again."
+    signed_commit="$(<"${build_dir}/signed-ostree-commit")"
+    [[ "${signed_commit}" =~ ^[0-9a-f]{64}$ ]] ||
+        die "Cached signed commit is invalid for ${key}; stage it again."
+    actual_commit="$(bundle_commit_for_provenance "${bundle_path}" "${BUILD_SHA}")"
+    [[ "${actual_commit}" == "${signed_commit}" ]] ||
+        die "Cached bundle differs from its authenticated commit for ${key}."
+}
 
 write_staged_state() {
     local provider="$1"
@@ -510,6 +610,7 @@ cache_bundle_matches() {
 stage_forgejo_descriptor() (
     local descriptor="$1"
     local source_sha manifest build_dir bundle_path bundle_part expected_size expected_sha
+    local signed_commit
     manifest="$(mktemp "${STATE_ROOT}/forgejo-manifest.XXXXXX")"
     trap 'rm -f -- "${manifest}" "${bundle_part:-}"' EXIT
     source_sha="$(jq -r '.source_sha' <<<"${descriptor}")"
@@ -523,13 +624,20 @@ stage_forgejo_descriptor() (
     bundle_part="${bundle_path}.part"
     expected_size="$(jq -r '.size_bytes' "${manifest}")"
     expected_sha="$(jq -r '.sha256' "${manifest}")"
+    deck_require_size_within_budget "${expected_size}" "Forgejo candidate bundle" ||
+        die "Forgejo candidate exceeds the configured artifact budget."
     mkdir -p "${build_dir}"
 
     if cache_bundle_matches "${build_dir}" "${expected_size}" "${expected_sha}"; then
         echo "Forgejo build ${source_sha} is already staged and verified."
     else
-        curl --fail --location --silent --show-error --retry 3 --connect-timeout 10 \
-            --output "${bundle_part}" "$(jq -r '.bundle_url' "${manifest}")"
+        rm -f -- "${bundle_part}"
+        deck_require_free_space "${build_dir}" "${expected_size}" \
+            "Forgejo candidate download" || die "Insufficient space for Forgejo candidate."
+        deck_curl_download "${FORGEJO_ARTIFACT_ORIGIN}" \
+            "${DECK_MAX_ARTIFACT_BYTES}" "${bundle_part}" \
+            "$(jq -r '.bundle_url' "${manifest}")" \
+            --retry 3 --connect-timeout 10 || die "Forgejo bundle download failed."
         [[ "$(stat -c '%s' "${bundle_part}")" == "${expected_size}" ]] ||
             die "Downloaded Forgejo bundle size does not match its manifest."
         [[ "$(sha256sum "${bundle_part}" | awk '{print $1}')" == "${expected_sha}" ]] ||
@@ -538,7 +646,8 @@ stage_forgejo_descriptor() (
     fi
     install -m 0644 "${manifest}" "${build_dir}/manifest.json"
     printf '%s\n' "${expected_sha}" >"${build_dir}/Mixxx.flatpak.sha256"
-    verify_bundle_provenance "${bundle_path}" "${source_sha}" >&2
+    signed_commit="$(verify_signed_provider_bundle "${bundle_path}" "${source_sha}")"
+    record_signed_provider_commit "${build_dir}" "${signed_commit}"
     write_staged_state forgejo "${source_sha}"
     echo "Staged verified Forgejo build ${source_sha}."
     source_key forgejo "${source_sha}"
@@ -574,6 +683,7 @@ stage_github_descriptor() (
     local descriptor="$1"
     local temporary archive archive_part manifest manifest_part bundle_part
     local source_sha artifact_id archive_sha256 build_dir bundle_path expected_size expected_sha
+    local signed_commit
     prepare_github_auth
     temporary="$(mktemp -d "${STATE_ROOT}/github-artifact.XXXXXX")"
     trap 'release_github_auth; rm -rf -- "${temporary}"' EXIT
@@ -588,12 +698,16 @@ stage_github_descriptor() (
     [[ "${artifact_id}" =~ ^[1-9][0-9]*$ ]] || die "Invalid GitHub artifact identifier."
     [[ "${archive_sha256}" =~ ^[0-9a-f]{64}$ ]] || die "Invalid GitHub artifact checksum."
 
-    curl --config "${GITHUB_AUTH_CONFIG}" --fail --location --silent --show-error \
-        --connect-timeout 15 --retry 3 \
+    rm -f -- "${archive_part}"
+    deck_require_free_space "${temporary}" "${DECK_MAX_ARTIFACT_BYTES}" \
+        "GitHub candidate download" || die "Insufficient space for GitHub candidate."
+    deck_curl_download "${GITHUB_ARTIFACT_ORIGINS}" \
+        "${DECK_MAX_ARTIFACT_BYTES}" "${archive_part}" \
+        "${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/artifacts/${artifact_id}/zip" \
+        --config "${GITHUB_AUTH_CONFIG}" --connect-timeout 15 --retry 3 \
         --header 'Accept: application/vnd.github+json' \
-        --header 'X-GitHub-Api-Version: 2026-03-10' \
-        --output "${archive_part}" \
-        "${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/artifacts/${artifact_id}/zip"
+        --header 'X-GitHub-Api-Version: 2026-03-10' ||
+        die "GitHub artifact download failed."
     [[ "$(sha256sum "${archive_part}" | awk '{print $1}')" == "${archive_sha256}" ]] ||
         die "GitHub artifact archive checksum does not match the Actions API digest."
     mv -f -- "${archive_part}" "${archive}"
@@ -604,6 +718,8 @@ stage_github_descriptor() (
         [[ "${archive_entries[1]}" == github-candidate-manifest.json ]] ||
         die "GitHub artifact has an unexpected file layout."
     unzip -p "${archive}" github-candidate-manifest.json >"${manifest_part}"
+    [[ "$(stat -c '%s' "${manifest_part}")" -le "${DECK_MAX_METADATA_BYTES}" ]] ||
+        die "GitHub artifact metadata exceeds the deck metadata limit."
     mv -f -- "${manifest_part}" "${manifest}"
     validate_github_artifact_manifest "${manifest}" "${descriptor}"
 
@@ -612,11 +728,17 @@ stage_github_descriptor() (
     bundle_part="${bundle_path}.part"
     expected_size="$(jq -r '.size_bytes' "${manifest}")"
     expected_sha="$(jq -r '.sha256' "${manifest}")"
+    deck_require_size_within_budget "${expected_size}" "GitHub candidate bundle" ||
+        die "GitHub candidate exceeds the configured artifact budget."
     mkdir -p "${build_dir}"
     if cache_bundle_matches "${build_dir}" "${expected_size}" "${expected_sha}"; then
         echo "GitHub build ${source_sha} is already staged and verified."
     else
-        unzip -p "${archive}" Mixxx.flatpak >"${bundle_part}"
+        rm -f -- "${bundle_part}"
+        deck_require_free_space "${build_dir}" "${expected_size}" \
+            "GitHub candidate extraction" || die "Insufficient space for GitHub extraction."
+        deck_run_with_artifact_limit unzip -p "${archive}" Mixxx.flatpak \
+            >"${bundle_part}" || die "GitHub bundle exceeded its output budget."
         [[ "$(stat -c '%s' "${bundle_part}")" == "${expected_size}" ]] ||
             die "GitHub bundle size does not match its artifact metadata."
         [[ "$(sha256sum "${bundle_part}" | awk '{print $1}')" == "${expected_sha}" ]] ||
@@ -625,7 +747,8 @@ stage_github_descriptor() (
     fi
     install -m 0644 "${manifest}" "${build_dir}/manifest.json"
     printf '%s\n' "${expected_sha}" >"${build_dir}/Mixxx.flatpak.sha256"
-    verify_bundle_provenance "${bundle_path}" "${source_sha}"
+    signed_commit="$(verify_signed_provider_bundle "${bundle_path}" "${source_sha}")"
+    record_signed_provider_commit "${build_dir}" "${signed_commit}"
     write_staged_state github "${source_sha}"
     echo "Staged verified GitHub build ${source_sha}."
     source_key github "${source_sha}"
@@ -636,7 +759,7 @@ stage_descriptor() {
     case "$(jq -r '.provider' <<<"${descriptor}")" in
         forgejo) stage_forgejo_descriptor "${descriptor}" ;;
         github) stage_github_descriptor "${descriptor}" ;;
-        local|repo|legacy)
+        local|repo|legacy|snapshot)
             local provider source_sha key bundle_path
             provider="$(jq -r '.provider' <<<"${descriptor}")"
             source_sha="$(jq -r '.source_sha' <<<"${descriptor}")"
@@ -696,7 +819,67 @@ verify_cached_bundle() {
         die "Cached bundle checksum is invalid for ${key}."
     [[ "$(sha256sum "${bundle_path}" | awk '{print $1}')" == "${expected_sha}" ]] ||
         die "Cached bundle checksum failed for ${key}; stage it again."
-    verify_bundle_provenance "${bundle_path}" "${BUILD_SHA}"
+    case "${BUILD_PROVIDER}" in
+        forgejo|github)
+            verify_cached_signed_provider_bundle "${key}"
+            ;;
+        snapshot)
+            verify_snapshot_provenance "${key}"
+            ;;
+        local)
+            if [[ -s "${build_dir}/provenance.json" ]]; then
+                verify_snapshot_provenance "${key}"
+            else
+                verify_bundle_provenance "${bundle_path}" "${BUILD_SHA}"
+            fi
+            ;;
+        *)
+            verify_bundle_provenance "${bundle_path}" "${BUILD_SHA}"
+            ;;
+    esac
+}
+
+verify_snapshot_provenance() {
+    local key="$1"
+    local build_dir bundle_path provenance expected_commit actual_commit source_sha
+    local recorded_sha recorded_size
+    split_source_key "${key}"
+    [[ "${BUILD_PROVIDER}" == snapshot || "${BUILD_PROVIDER}" == local ]] ||
+        die "Snapshot provenance requested for an unsupported key."
+    build_dir="$(build_dir_for_key "${key}")"
+    bundle_path="${build_dir}/Mixxx.flatpak"
+    provenance="${build_dir}/provenance.json"
+    jq -e --arg app_ref "${EXPECTED_REF}" '
+        .schema_version == 1 and
+        .kind == "installed-flatpak-snapshot" and
+        .app_ref == $app_ref and
+        (.ostree_commit | type == "string" and test("^[0-9a-f]{64}$")) and
+        (.source_sha == null or
+         (.source_sha | type == "string" and test("^[0-9a-f]{40}$"))) and
+        (.bundle_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+        (.size_bytes | type == "number" and . > 0 and floor == .)
+    ' "${provenance}" >/dev/null || die "Snapshot provenance is invalid for ${key}."
+    expected_commit="$(jq -r '.ostree_commit' "${provenance}")"
+    source_sha="$(jq -r '.source_sha // empty' "${provenance}")"
+    if [[ "${BUILD_PROVIDER}" == snapshot ]]; then
+        [[ "${expected_commit}" == "${BUILD_SHA}" ]] ||
+            die "Snapshot key differs from its recorded OSTree commit."
+    else
+        [[ "${source_sha}" == "${BUILD_SHA}" ]] ||
+            die "Local snapshot key differs from its recorded source SHA."
+    fi
+    recorded_sha="$(jq -r '.bundle_sha256' "${provenance}")"
+    recorded_size="$(jq -r '.size_bytes' "${provenance}")"
+    [[ "$(sha256sum "${bundle_path}" | awk '{print $1}')" == "${recorded_sha}" ]] ||
+        die "Snapshot bundle checksum differs from its provenance."
+    [[ "$(stat -c '%s' "${bundle_path}")" == "${recorded_size}" ]] ||
+        die "Snapshot bundle size differs from its provenance."
+    actual_commit="$(bundle_commit_for_expected_ref "${bundle_path}")"
+    [[ "${actual_commit}" == "${expected_commit}" ]] ||
+        die "Snapshot bundle commit differs from its recorded base."
+    if [[ -n "${source_sha}" ]]; then
+        verify_bundle_provenance "${bundle_path}" "${source_sha}"
+    fi
 }
 
 verify_rollback_target() {
@@ -711,47 +894,89 @@ verify_rollback_target() {
         commit="$(<"${commit_file}")"
         [[ "${commit}" =~ ^[0-9a-f]{64}$ ]] ||
             die "Cached OSTree commit is invalid for ${key}."
+    elif [[ "${BUILD_PROVIDER}" == snapshot ]]; then
+        verify_snapshot_provenance "${key}"
     fi
 }
 
 snapshot_installed_build() (
     local source_sha="$1"
     local commit="$2"
-    local user_repo="${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/repo"
-    local key build_dir bundle_path bundle_part checksum_path export_repo
-    require_sha "${source_sha}"
+    local user_repo="${USER_FLATPAK_REPO}"
+    local key build_dir bundle_path bundle_part checksum_path checksum_part export_repo
+    local actual_commit bundle_sha bundle_size provenance_part source_json
     [[ "${commit}" =~ ^[0-9a-f]{64}$ ]] ||
         die "The installed OSTree commit is invalid for rollback export."
     [[ -d "${user_repo}" ]] || die "The user Flatpak repository is missing: ${user_repo}"
-    key="$(source_key local "${source_sha}")"
+    if [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+        key="$(source_key local "${source_sha}")"
+    else
+        source_sha=""
+        key="$(source_key snapshot "${commit}")"
+    fi
     build_dir="$(build_dir_for_key "${key}")"
     bundle_path="${build_dir}/Mixxx.flatpak"
     bundle_part="${bundle_path}.part"
     checksum_path="${build_dir}/Mixxx.flatpak.sha256"
-    if [[ -s "${bundle_path}" && -f "${checksum_path}" ]] &&
-            [[ "$(sha256sum "${bundle_path}" | awk '{print $1}')" == "$(<"${checksum_path}")" ]] &&
-            verify_bundle_provenance "${bundle_path}" "${source_sha}" >/dev/null 2>&1; then
+    checksum_part="${checksum_path}.part"
+    if [[ -s "${bundle_path}" && -s "${checksum_path}" &&
+            -s "${build_dir}/provenance.json" ]] &&
+            [[ "$(jq -r '.ostree_commit // empty' "${build_dir}/provenance.json")" == \
+                "${commit}" ]] && verify_cached_bundle "${key}" >/dev/null 2>&1; then
         touch "${build_dir}"
         printf '%s\n' "${key}"
         return
     fi
-
-    echo "Saving installed build ${source_sha} for rollback..." >&2
+    echo "Saving installed build ${source_sha:-${commit}} for rollback..." >&2
     mkdir -p "${build_dir}"
     rm -f -- "${bundle_part}"
-    export_repo="$(mktemp -d)"
-    trap 'rm -rf -- "${export_repo}" "${bundle_part}"' EXIT
+    deck_require_free_space "${build_dir}" "$(deck_snapshot_work_bytes)" \
+        "Installed-build snapshot" || die "Insufficient space for rollback snapshot."
+    export_repo="$(mktemp -d "${CACHE_ROOT}/snapshot-export.XXXXXX")"
+    provenance_part="${build_dir}/provenance.json.part"
+    trap 'rm -rf -- "${export_repo}"; rm -f -- "${bundle_part}" "${checksum_part}" "${provenance_part}"' EXIT
     ostree init --repo="${export_repo}" --mode=archive-z2 >&2
     ostree --repo="${export_repo}" pull-local --depth=0 \
         "${user_repo}" "${commit}" >&2
     ostree --repo="${export_repo}" refs --create="${EXPECTED_REF}" "${commit}" >&2
-    flatpak build-bundle --arch="${EXPECTED_ARCH}" \
+    deck_run_with_artifact_limit flatpak build-bundle --arch="${EXPECTED_ARCH}" \
         --runtime-repo="${FLATHUB_REPO_URL}" "${export_repo}" "${bundle_part}" \
-        "${APP_ID}" master >&2
-    [[ -s "${bundle_part}" ]] || die "Failed to save the installed rollback build."
+        "${APP_ID}" master >&2 || die "Installed rollback snapshot exceeded its output budget."
+    deck_verify_bounded_file "${bundle_part}" "Installed rollback snapshot" ||
+        die "Installed rollback snapshot is outside its artifact budget."
+    actual_commit="$(bundle_commit_for_expected_ref "${bundle_part}")"
+    [[ "${actual_commit}" == "${commit}" ]] ||
+        die "Installed rollback snapshot does not contain the captured commit."
+    if [[ -n "${source_sha}" ]]; then
+        verify_bundle_provenance "${bundle_part}" "${source_sha}" >&2
+    fi
+    bundle_sha="$(sha256sum "${bundle_part}" | awk '{print $1}')"
+    bundle_size="$(stat -c '%s' "${bundle_part}")"
+    printf '%s\n' "${bundle_sha}" >"${checksum_part}"
+    if [[ -n "${source_sha}" ]]; then
+        source_json="${source_sha}"
+    else
+        source_json=""
+    fi
+    jq -n \
+        --arg app_ref "${EXPECTED_REF}" \
+        --arg commit "${commit}" \
+        --arg source_sha "${source_json}" \
+        --arg bundle_sha256 "${bundle_sha}" \
+        --argjson size_bytes "${bundle_size}" '
+        {
+            schema_version: 1,
+            kind: "installed-flatpak-snapshot",
+            app_ref: $app_ref,
+            ostree_commit: $commit,
+            source_sha: (if $source_sha == "" then null else $source_sha end),
+            bundle_sha256: $bundle_sha256,
+            size_bytes: $size_bytes
+        }
+    ' >"${provenance_part}"
     mv -f -- "${bundle_part}" "${bundle_path}"
-    sha256sum "${bundle_path}" | awk '{print $1}' >"${checksum_path}"
-    verify_bundle_provenance "${bundle_path}" "${source_sha}" >&2
+    mv -f -- "${checksum_part}" "${checksum_path}"
+    mv -f -- "${provenance_part}" "${build_dir}/provenance.json"
     printf '%s\n' "${key}"
 )
 
@@ -759,7 +984,7 @@ target_cache_key() {
     local target="$1"
     local provider sha
     case "${target}" in
-        forgejo:*|github:*|local:*|repo:*|legacy:*)
+        forgejo:*|github:*|local:*|repo:*|legacy:*|snapshot:*)
             provider="${target%%:*}"
             sha="${target#*:}"
             source_key "${provider}" "${sha}"
@@ -789,7 +1014,8 @@ resolve_target_key() {
     build_dir="$(build_dir_for_key "${key}")"
     if [[ -s "${build_dir}/Mixxx.flatpak" ]]; then
         printf '%s\n' "${key}"
-    elif [[ "${key}" == local:* || "${key}" == repo:* || "${key}" == legacy:* ]]; then
+    elif [[ "${key}" == local:* || "${key}" == repo:* ||
+            "${key}" == legacy:* || "${key}" == snapshot:* ]]; then
         die "No cached build exists for ${key}."
     else
         stage_build "${target}" | tail -n 1
@@ -798,8 +1024,12 @@ resolve_target_key() {
 
 activate_build() {
     local target="${1:-auto}"
-    local key build_dir bundle_path old_sha old_commit old_key="" verified_sha
+    local key build_dir bundle_path old_sha old_commit old_key="" verified_sha verified_commit
+    local expected_source="" expected_commit=""
     require_command flock
+    require_command jq
+    require_command ostree
+    require_command sha256sum
     ensure_flatpak
     ensure_directories
     exec 9>"${LOCK_FILE}"
@@ -811,16 +1041,30 @@ activate_build() {
     build_dir="$(build_dir_for_key "${key}")"
     bundle_path="${build_dir}/Mixxx.flatpak"
     verify_cached_bundle "${key}"
+    if [[ "${BUILD_PROVIDER}" == snapshot ]]; then
+        expected_commit="${BUILD_SHA}"
+        expected_source="$(jq -r '.source_sha // empty' "${build_dir}/provenance.json")"
+    else
+        expected_source="${BUILD_SHA}"
+    fi
     old_sha="$(installed_source_sha || true)"
-    if [[ -n "${old_sha}" && "${old_sha}" != "${BUILD_SHA}" ]]; then
-        old_commit="$(installed_commit || true)"
+    old_commit="$(installed_commit || true)"
+    if [[ "${old_commit}" =~ ^[0-9a-f]{64}$ &&
+            ( -z "${old_sha}" || "${old_sha}" != "${expected_source}" ) ]]; then
         old_key="$(snapshot_installed_build "${old_sha}" "${old_commit}")"
     fi
 
     flatpak install --user --bundle --reinstall --noninteractive -y "${bundle_path}"
     verified_sha="$(installed_source_sha || true)"
-    [[ "${verified_sha}" == "${BUILD_SHA}" ]] ||
-        die "Installed Flatpak does not report expected source SHA ${BUILD_SHA}."
+    verified_commit="$(installed_commit || true)"
+    if [[ -n "${expected_source}" ]]; then
+        [[ "${verified_sha}" == "${expected_source}" ]] ||
+            die "Installed Flatpak does not report expected source SHA ${expected_source}."
+    fi
+    if [[ -n "${expected_commit}" ]]; then
+        [[ "${verified_commit}" == "${expected_commit}" ]] ||
+            die "Installed Flatpak does not report expected commit ${expected_commit}."
+    fi
     if [[ -n "${old_key}" ]]; then
         printf '%s\n' "${old_key}" >"${PREVIOUS_STATE}"
     fi
@@ -851,12 +1095,29 @@ prune_local_builds() {
         find "${CACHE_ROOT}/builds" -mindepth 2 -maxdepth 2 -type d \
             -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-
     )
+    kept=0
+    while IFS= read -r path; do
+        key="$(source_key snapshot "${path##*/}")"
+        if [[ "${key}" == "${current_key}" || "${key}" == "${previous_key}" ||
+                "${key}" == "${staged_key}" || "${kept}" -lt "${KEEP_LOCAL_BUILDS}" ]]; then
+            kept=$((kept + 1))
+            continue
+        fi
+        [[ "${path}" == "${CACHE_ROOT}/snapshots/"* ]] ||
+            die "Refusing to prune unexpected snapshot path: ${path}"
+        rm -rf -- "${path}"
+    done < <(
+        find "${CACHE_ROOT}/snapshots" -mindepth 1 -maxdepth 1 -type d \
+            -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-
+    )
 }
 
 rollback_build() {
-    local installed_sha installed_ostree_commit target_key target_commit="" old_key verified_sha verified_commit
+    local installed_sha installed_ostree_commit target_key target_commit="" target_source=""
+    local old_key verified_sha verified_commit
     require_command flatpak
     require_command flock
+    require_command jq
     require_command ostree
     require_command sha256sum
     ensure_directories
@@ -866,8 +1127,8 @@ rollback_build() {
 
     installed_sha="$(installed_source_sha || true)"
     installed_ostree_commit="$(installed_commit || true)"
-    require_sha "${installed_sha}"
-    target_key="$(effective_rollback_key "${installed_sha}")" ||
+    require_ostree_commit "${installed_ostree_commit}"
+    target_key="$(effective_rollback_key "${installed_sha}" "${installed_ostree_commit}")" ||
         die "No cached rollback build is available."
     split_source_key "${target_key}"
     [[ "${BUILD_SHA}" != "${installed_sha}" ]] ||
@@ -877,7 +1138,16 @@ rollback_build() {
         target_commit="$(<"$(build_dir_for_key "${target_key}")/ostree-commit")"
         [[ "${target_commit}" =~ ^[0-9a-f]{64}$ ]] ||
             die "Cached OSTree commit is invalid for ${target_key}."
+        target_source="${BUILD_SHA}"
+    elif [[ "${BUILD_PROVIDER}" == snapshot ]]; then
+        target_commit="${BUILD_SHA}"
+        target_source="$(jq -r '.source_sha // empty' \
+            "$(build_dir_for_key "${target_key}")/provenance.json")"
+    else
+        target_source="${BUILD_SHA}"
     fi
+    [[ -z "${target_commit}" || "${target_commit}" != "${installed_ostree_commit}" ]] ||
+        die "Rollback target ${target_key} is already installed."
 
     old_key="$(snapshot_installed_build "${installed_sha}" "${installed_ostree_commit}")"
     if [[ -n "${target_commit}" ]]; then
@@ -886,15 +1156,17 @@ rollback_build() {
     fi
     verified_sha="$(installed_source_sha || true)"
     verified_commit="$(installed_commit || true)"
-    if [[ "${verified_sha}" != "${BUILD_SHA}" ||
+    if [[ ( -n "${target_source}" && "${verified_sha}" != "${target_source}" ) ||
             ( -n "${target_commit}" && "${verified_commit}" != "${target_commit}" ) ]]; then
         flatpak install --user --bundle --no-pull --reinstall --noninteractive -y \
             "$(build_dir_for_key "${target_key}")/Mixxx.flatpak"
         verified_sha="$(installed_source_sha || true)"
         verified_commit="$(installed_commit || true)"
     fi
-    [[ "${verified_sha}" == "${BUILD_SHA}" ]] ||
-        die "Rollback installed source ${verified_sha:-unknown}, expected ${BUILD_SHA}."
+    if [[ -n "${target_source}" ]]; then
+        [[ "${verified_sha}" == "${target_source}" ]] ||
+            die "Rollback installed source ${verified_sha:-unknown}, expected ${target_source}."
+    fi
     if [[ -n "${target_commit}" ]]; then
         [[ "${verified_commit}" == "${target_commit}" ]] ||
             die "Rollback installed OSTree commit ${verified_commit:-unknown}, expected ${target_commit}."
@@ -923,11 +1195,15 @@ newest_repo_rollback_key() {
 
 effective_rollback_key() {
     local installed_sha="$1"
+    local installed_ostree_commit="${2:-}"
     local recorded_current="" recorded_previous="" candidate=""
     recorded_current="$(read_state_key "${CURRENT_STATE}" 2>/dev/null || true)"
     recorded_previous="$(read_state_key "${PREVIOUS_STATE}" 2>/dev/null || true)"
-    if [[ "${recorded_current##*:}" == "${installed_sha}" &&
-            -n "${recorded_previous}" && "${recorded_previous##*:}" != "${installed_sha}" ]]; then
+    if { [[ "${recorded_current}" == snapshot:* &&
+                "${recorded_current##*:}" == "${installed_ostree_commit}" ]] ||
+            [[ "${recorded_current}" != snapshot:* && -n "${installed_sha}" &&
+                "${recorded_current##*:}" == "${installed_sha}" ]]; } &&
+            [[ -n "${recorded_previous}" ]]; then
         candidate="${recorded_previous}"
     else
         candidate="$(newest_repo_rollback_key "${installed_sha}" 2>/dev/null || true)"
@@ -966,15 +1242,18 @@ check_build() (
 )
 
 print_status() {
-    local installed_sha staged_key current_key effective_current rollback_key rollback_status
+    local installed_sha installed_ostree_commit staged_key current_key effective_current
+    local rollback_key rollback_status
     installed_sha="$(installed_source_sha || true)"
+    installed_ostree_commit="$(installed_commit || true)"
     staged_key="$(read_state_key "${STAGED_STATE}" 2>/dev/null || echo none)"
     current_key="$(read_state_key "${CURRENT_STATE}" 2>/dev/null || echo none)"
     effective_current="${current_key}"
     if [[ -n "${installed_sha}" && "${current_key##*:}" != "${installed_sha}" ]]; then
         effective_current="installed:${installed_sha}"
     fi
-    rollback_key="$(effective_rollback_key "${installed_sha}" 2>/dev/null || echo none)"
+    rollback_key="$(effective_rollback_key \
+        "${installed_sha}" "${installed_ostree_commit}" 2>/dev/null || echo none)"
     rollback_status=none
     if [[ "${rollback_key}" != none ]]; then
         rollback_status="$(rollback_bundle_status "${rollback_key}")"
@@ -998,6 +1277,9 @@ print_status() {
 
 setup_client() {
     local installed_helper="${HOME}/.local/bin/deck_ostree_validation.sh"
+    local installed_storage_helper="${HOME}/.local/bin/deck_storage_budget.sh"
+    local installed_https_helper="${HOME}/.local/bin/deck_https_fetch.sh"
+    local installed_signed_helper="${HOME}/.local/bin/deck_signed_candidate.sh"
     local ci_helper="${SCRIPT_DIR}/mixxx_deck_ci.sh"
     ensure_flatpak
     require_command curl
@@ -1020,6 +1302,15 @@ setup_client() {
     mkdir -p "${HOME}/.local/bin" "${SYSTEMD_USER_ROOT}" "${DESKTOP_USER_ROOT}"
     if [[ ! "${OSTREE_VALIDATION_HELPER}" -ef "${installed_helper}" ]]; then
         install -m 0644 "${OSTREE_VALIDATION_HELPER}" "${installed_helper}"
+    fi
+    if [[ ! "${STORAGE_BUDGET_HELPER}" -ef "${installed_storage_helper}" ]]; then
+        install -m 0644 "${STORAGE_BUDGET_HELPER}" "${installed_storage_helper}"
+    fi
+    if [[ ! "${HTTPS_FETCH_HELPER}" -ef "${installed_https_helper}" ]]; then
+        install -m 0644 "${HTTPS_FETCH_HELPER}" "${installed_https_helper}"
+    fi
+    if [[ ! "${SIGNED_CANDIDATE_HELPER}" -ef "${installed_signed_helper}" ]]; then
+        install -m 0644 "${SIGNED_CANDIDATE_HELPER}" "${installed_signed_helper}"
     fi
     install -m 0755 "${SCRIPT_DIR}/deck_flatpak_auto_update.sh" "${AUTO_UPDATE_CLIENT}"
     install -m 0755 "${ci_helper}" "${HOME}/.local/bin/mixxx-deck-ci"
@@ -1060,6 +1351,12 @@ setup_client() {
     die "MIXXX_GITHUB_API_BASE must be an HTTPS API root URL."
 [[ "${KEEP_LOCAL_BUILDS}" =~ ^[1-9][0-9]*$ ]] ||
     die "MIXXX_DECK_KEEP_LOCAL_BUILDS must be a positive integer."
+deck_validate_storage_limits || die "Deck storage limits are invalid."
+FORGEJO_ARTIFACT_ORIGIN="$(deck_https_origin "${MANIFEST_URL}")" ||
+    die "Could not determine the approved Forgejo artifact origin."
+GITHUB_API_ORIGIN="$(deck_https_origin "${GITHUB_API_BASE}")" ||
+    die "Could not determine the approved GitHub API origin."
+GITHUB_ARTIFACT_ORIGINS="${MIXXX_GITHUB_ARTIFACT_ORIGINS:-${GITHUB_API_ORIGIN},https://*.actions.githubusercontent.com,https://*.blob.core.windows.net}"
 
 if [[ $# -lt 1 ]]; then
     usage
