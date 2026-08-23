@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QColorDialog>
+#include <QHeaderView>
 #include <QSignalBlocker>
 #include <QSpinBox>
 
@@ -12,6 +13,7 @@
 #include "util/assert.h"
 #include "widget/wlibrary.h"
 #include "widget/wtracktableview.h"
+#include "widget/wtracktableviewheader.h"
 
 namespace mixxx::library::rest {
 
@@ -147,6 +149,24 @@ DlgRestLibrary::DlgRestLibrary(
     }
 
     m_pTrackTableView->loadTrackModel(m_pTableModel);
+    auto* pHeader = qobject_cast<WTrackTableViewHeader*>(
+            m_pTrackTableView->horizontalHeader());
+    if (pHeader && !pHeader->hasPersistedHeaderState()) {
+        const int rankColumn =
+                m_pTableModel->fieldIndex(QStringLiteral("recommendation_rank"));
+        m_pTrackTableView->sortByColumn(rankColumn, Qt::AscendingOrder);
+        const auto moveAfter = [pHeader](int column, int predecessor) {
+            const int from = pHeader->visualIndex(column);
+            const int to = pHeader->visualIndex(predecessor) + 1;
+            if (from >= 0 && to >= 0 && from != to) {
+                pHeader->moveSection(from, to);
+            }
+        };
+        moveAfter(rankColumn,
+                m_pTableModel->fieldIndex(QStringLiteral("cache")));
+        moveAfter(m_pTableModel->fieldIndex(QStringLiteral("color")),
+                m_pTableModel->fieldIndex(QStringLiteral("energy")));
+    }
     m_ui->horizontalSliderTargetEnergy->setEnabled(false);
     m_ui->pushButtonTargetColor->setEnabled(false);
     m_ui->spinBoxTargetBpm->setEnabled(false);

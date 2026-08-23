@@ -19,13 +19,16 @@
 #include "library/librarytablemodel.h"
 #include "library/rest/restlibrarycachestatedelegate.h"
 #include "library/rest/restlibrarytablemodel.h"
+#include "library/tabledelegates/colordelegate.h"
 #include "library/tabledelegates/percentagedelegate.h"
 #include "test/librarytest.h"
 #include "track/keyutils.h"
+#include "util/color/rgbcolor.h"
 
 namespace {
 
 using mixxx::library::rest::RestLibraryCacheState;
+using mixxx::library::rest::RestLibraryCacheResult;
 using mixxx::library::rest::RestLibraryTableModel;
 using mixxx::library::rest::RestLibraryTrack;
 
@@ -759,4 +762,222 @@ TEST_F(RestLibraryTableModelTest, SortsKeysByConfiguredCircleOfFifthsOrder) {
     EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("8a"));
     EXPECT_EQ(model.remoteIdForIndex(model.index(1, 0)), QStringLiteral("9a"));
     EXPECT_EQ(model.remoteIdForIndex(model.index(2, 0)), QStringLiteral("missing"));
+}
+
+TEST_F(RestLibraryTableModelTest, ColorColumnUsesSharedAccessiblePresentation) {
+    for (const auto mode : {RestLibraryTableModel::Mode::Recommendations,
+                 RestLibraryTableModel::Mode::Catalog}) {
+        RestLibraryTableModel model(nullptr, trackCollectionManager(), mode);
+        RestLibraryTrack valid = newTrack(
+                QStringLiteral("valid"), QStringLiteral("Ada"), QStringLiteral("Valid"));
+        valid.color = QStringLiteral("#FF6600");
+        RestLibraryTrack missing = newTrack(
+                QStringLiteral("missing"), QStringLiteral("Bea"), QStringLiteral("Missing"));
+        RestLibraryTrack invalid = newTrack(
+                QStringLiteral("invalid"), QStringLiteral("Cam"), QStringLiteral("Invalid"));
+        invalid.color = QStringLiteral("not-a-color");
+        model.setTracks({valid, missing, invalid});
+
+        const int colorColumn = model.fieldIndex(QStringLiteral("color"));
+        ASSERT_GE(colorColumn, 0);
+        EXPECT_EQ(model.fieldIndex(QStringLiteral("colour")), colorColumn);
+        EXPECT_FALSE(model.isColumnInternal(colorColumn));
+        EXPECT_FALSE(model.isColumnHiddenByDefault(colorColumn));
+        EXPECT_EQ(model.headerData(colorColumn, Qt::Horizontal).toString(),
+                QStringLiteral("Color"));
+        EXPECT_EQ(model.headerData(
+                          colorColumn,
+                          Qt::Horizontal,
+                          TrackModel::kHeaderWidthRole)
+                          .toInt(),
+                44);
+        EXPECT_EQ(model.sortColumnIdFromColumnIndex(colorColumn),
+                TrackModel::SortColumnId::Color);
+        EXPECT_EQ(model.columnIndexFromSortColumnId(TrackModel::SortColumnId::Color),
+                colorColumn);
+
+        const QModelIndex validIndex = model.index(0, colorColumn);
+        const auto expectedColor = mixxx::RgbColor::fromQString(QStringLiteral("#ff6600"));
+        ASSERT_TRUE(expectedColor.has_value());
+        EXPECT_EQ(model.data(validIndex, Qt::DisplayRole).toUInt(),
+                static_cast<QRgb>(*expectedColor));
+        EXPECT_EQ(model.data(validIndex, TrackModel::kDataExportRole).toString(),
+                QStringLiteral("#ff6600"));
+        EXPECT_EQ(model.data(validIndex, Qt::AccessibleTextRole).toString(),
+                QStringLiteral("Color: #ff6600"));
+        EXPECT_EQ(model.data(validIndex, Qt::ToolTipRole).toString(),
+                QStringLiteral("Color: #ff6600"));
+
+        const QModelIndex missingIndex = model.index(1, colorColumn);
+        EXPECT_FALSE(model.data(missingIndex, Qt::DisplayRole).isValid());
+        EXPECT_EQ(model.data(missingIndex, Qt::AccessibleTextRole).toString(),
+                QStringLiteral("Color: not provided"));
+        const QModelIndex invalidIndex = model.index(2, colorColumn);
+        EXPECT_FALSE(model.data(invalidIndex, Qt::DisplayRole).isValid());
+        EXPECT_EQ(model.data(invalidIndex, Qt::AccessibleTextRole).toString(),
+                QStringLiteral("Color: invalid value not-a-color"));
+
+        QTableView tableView;
+        std::unique_ptr<QAbstractItemDelegate> delegate(
+                model.delegateForColumn(colorColumn, &tableView));
+        EXPECT_NE(dynamic_cast<ColorDelegate*>(delegate.get()), nullptr);
+    }
+}
+
+TEST_F(RestLibraryTableModelTest, SortsColorsAndKeepsUnavailableValuesLast) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    RestLibraryTrack red = newTrack(
+            QStringLiteral("red"), QStringLiteral("Red"), QStringLiteral("Red"));
+    red.color = QStringLiteral("#ff0000");
+    RestLibraryTrack blue = newTrack(
+            QStringLiteral("blue"), QStringLiteral("Blue"), QStringLiteral("Blue"));
+    blue.color = QStringLiteral("#0000ff");
+    RestLibraryTrack green = newTrack(
+            QStringLiteral("green"), QStringLiteral("Green"), QStringLiteral("Green"));
+    green.color = QStringLiteral("#00ff00");
+    RestLibraryTrack invalid = newTrack(
+            QStringLiteral("invalid"), QStringLiteral("Invalid"), QStringLiteral("Invalid"));
+    invalid.color = QStringLiteral("invalid");
+    model.setTracks({red, invalid, green, blue});
+
+    const int colorColumn = model.fieldIndex(QStringLiteral("color"));
+    model.sort(colorColumn, Qt::AscendingOrder);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("blue"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(1, 0)), QStringLiteral("green"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(2, 0)), QStringLiteral("red"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(3, 0)), QStringLiteral("invalid"));
+
+    model.sort(colorColumn, Qt::DescendingOrder);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("red"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(1, 0)), QStringLiteral("green"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(2, 0)), QStringLiteral("blue"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(3, 0)), QStringLiteral("invalid"));
+}
+
+TEST_F(RestLibraryTableModelTest, RecommendationRankIsStableAccessibleAndRestorable) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    RestLibraryTrack missing = newTrack(
+            QStringLiteral("missing"), QStringLiteral("Delta"), QStringLiteral("Missing"));
+    RestLibraryTrack second = newTrack(
+            QStringLiteral("second"), QStringLiteral("Charlie"), QStringLiteral("Second"));
+    second.recommendationPosition = 2;
+    RestLibraryTrack primary = newTrack(
+            QStringLiteral("primary"), QStringLiteral("Zulu"), QStringLiteral("Primary"));
+    primary.recommendationPosition = 1;
+    primary.favour = 0.8;
+    RestLibraryTrack duplicate = newTrack(
+            QStringLiteral("duplicate"), QStringLiteral("Alpha"), QStringLiteral("Duplicate"));
+    duplicate.recommendationPosition = 1;
+    model.setTracks({missing, second, primary, duplicate});
+
+    const int rankColumn = model.fieldIndex(QStringLiteral("recommendation_rank"));
+    ASSERT_GE(rankColumn, 0);
+    EXPECT_EQ(model.fieldIndex(QStringLiteral("position")), rankColumn);
+    EXPECT_EQ(model.defaultSortColumn(), rankColumn);
+    EXPECT_EQ(model.modelKey(true), QStringLiteral("rest-library-recommendations-v2"));
+    EXPECT_EQ(model.sortColumnIdFromColumnIndex(rankColumn),
+            TrackModel::SortColumnId::Position);
+    EXPECT_EQ(model.columnIndexFromSortColumnId(TrackModel::SortColumnId::Position),
+            rankColumn);
+    EXPECT_FALSE(model.isColumnInternal(rankColumn));
+    EXPECT_FALSE(model.isColumnHiddenByDefault(rankColumn));
+
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("primary"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(1, 0)), QStringLiteral("duplicate"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(2, 0)), QStringLiteral("second"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(3, 0)), QStringLiteral("missing"));
+    EXPECT_EQ(model.data(model.index(0, rankColumn)).toString(), QStringLiteral("Top"));
+    EXPECT_EQ(model.data(model.index(1, rankColumn)).toInt(), 2);
+    EXPECT_EQ(model.data(model.index(0, rankColumn), Qt::AccessibleTextRole).toString(),
+            QStringLiteral("Primary recommendation"));
+    EXPECT_EQ(model.data(model.index(1, rankColumn), Qt::AccessibleTextRole).toString(),
+            QStringLiteral("Alternate recommendation, rank 2"));
+    EXPECT_TRUE(model.data(model.index(0, model.fieldIndex(QStringLiteral("artist"))),
+                              Qt::FontRole)
+                        .value<QFont>()
+                        .bold());
+    EXPECT_FALSE(model.data(model.index(1, model.fieldIndex(QStringLiteral("artist"))),
+                               Qt::FontRole)
+                         .isValid());
+
+    const int favourColumn = model.fieldIndex(QStringLiteral("favour"));
+    QTableView tableView;
+    std::unique_ptr<QAbstractItemDelegate> favourDelegate(
+            model.delegateForColumn(favourColumn, &tableView));
+    auto* pPercentageDelegate =
+            dynamic_cast<PercentageDelegate*>(favourDelegate.get());
+    ASSERT_NE(pPercentageDelegate, nullptr);
+    QImage image(80, 24, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    QPainter painter(&image);
+    QStyleOptionViewItem option;
+    option.rect = image.rect();
+    option.palette = tableView.palette();
+    option.font = model.data(model.index(0, favourColumn), Qt::FontRole).value<QFont>();
+    pPercentageDelegate->paintItem(
+            &painter, option, model.index(0, favourColumn));
+    EXPECT_TRUE(painter.font().bold());
+    painter.end();
+
+    const int artistColumn = model.fieldIndex(QStringLiteral("artist"));
+    model.sort(artistColumn, Qt::AscendingOrder);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("duplicate"));
+    EXPECT_EQ(model.data(model.index(0, rankColumn)).toInt(), 2);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(3, 0)), QStringLiteral("primary"));
+    EXPECT_EQ(model.data(model.index(3, rankColumn)).toString(), QStringLiteral("Top"));
+    EXPECT_TRUE(model.data(model.index(3, artistColumn), Qt::FontRole)
+                        .value<QFont>()
+                        .bold());
+
+    RestLibraryCacheResult cacheResult;
+    cacheResult.remoteId = QStringLiteral("primary");
+    cacheResult.cacheState = RestLibraryCacheState::Ready;
+    model.updateTrackCacheState(cacheResult);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("duplicate"));
+    EXPECT_EQ(model.data(model.index(3, rankColumn)).toString(), QStringLiteral("Top"));
+
+    model.sort(rankColumn, Qt::AscendingOrder);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("primary"));
+    model.setTracks({primary, duplicate, missing, second});
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("primary"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(1, 0)), QStringLiteral("duplicate"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(2, 0)), QStringLiteral("second"));
+    EXPECT_EQ(model.remoteIdForIndex(model.index(3, 0)), QStringLiteral("missing"));
+    model.search(QStringLiteral("Duplicate"));
+    ASSERT_EQ(model.rowCount(), 1);
+    EXPECT_EQ(model.data(model.index(0, rankColumn)).toInt(), 2);
+}
+
+TEST_F(RestLibraryTableModelTest, CatalogKeepsRecommendationRankInternal) {
+    RestLibraryTableModel model(
+            nullptr,
+            trackCollectionManager(),
+            RestLibraryTableModel::Mode::Catalog);
+    const int rankColumn = model.fieldIndex(QStringLiteral("recommendation_rank"));
+    ASSERT_GE(rankColumn, 0);
+    EXPECT_TRUE(model.isColumnInternal(rankColumn));
+    EXPECT_EQ(model.sortColumnIdFromColumnIndex(rankColumn),
+            TrackModel::SortColumnId::Invalid);
+    EXPECT_EQ(model.columnIndexFromSortColumnId(TrackModel::SortColumnId::Position), -1);
+    EXPECT_EQ(model.modelKey(true), QStringLiteral("rest-library-browser"));
+}
+
+TEST_F(RestLibraryTableModelTest, RestModesKeepPersistedHeaderStateIndependent) {
+    RestLibraryTableModel recommendations(nullptr, trackCollectionManager());
+    RestLibraryTableModel catalog(
+            nullptr,
+            trackCollectionManager(),
+            RestLibraryTableModel::Mode::Catalog);
+
+    EXPECT_TRUE(catalog.setModelSetting(
+            QStringLiteral("header_state_pb"), QStringLiteral("catalog-state")));
+    EXPECT_TRUE(recommendations.getModelSetting(
+                                       QStringLiteral("header_state_pb"))
+                        .isNull());
+    EXPECT_TRUE(recommendations.setModelSetting(
+            QStringLiteral("header_state_pb"), QStringLiteral("recommendations-state")));
+    EXPECT_EQ(catalog.getModelSetting(QStringLiteral("header_state_pb")),
+            QStringLiteral("catalog-state"));
+    EXPECT_EQ(recommendations.getModelSetting(QStringLiteral("header_state_pb")),
+            QStringLiteral("recommendations-state"));
 }

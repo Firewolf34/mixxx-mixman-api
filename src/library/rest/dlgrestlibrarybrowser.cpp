@@ -1,6 +1,7 @@
 #include "library/rest/dlgrestlibrarybrowser.h"
 
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QPushButton>
@@ -12,6 +13,7 @@
 #include "moc_dlgrestlibrarybrowser.cpp"
 #include "widget/wlibrary.h"
 #include "widget/wtracktableview.h"
+#include "widget/wtracktableviewheader.h"
 
 namespace mixxx::library::rest {
 
@@ -41,6 +43,17 @@ DlgRestLibraryBrowser::DlgRestLibraryBrowser(
 
     m_pTrackTableView->installEventFilter(pKeyboard);
     m_pTrackTableView->loadTrackModel(m_pTableModel);
+    auto* pHeader = qobject_cast<WTrackTableViewHeader*>(
+            m_pTrackTableView->horizontalHeader());
+    if (pHeader && !pHeader->hasPersistedHeaderState()) {
+        const int colorColumn = m_pTableModel->fieldIndex(QStringLiteral("color"));
+        const int energyColumn = m_pTableModel->fieldIndex(QStringLiteral("energy"));
+        const int from = pHeader->visualIndex(colorColumn);
+        const int to = pHeader->visualIndex(energyColumn) + 1;
+        if (from >= 0 && to >= 0 && from != to) {
+            pHeader->moveSection(from, to);
+        }
+    }
 
     connect(pRefreshButton,
             &QPushButton::clicked,

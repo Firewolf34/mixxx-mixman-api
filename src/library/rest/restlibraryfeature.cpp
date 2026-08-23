@@ -1406,6 +1406,32 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
         remoteIds.append(track.remoteId);
     }
     if (remoteIds == m_recommendationRemoteIds) {
+        QList<RestLibraryTrack> refreshedTracks = tracks;
+        for (RestLibraryTrack& track : refreshedTracks) {
+            if (!m_cacheStates.contains(track.remoteId)) {
+                continue;
+            }
+            const RestLibraryTrack currentTrack =
+                    m_pTableModel->trackForRemoteId(track.remoteId);
+            track.cacheState = m_cacheStates.value(track.remoteId);
+            track.cachedFilePath = currentTrack.cachedFilePath;
+            track.cacheError = currentTrack.cacheError;
+            track.cacheStatusCode = currentTrack.cacheStatusCode;
+            track.cacheNetworkError = currentTrack.cacheNetworkError;
+        }
+        m_pTableModel->setTracks(std::move(refreshedTracks));
+        double qualityTotal = 0.0;
+        int qualityCount = 0;
+        for (const auto& track : tracks) {
+            if (track.quality > 0.0) {
+                qualityTotal += track.quality;
+                ++qualityCount;
+            }
+        }
+        m_averageQuality = qualityCount > 0 ? qualityTotal / qualityCount : 0.0;
+        if (m_autoDJRemoteIds.isEmpty()) {
+            updateReadyStatus();
+        }
         return;
     }
     cancelRecommendationsAutoDJ();

@@ -107,11 +107,17 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
         ColumnEnergy,
         ColumnSource,
         ColumnRemoteId,
+        // Keep new columns after all existing columns so persisted logical
+        // column indexes remain valid for the catalog view.
+        ColumnColor,
+        ColumnRecommendationRank,
         ColumnCount,
     };
 
     const RestLibraryTrack* trackForIndex(const QModelIndex& index) const;
+    int recommendationRankForIndex(const QModelIndex& index) const;
     QVariant valueForColumn(const RestLibraryTrack& track, int column) const;
+    void rebuildRecommendationRanks();
     void rebuildVisibleRows();
 
     TrackCollectionManager* const m_pTrackCollectionManager;
@@ -121,6 +127,7 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
     std::unique_ptr<QueryNode> m_pSearchQuery;
     QList<RestLibraryTrack> m_tracks;
     QHash<QString, TrackPointer> m_searchTracks;
+    QVector<int> m_recommendationRanks;
     QVector<int> m_visibleRows;
     QString m_currentSearch;
     QString m_cacheIdentity;

@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <utility>
 
 #include <QDir>
 #include <QFileInfo>
+#include <QFont>
 #include <QTableView>
 #include <QUrl>
 
@@ -13,6 +15,7 @@
 #include "library/library_prefs.h"
 #include "library/rest/restlibrarycachestatedelegate.h"
 #include "library/rest/restlibrarytrackstore.h"
+#include "library/tabledelegates/colordelegate.h"
 #include "library/tabledelegates/percentagedelegate.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
@@ -23,6 +26,7 @@
 #include "track/track.h"
 #include "track/trackref.h"
 #include "util/assert.h"
+#include "util/color/rgbcolor.h"
 
 namespace mixxx::library::rest {
 
@@ -90,7 +94,9 @@ RestLibraryTableModel::RestLibraryTableModel(
         : QAbstractTableModel(parent),
           TrackModel(
                   pTrackCollectionManager->internalCollection()->database(),
-                  "mixxx.db.model.restlibrary"),
+                  mode == Mode::Recommendations
+                          ? "mixxx.db.model.restlibrary.recommendations-v2"
+                          : "mixxx.db.model.restlibrary"),
           m_pTrackCollectionManager(pTrackCollectionManager),
           m_mode(mode),
           m_pTrackStore(
@@ -113,7 +119,10 @@ RestLibraryTableModel::RestLibraryTableModel(
                         QStringLiteral("rating"),
                         QStringLiteral("filetype")});
     }
-    setDefaultSort(ColumnArtist, Qt::AscendingOrder);
+    m_sortColumn = m_mode == Mode::Recommendations
+            ? ColumnRecommendationRank
+            : ColumnArtist;
+    setDefaultSort(m_sortColumn, Qt::AscendingOrder);
 }
 
 RestLibraryTableModel::~RestLibraryTableModel() = default;
@@ -130,6 +139,7 @@ int RestLibraryTableModel::cacheStateCount(RestLibraryCacheState state) const {
 void RestLibraryTableModel::setTracks(QList<RestLibraryTrack> tracks) {
     beginResetModel();
     m_tracks = std::move(tracks);
+    rebuildRecommendationRanks();
     m_searchTracks.clear();
     if (m_mode == Mode::Catalog) {
         for (const RestLibraryTrack& remoteTrack : std::as_const(m_tracks)) {
@@ -223,6 +233,52 @@ int RestLibraryTableModel::columnCount(const QModelIndex& parent) const {
 QVariant RestLibraryTableModel::data(const QModelIndex& index, int role) const {
     const RestLibraryTrack* pTrack = trackForIndex(index);
     if (!pTrack) {
+        return {};
+    }
+    const int recommendationRank = recommendationRankForIndex(index);
+    if (role == Qt::FontRole && recommendationRank == 1) {
+        QFont font;
+        font.setBold(true);
+        return font;
+    }
+    if (index.column() == ColumnRecommendationRank) {
+        if (recommendationRank <= 0) {
+            return {};
+        }
+        if (role == Qt::DisplayRole) {
+            return recommendationRank == 1 ? QVariant(tr("Top"))
+                                           : QVariant(recommendationRank);
+        }
+        if (role == Qt::EditRole || role == TrackModel::kDataExportRole) {
+            return recommendationRank;
+        }
+        const QString description = recommendationRank == 1
+                ? tr("Primary recommendation")
+                : tr("Alternate recommendation, rank %1").arg(recommendationRank);
+        if (role == Qt::ToolTipRole || role == Qt::AccessibleTextRole ||
+                role == Qt::AccessibleDescriptionRole) {
+            return description;
+        }
+        return {};
+    }
+    if (index.column() == ColumnColor) {
+        const QString rawColor = pTrack->color.trimmed();
+        const auto color = mixxx::RgbColor::fromQString(rawColor);
+        if (role == Qt::DisplayRole || role == Qt::EditRole) {
+            return mixxx::RgbColor::toQVariant(color);
+        }
+        if (role == TrackModel::kDataExportRole) {
+            return mixxx::RgbColor::toQString(color);
+        }
+        if (role == Qt::ToolTipRole || role == Qt::AccessibleTextRole ||
+                role == Qt::AccessibleDescriptionRole) {
+            if (color) {
+                return tr("Color: %1").arg(mixxx::RgbColor::toQString(*color));
+            }
+            return rawColor.isEmpty()
+                    ? tr("Color: not provided")
+                    : tr("Color: invalid value %1").arg(rawColor);
+        }
         return {};
     }
     if (index.column() == ColumnCacheState) {
@@ -344,6 +400,21 @@ QVariant RestLibraryTableModel::headerData(
             return tr("Source");
         case ColumnRemoteId:
             return tr("Remote ID");
+        case ColumnColor:
+            return tr("Color");
+        case ColumnRecommendationRank:
+            return tr("Rank");
+        }
+    }
+
+    if (role == Qt::ToolTipRole) {
+        switch (section) {
+        case ColumnColor:
+            return tr("Track color");
+        case ColumnRecommendationRank:
+            return tr("Recommendation rank; sort ascending to restore recommendation order");
+        default:
+            break;
         }
     }
 
@@ -351,6 +422,10 @@ QVariant RestLibraryTableModel::headerData(
         switch (section) {
         case ColumnCacheState:
             return 36;
+        case ColumnColor:
+            return 44;
+        case ColumnRecommendationRank:
+            return 52;
         case ColumnQuality:
             return 80;
         case ColumnBpm:
@@ -393,7 +468,8 @@ QAbstractItemDelegate* RestLibraryTableModel::delegateForColumn(
         int column,
         QObject* pParent) {
     if (column != ColumnCacheState &&
-            column != ColumnFavour && column != ColumnEnergy) {
+            column != ColumnFavour && column != ColumnEnergy &&
+            column != ColumnColor) {
         return nullptr;
     }
     auto* pTableView = qobject_cast<QTableView*>(pParent);
@@ -402,6 +478,9 @@ QAbstractItemDelegate* RestLibraryTableModel::delegateForColumn(
     }
     if (column == ColumnCacheState) {
         return new RestLibraryCacheStateDelegate(pTableView);
+    }
+    if (column == ColumnColor) {
+        return new ColorDelegate(pTableView);
     }
     return new PercentageDelegate(pTableView);
 }
@@ -511,7 +590,8 @@ const QString RestLibraryTableModel::currentSearch() const {
 
 bool RestLibraryTableModel::isColumnInternal(int column) {
     return column == ColumnRemoteId ||
-            (m_mode == Mode::Catalog && column == ColumnQuality);
+            (m_mode == Mode::Catalog &&
+                    (column == ColumnQuality || column == ColumnRecommendationRank));
 }
 
 bool RestLibraryTableModel::isColumnHiddenByDefault(int column) {
@@ -570,6 +650,12 @@ TrackModel::SortColumnId RestLibraryTableModel::sortColumnIdFromColumnIndex(int 
         return SortColumnId::Energy;
     case ColumnCacheState:
         return SortColumnId::CacheState;
+    case ColumnColor:
+        return SortColumnId::Color;
+    case ColumnRecommendationRank:
+        return m_mode == Mode::Recommendations
+                ? SortColumnId::Position
+                : SortColumnId::Invalid;
     default:
         return SortColumnId::Invalid;
     }
@@ -611,6 +697,10 @@ int RestLibraryTableModel::columnIndexFromSortColumnId(SortColumnId sortColumn) 
         return ColumnEnergy;
     case SortColumnId::CacheState:
         return ColumnCacheState;
+    case SortColumnId::Color:
+        return ColumnColor;
+    case SortColumnId::Position:
+        return m_mode == Mode::Recommendations ? ColumnRecommendationRank : -1;
     default:
         return -1;
     }
@@ -668,6 +758,14 @@ int RestLibraryTableModel::fieldIndex(const QString& fieldName) const {
     if (fieldName == QStringLiteral("energy")) {
         return ColumnEnergy;
     }
+    if (fieldName == QStringLiteral("color") ||
+            fieldName == QStringLiteral("colour")) {
+        return ColumnColor;
+    }
+    if (fieldName == QStringLiteral("recommendation_rank") ||
+            fieldName == QStringLiteral("position")) {
+        return ColumnRecommendationRank;
+    }
     if (fieldName == QStringLiteral("cache") ||
             fieldName == QStringLiteral("cache_state")) {
         return ColumnCacheState;
@@ -681,7 +779,7 @@ int RestLibraryTableModel::fieldIndex(const QString& fieldName) const {
 QString RestLibraryTableModel::modelKey(bool noSearch) const {
     QString key = m_mode == Mode::Catalog
             ? QStringLiteral("rest-library-browser")
-            : QStringLiteral("rest-library-recommendations");
+            : QStringLiteral("rest-library-recommendations-v2");
     if (!noSearch && !m_currentSearch.isEmpty()) {
         key += QStringLiteral(":") + m_currentSearch;
     }
@@ -711,6 +809,14 @@ const RestLibraryTrack* RestLibraryTableModel::trackForIndex(const QModelIndex& 
         return nullptr;
     }
     return &m_tracks.at(m_visibleRows.at(index.row()));
+}
+
+int RestLibraryTableModel::recommendationRankForIndex(const QModelIndex& index) const {
+    if (m_mode != Mode::Recommendations || !index.isValid() ||
+            index.row() < 0 || index.row() >= m_visibleRows.size()) {
+        return 0;
+    }
+    return m_recommendationRanks.value(m_visibleRows.at(index.row()));
 }
 
 QString RestLibraryTableModel::remoteIdForIndex(const QModelIndex& index) const {
@@ -786,8 +892,41 @@ QVariant RestLibraryTableModel::valueForColumn(
         return track.sourceLabel;
     case ColumnRemoteId:
         return track.remoteId;
+    case ColumnColor:
+        return mixxx::RgbColor::toQVariantString(
+                mixxx::RgbColor::fromQString(track.color.trimmed()));
+    case ColumnRecommendationRank:
+        return track.recommendationPosition > 0
+                ? QVariant(track.recommendationPosition)
+                : QVariant();
     default:
         return {};
+    }
+}
+
+void RestLibraryTableModel::rebuildRecommendationRanks() {
+    m_recommendationRanks.fill(0, m_tracks.size());
+    if (m_mode != Mode::Recommendations || m_tracks.isEmpty()) {
+        return;
+    }
+
+    QVector<int> sourceRows(m_tracks.size());
+    std::iota(sourceRows.begin(), sourceRows.end(), 0);
+    std::stable_sort(sourceRows.begin(), sourceRows.end(), [this](int lhs, int rhs) {
+        const int leftPosition = m_tracks.at(lhs).recommendationPosition;
+        const int rightPosition = m_tracks.at(rhs).recommendationPosition;
+        const bool leftValid = leftPosition > 0;
+        const bool rightValid = rightPosition > 0;
+        if (leftValid != rightValid) {
+            return leftValid;
+        }
+        if (leftValid && leftPosition != rightPosition) {
+            return leftPosition < rightPosition;
+        }
+        return false;
+    });
+    for (int i = 0; i < sourceRows.size(); ++i) {
+        m_recommendationRanks[sourceRows.at(i)] = i + 1;
     }
 }
 
@@ -824,6 +963,23 @@ void RestLibraryTableModel::rebuildVisibleRows() {
         bool leftMissing = false;
         bool rightMissing = false;
         switch (m_sortColumn) {
+        case ColumnRecommendationRank:
+            compare = m_recommendationRanks.value(lhs) -
+                    m_recommendationRanks.value(rhs);
+            break;
+        case ColumnColor: {
+            const auto leftColor = mixxx::RgbColor::fromQString(
+                    leftTrack.color.trimmed());
+            const auto rightColor = mixxx::RgbColor::fromQString(
+                    rightTrack.color.trimmed());
+            leftMissing = !leftColor.has_value();
+            rightMissing = !rightColor.has_value();
+            if (!leftMissing && !rightMissing) {
+                compare = static_cast<int>(*leftColor) -
+                        static_cast<int>(*rightColor);
+            }
+            break;
+        }
         case ColumnQuality:
             compare = leftTrack.quality < rightTrack.quality
                     ? -1

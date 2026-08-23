@@ -46,6 +46,7 @@ void PercentageDelegate::paintItem(
 
     QStyleOptionViewItem opt = option;
     setTextColor(opt, index);
+    painter->setFont(opt.font);
     painter->setPen((opt.state & QStyle::State_Selected)
                     ? opt.palette.highlightedText().color()
                     : opt.palette.text().color());

@@ -162,6 +162,49 @@ TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForAllDownloadsAndPreservesOrder)
     EXPECT_TRUE(m_pFeature->m_autoDJRemoteIds.isEmpty());
 }
 
+TEST_F(RestLibraryFeatureTest, AutoDJUsesExplicitlySortedDisplayOrder) {
+    MockNetworkReply* pPrimaryAudio = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("82")}},
+            200,
+            QByteArrayLiteral("primary audio"));
+    MockNetworkReply* pAlternateAudio = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("81")}},
+            200,
+            QByteArrayLiteral("alternate audio"));
+
+    RestLibraryTrack primary =
+            recommendation(QStringLiteral("82"), QStringLiteral("Primary"));
+    primary.artist = QStringLiteral("Zulu");
+    primary.recommendationPosition = 1;
+    RestLibraryTrack alternate =
+            recommendation(QStringLiteral("81"), QStringLiteral("Alternate"));
+    alternate.artist = QStringLiteral("Alpha");
+    alternate.recommendationPosition = 2;
+    setRecommendations({primary, alternate});
+
+    const int artistColumn =
+            m_pFeature->m_pTableModel->fieldIndex(QStringLiteral("artist"));
+    m_pFeature->m_pTableModel->sort(artistColumn, Qt::AscendingOrder);
+    ASSERT_EQ(m_pFeature->m_pTableModel->remoteIdForIndex(
+                      m_pFeature->m_pTableModel->index(0, 0)),
+            QStringLiteral("81"));
+    queueRecommendations();
+
+    pPrimaryAudio->Done(true);
+    pAlternateAudio->Done(true);
+
+    const TrackPointer pAlternate =
+            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("81"));
+    const TrackPointer pPrimary =
+            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("82"));
+    ASSERT_TRUE(pAlternate);
+    ASSERT_TRUE(pPrimary);
+    EXPECT_EQ(autoDJTrackIds(),
+            (QList<TrackId>{pAlternate->getId(), pPrimary->getId()}));
+}
+
 TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForReplayGainPreparation) {
     m_loudness.defer = true;
     MockNetworkReply* pFirstAudio = m_network.ExpectGet(
@@ -281,9 +324,13 @@ TEST_F(RestLibraryFeatureTest, UnchangedCandidatesDoNotCancelActiveAutoDJBatch) 
             {{QStringLiteral("track_id"), QStringLiteral("32")}},
             200,
             QByteArrayLiteral("second audio"));
-    const QList<RestLibraryTrack> tracks{
+    QList<RestLibraryTrack> tracks{
             recommendation(QStringLiteral("31"), QStringLiteral("First")),
             recommendation(QStringLiteral("32"), QStringLiteral("Second"))};
+    tracks[0].recommendationPosition = 1;
+    tracks[0].color = QStringLiteral("#112233");
+    tracks[1].recommendationPosition = 2;
+    tracks[1].color = QStringLiteral("#445566");
 
     setRecommendations(tracks);
     queueRecommendations();
@@ -292,11 +339,29 @@ TEST_F(RestLibraryFeatureTest, UnchangedCandidatesDoNotCancelActiveAutoDJBatch) 
 
     QList<RestLibraryTrack> updatedTracks = tracks;
     updatedTracks[0].title = QStringLiteral("Updated metadata");
+    updatedTracks[0].recommendationPosition = 2;
+    updatedTracks[0].color = QStringLiteral("#abcdef");
+    updatedTracks[1].recommendationPosition = 1;
+    updatedTracks[1].color = QStringLiteral("#fedcba");
     setRecommendations(updatedTracks);
 
     EXPECT_EQ(m_pFeature->m_autoDJRemoteIds,
             (QStringList{QStringLiteral("31"), QStringLiteral("32")}));
     EXPECT_EQ(m_pFeature->m_autoDJPendingIds.size(), 2);
+    const auto* pModel = m_pFeature->m_pTableModel.get();
+    ASSERT_NE(pModel, nullptr);
+    EXPECT_EQ(pModel->remoteIdForIndex(pModel->index(0, 0)), QStringLiteral("32"));
+    const int rankColumn = pModel->fieldIndex(QStringLiteral("recommendation_rank"));
+    EXPECT_EQ(pModel->data(pModel->index(0, rankColumn)).toString(),
+            QStringLiteral("Top"));
+    const int colorColumn = pModel->fieldIndex(QStringLiteral("color"));
+    EXPECT_EQ(pModel->data(
+                          pModel->index(0, colorColumn),
+                          TrackModel::kDataExportRole)
+                          .toString(),
+            QStringLiteral("#fedcba"));
+    EXPECT_EQ(pModel->trackForRemoteId(QStringLiteral("31")).title,
+            QStringLiteral("Updated metadata"));
     pFirstAudio->Done(true);
     pSecondAudio->Done(true);
 }
