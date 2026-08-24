@@ -28,6 +28,7 @@
 namespace {
 
 using mixxx::library::rest::RestLibraryCacheState;
+using mixxx::library::rest::RestLibraryCacheStateDelegate;
 using mixxx::library::rest::RestLibraryCacheResult;
 using mixxx::library::rest::RestLibraryTableModel;
 using mixxx::library::rest::RestLibraryTrack;
@@ -514,10 +515,10 @@ TEST_F(RestLibraryTableModelTest, CacheStateUpdatesInPlace) {
     bool modelWasReset = false;
     bool cacheCellChanged = false;
     QVector<int> changedRoles;
-    connect(&model, &QAbstractItemModel::modelReset, [&modelWasReset] {
+    QObject::connect(&model, &QAbstractItemModel::modelReset, [&modelWasReset] {
         modelWasReset = true;
     });
-    connect(&model,
+    QObject::connect(&model,
             &QAbstractItemModel::dataChanged,
             [&cacheCellChanged, &changedRoles](
                     const QModelIndex& topLeft,
