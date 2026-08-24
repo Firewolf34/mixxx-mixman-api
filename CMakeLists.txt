@@ -3028,7 +3028,7 @@ if(BUILD_TESTING)
     SOURCE src/test/dlgrestlibrary_test.cpp
     APPEND
     PROPERTY INCLUDE_DIRECTORIES
-             "$<TARGET_PROPERTY:mixxx-lib,AUTOGEN_BUILD_DIR>/include"
+             "${CMAKE_CURRENT_BINARY_DIR}/mixxx-lib_autogen/include"
   )
   target_compile_definitions(
     mixxx-test
