@@ -405,7 +405,10 @@ TEST_F(RestLibraryBrowserFeatureTest, ProviderScopeChangeAndLogoutClearCatalogIm
             {{QStringLiteral("track_id"), QStringLiteral("7")}},
             200,
             QByteArrayLiteral("account a audio"));
-    m_backend.cacheManager()->cacheTracks({accountATrack}, accountA);
+    m_backend.cacheManager()->cacheTracks(
+            {accountATrack},
+            accountA,
+            RestLibraryCacheRequestOwner::BrowserLoad);
 
     config()->setValue(
             restConfig::kBaseUrlKey,

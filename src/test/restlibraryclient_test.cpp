@@ -185,7 +185,8 @@ TEST(RestLibraryClientTest, PreservesNormalizedZeroAndRejectsInvalidNormalizedVa
                     {"id": 2},
                     {"id": 3, "favour": -0.1, "energy": 1.1},
                     {"id": 4, "favour": "0.25", "energy": "invalid"}
-                ]
+                ],
+                "next_cursor": null
             })json"),
             &valid);
 
