@@ -9,6 +9,21 @@ notes, read [deck-vps-pipeline.md](deck-vps-pipeline.md).
 
 ## Source And Build
 
+All Mixxx compilation and linking must cross an approved CI boundary. On the
+Polinaria VPS, never invoke CMake, Make, Ninja, a compiler, a linker,
+`mixxx-test`, or another heavyweight target from the interactive workspace.
+This includes a one-file compile, PCH rebuild, static-library link, focused
+test build, or reuse of an existing build directory. Those processes run
+outside the host-wide capacity lease, runner cgroup, memory ceiling, and PSI
+guard and may overlap an active Forgejo build.
+
+Use the repository-scoped `mixxx-flatpak-x86_64` runner for authorized VPS
+build work, or the configured GitHub-hosted candidate runner for an off-host
+build. The commands described as local lightweight validation are
+non-compiling checks only. If a compiler-backed check is needed and no
+non-publishing CI workflow is authorized, stop and request one; do not use the
+production VPS shell and do not publish a candidate without authorization.
+
 Forgejo is the source of truth, GitHub is an optional faster builder, and the
 official upstream remote remains the clean source for future synchronization:
 

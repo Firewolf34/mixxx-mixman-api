@@ -16,6 +16,30 @@ Polinaria promoter validates that Actions artifact and may import it into the
 same durable, GPG-signed Flatpak repository used by Coal. This does not replace
 Forgejo as source authority.
 
+## Build Execution Boundary
+
+The VPS checkout is an editing and orchestration workspace, not an interactive
+Mixxx build tree. Every C/C++/Qt compile or link counts as build work, including
+a single object, precompiled header, static library, `mixxx-test`, or focused
+test target. Do not run `cmake`, `cmake --build`, Make, Ninja, a compiler, a
+linker, or heavyweight Mixxx tests from a VPS login shell or an agent command.
+An existing build directory, cached objects, `-j1`, or a narrow target does not
+make an unmanaged build safe.
+
+The only authorized on-VPS Mixxx compilation is a Forgejo workflow child of
+`mixxx-runner.service` after the workflow acquires the host-wide capacity
+lease. That boundary supplies capacity-one admission, the runner cgroup,
+low-priority scheduling, hard memory/swap limits, preflight, and the PSI guard.
+An interactive build bypasses every one of those controls and can overlap a
+leased job, exhaust host swap, and degrade production. A configured
+GitHub-hosted candidate workflow is the approved off-host alternative.
+
+Local lightweight validation is limited to non-compiling syntax, policy,
+manifest, workflow-schema, and diff checks. If source-level validation needs a
+compiler and no authorized non-publishing workflow exists, stop and request an
+appropriate CI path. Do not improvise an unmanaged VPS build, and do not
+silently publish a candidate solely to gain build access.
+
 ## Goals
 
 - Make hot-patching Mixxx repeatable without compiling on the deck laptop.
@@ -1092,6 +1116,9 @@ When changing workflow, publisher, client, manifest, or infrastructure:
 - validate the systemd user units with `systemd-analyze verify`;
 - validate the Forgejo workflow schema;
 - run `git diff --check`;
-- perform the actual build only on the VPS runner;
+- treat any compiler, linker, CMake build-system target, or heavyweight test as
+  an actual build;
+- perform build work only through the leased VPS runner or the configured
+  GitHub-hosted candidate runner, never from the VPS workspace shell;
 - test staging before activation;
 - keep a previous verified bundle through acceptance.

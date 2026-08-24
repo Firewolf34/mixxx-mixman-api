@@ -147,6 +147,28 @@ Agent tool selection:
 - Never use Flatpak uninstall/delete-data as an update procedure.
 - Keep a verified previous bundle through acceptance.
 
+## Mixxx Compilation Boundary
+
+- For agent work, every Mixxx C/C++/Qt compilation or link is an actual build,
+  even when it targets only one translation unit, a precompiled header, a
+  static library, `mixxx-test`, or another apparently small target.
+- Never run CMake configure/build commands, Make, Ninja, a compiler, a linker,
+  or heavyweight Mixxx tests directly from an interactive shell on the
+  Polinaria VPS or another shared service host. An existing build directory,
+  cached objects, `-j1`, and a focused test filter do not make this safe.
+- VPS compilation is authorized only inside the repository-scoped Forgejo
+  runner after it acquires the host-wide capacity lease and inherits the
+  runner cgroup, low-priority settings, preflight, and PSI pressure guard. The
+  configured GitHub-hosted candidate runner is also an acceptable off-host
+  build provider.
+- A normal workspace checkout on the VPS is for source editing and the
+  explicitly non-compiling lightweight checks below. It is not a development
+  build worker. The fact that a machine is not the deck laptop is not evidence
+  that local compilation is allowed.
+- If compilation is needed but no authorized non-publishing CI path is
+  available, stop and ask for direction. Do not fall back to an unmanaged local
+  build or silently promote/publish a candidate merely to obtain validation.
+
 ## Build And Publication Invariants
 
 - Runner label is `mixxx-flatpak-x86_64`.
@@ -379,7 +401,10 @@ Agent tool selection:
    - `packaging/flatpak/deck-testing.md`;
    - `andrew/total-infra/docs/OPERATIONS.md` for server changes;
    - deck-local docs and `AGENTS.md` for changed client/safety behavior.
-5. Run lightweight validation:
+5. Run lightweight validation. Here, "lightweight" means only the listed
+   non-compiling shell, policy, manifest, workflow-schema, and diff checks. It
+   never includes CMake configuration, compilation, linking, or executing
+   `mixxx-test`, even for a single source file or focused test:
 
    ```bash
    bash -n tools/check_forgejo_action_pins.sh \
@@ -398,8 +423,10 @@ Agent tool selection:
    git diff --check
    ```
 
-6. Run actual compilation and bundle validation on a configured CI runner,
-   never on the deck laptop.
+6. Run all compilation, linking, heavyweight tests, and bundle validation on a
+   configured CI runner. On the VPS, the work must be a leased child of
+   `mixxx-runner.service`; never invoke it from the workspace shell. Never run
+   it on the deck laptop.
 7. Push the reviewed commit to `dev`, then promote that exact commit to
    `deck/candidate`, `github/candidate`, or both depending on which build is
    wanted.
