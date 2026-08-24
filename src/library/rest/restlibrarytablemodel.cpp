@@ -229,6 +229,47 @@ void RestLibraryTableModel::setTracks(QList<RestLibraryTrack> tracks) {
     endResetModel();
 }
 
+bool RestLibraryTableModel::updateTracksKeepingIdentity(
+        const QList<RestLibraryTrack>& tracks) {
+    if (tracks.size() != m_tracks.size()) {
+        return false;
+    }
+    for (int row = 0; row < tracks.size(); ++row) {
+        if (tracks.at(row).remoteId != m_tracks.at(row).remoteId) {
+            return false;
+        }
+    }
+
+    const QModelIndexList persistentIndexes = persistentIndexList();
+    QVector<int> persistentSourceRows;
+    persistentSourceRows.reserve(persistentIndexes.size());
+    for (const QModelIndex& index : persistentIndexes) {
+        persistentSourceRows.push_back(
+                index.isValid() ? m_visibleRows.value(index.row(), -1) : -1);
+    }
+
+    emit layoutAboutToBeChanged();
+    m_tracks = tracks;
+    rebuildRecommendationRanks();
+    rebuildVisibleRows();
+
+    QModelIndexList updatedIndexes;
+    updatedIndexes.reserve(persistentIndexes.size());
+    for (int i = 0; i < persistentIndexes.size(); ++i) {
+        const int visibleRow = m_visibleRows.indexOf(persistentSourceRows.at(i));
+        updatedIndexes.append(visibleRow >= 0
+                        ? index(visibleRow, persistentIndexes.at(i).column())
+                        : QModelIndex());
+    }
+    changePersistentIndexList(persistentIndexes, updatedIndexes);
+    emit layoutChanged();
+
+    if (rowCount() > 0 && columnCount() > 0) {
+        emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1));
+    }
+    return true;
+}
+
 void RestLibraryTableModel::setCacheIdentity(const QString& cacheIdentity) {
     if (m_cacheIdentity == cacheIdentity) {
         return;

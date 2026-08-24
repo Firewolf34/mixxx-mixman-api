@@ -1419,7 +1419,9 @@ void RestLibraryFeature::setRecommendationTracks(const QList<RestLibraryTrack>& 
             track.cacheStatusCode = currentTrack.cacheStatusCode;
             track.cacheNetworkError = currentTrack.cacheNetworkError;
         }
-        m_pTableModel->setTracks(std::move(refreshedTracks));
+        if (!m_pTableModel->updateTracksKeepingIdentity(refreshedTracks)) {
+            m_pTableModel->setTracks(std::move(refreshedTracks));
+        }
         double qualityTotal = 0.0;
         int qualityCount = 0;
         for (const auto& track : tracks) {

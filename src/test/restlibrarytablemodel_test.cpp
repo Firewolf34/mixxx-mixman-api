@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QImage>
 #include <QIODevice>
+#include <QItemSelectionModel>
 #include <QPainter>
 #include <QPersistentModelIndex>
 #include <QStyleOptionViewItem>
@@ -66,6 +67,34 @@ TEST_F(RestLibraryTableModelTest, ExposesRowsAndKeepsLoadCapabilitiesDisabled) {
     EXPECT_FALSE(model.hasCapabilities(TrackModel::Capability::LoadToDeck));
     EXPECT_FALSE(model.getTrack(model.index(0, 0)));
     EXPECT_TRUE(model.getTrackLocation(model.index(0, 0)).isEmpty());
+}
+
+TEST_F(RestLibraryTableModelTest, SameIdentityUpdatePreservesSelectedRemoteTrack) {
+    RestLibraryTableModel model(nullptr, trackCollectionManager());
+    model.setTracks({
+            newTrack(QStringLiteral("1"), QStringLiteral("Beta"), QStringLiteral("First")),
+            newTrack(QStringLiteral("2"), QStringLiteral("Alpha"), QStringLiteral("Second")),
+    });
+    const int artistColumn = model.fieldIndex(QStringLiteral("artist"));
+    model.sort(artistColumn, Qt::AscendingOrder);
+
+    QItemSelectionModel selectionModel(&model);
+    const QModelIndex selectedIndex = model.index(1, artistColumn);
+    ASSERT_EQ(model.remoteIdForIndex(selectedIndex), QStringLiteral("1"));
+    selectionModel.setCurrentIndex(selectedIndex,
+            QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+
+    ASSERT_TRUE(model.updateTracksKeepingIdentity({
+            newTrack(QStringLiteral("1"), QStringLiteral("Aardvark"), QStringLiteral("Updated")),
+            newTrack(QStringLiteral("2"), QStringLiteral("Zulu"), QStringLiteral("Second")),
+    }));
+
+    ASSERT_TRUE(selectionModel.currentIndex().isValid());
+    EXPECT_EQ(model.remoteIdForIndex(selectionModel.currentIndex()), QStringLiteral("1"));
+    EXPECT_EQ(selectionModel.currentIndex().row(), 0);
+    EXPECT_TRUE(selectionModel.isRowSelected(0, QModelIndex()));
+    EXPECT_EQ(model.data(model.index(0, artistColumn)).toString(),
+            QStringLiteral("Aardvark"));
 }
 
 TEST_F(RestLibraryTableModelTest, EnablesLoadCapabilitiesWhenCacheIsConfigured) {

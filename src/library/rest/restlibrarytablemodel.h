@@ -35,6 +35,7 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
     ~RestLibraryTableModel() override;
 
     void setTracks(QList<RestLibraryTrack> tracks);
+    bool updateTracksKeepingIdentity(const QList<RestLibraryTrack>& tracks);
     void setCacheIdentity(const QString& cacheIdentity);
     void setCacheLoadCapabilitiesEnabled(bool enabled);
     void updateTrackCacheState(const RestLibraryCacheResult& result);
