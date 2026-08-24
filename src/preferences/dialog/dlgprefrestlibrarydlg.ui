@@ -241,6 +241,35 @@
     </widget>
    </item>
    <item>
+    <widget class="QGroupBox" name="groupBoxDjNotes">
+     <property name="title">
+      <string>DJ Note Presets</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayoutDjNotes">
+      <item>
+       <widget class="QLabel" name="labelDjNotePresets">
+        <property name="text">
+         <string>One quick warning per line (up to 20). These are appended in the REST Library DJ Note dialog.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPlainTextEdit" name="plainTextEditDjNotePresets">
+        <property name="maximumHeight">
+         <number>110</number>
+        </property>
+        <property name="placeholderText">
+         <string>Bad intro or transition at start.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QGroupBox" name="groupBoxApiPaths">
      <property name="title">
       <string>Advanced API Paths</string>

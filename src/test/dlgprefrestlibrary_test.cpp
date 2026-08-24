@@ -71,6 +71,9 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     config()->setValue(restConfig::kCacheMaxMegabytesKey, 512);
     config()->setValue(restConfig::kCacheMaxAgeDaysKey, 10);
     config()->setValue(restConfig::kMaxConcurrentDownloadsKey, 3);
+    config()->setValue(
+            restConfig::kDjNotePresetsKey,
+            QStringLiteral("Bad intro\nAudio issue"));
 
     DlgPrefRestLibrary page(nullptr, config(), &credentialStore);
 
@@ -96,6 +99,8 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     auto* pCacheMaxAgeDays = requireChild<QSpinBox>(&page, "spinBoxCacheMaxAgeDays");
     auto* pMaxConcurrentDownloads =
             requireChild<QSpinBox>(&page, "spinBoxMaxConcurrentDownloads");
+    auto* pDjNotePresets =
+            requireChild<QPlainTextEdit>(&page, "plainTextEditDjNotePresets");
 
     EXPECT_TRUE(pEnabled->isChecked());
     EXPECT_EQ(pBaseUrl->text(), QStringLiteral("https://example.com/api"));
@@ -117,6 +122,7 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     EXPECT_EQ(pCacheMaxMegabytes->value(), 512);
     EXPECT_EQ(pCacheMaxAgeDays->value(), 10);
     EXPECT_EQ(pMaxConcurrentDownloads->value(), 3);
+    EXPECT_EQ(pDjNotePresets->toPlainText(), QStringLiteral("Bad intro\nAudio issue"));
 
     pBaseUrl->setText(QStringLiteral("https://new.example.test"));
     pToken->setText(QStringLiteral("new-token"));
@@ -137,6 +143,7 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     pCacheMaxMegabytes->setValue(1024);
     pCacheMaxAgeDays->setValue(20);
     pMaxConcurrentDownloads->setValue(4);
+    pDjNotePresets->setPlainText(QStringLiteral(" Warning \nwarning\nMetadata"));
 
     page.slotApply();
 
@@ -175,6 +182,8 @@ TEST_F(DlgPrefRestLibraryTest, LoadsAndAppliesSettings) {
     EXPECT_EQ(config()->getValue(restConfig::kCacheMaxMegabytesKey, 0), 1024);
     EXPECT_EQ(config()->getValue(restConfig::kCacheMaxAgeDaysKey, 0), 20);
     EXPECT_EQ(config()->getValue(restConfig::kMaxConcurrentDownloadsKey, 0), 4);
+    EXPECT_EQ(config()->getValueString(restConfig::kDjNotePresetsKey),
+            QStringLiteral("Warning\nMetadata"));
 }
 
 TEST_F(DlgPrefRestLibraryTest, ResetToDefaultsRestoresDefaultValues) {
@@ -202,6 +211,10 @@ TEST_F(DlgPrefRestLibraryTest, ResetToDefaultsRestoresDefaultValues) {
             requireChild<QSpinBox>(&page, "spinBoxMixManPathDepth")->value(),
             restConfig::kDefaultMixManPathDepth);
     EXPECT_TRUE(requireChild<QCheckBox>(&page, "checkBoxMixManAdminApprovedOnly")->isChecked());
+    EXPECT_EQ(
+            requireChild<QPlainTextEdit>(&page, "plainTextEditDjNotePresets")
+                    ->toPlainText(),
+            restConfig::defaultDjNotePresets().join(QLatin1Char('\n')));
     EXPECT_EQ(
             requireChild<QLineEdit>(&page, "lineEditCacheDirectory")->text(),
             restConfig::defaultCacheDirectoryPath(config()));

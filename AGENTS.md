@@ -304,6 +304,13 @@ Agent tool selection:
   abort on timeout and rely on server expiry. Catalog refreshes must enforce
   configured positive page and unique-track limits, warn visibly when reached,
   and retain the prior completed catalog.
+- Treat MixMan track maintenance as authenticated, credential-scoped catalog
+  state. Enable favour and DJ-note writes only from a current schema-1 native
+  capability document, and return-to-review only with its administrator
+  capability. Serialize writes, coalesce favour clicks from confirmed server
+  values, never infer recommendation outcomes, never log DJ-note contents, and
+  never stop playback or delete cache artifacts when a catalog row returns to
+  review.
 
 - Default manifest:
   `https://forge.polinaria.world/artifacts/latest.json`

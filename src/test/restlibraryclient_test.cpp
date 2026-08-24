@@ -17,6 +17,9 @@ using mixxx::library::rest::RestLibraryClient;
 using mixxx::library::rest::RestLibraryCatalogPage;
 using mixxx::library::rest::RestLibraryRequestDiagnostic;
 using mixxx::library::rest::RestLibrarySettings;
+using mixxx::library::rest::RestLibraryMutationMetadata;
+using mixxx::library::rest::RestLibraryTrackMutation;
+using mixxx::library::rest::RestLibraryTrackMutationResult;
 
 RestLibrarySettings newSettings() {
     RestLibrarySettings settings;
@@ -157,6 +160,7 @@ TEST(RestLibraryClientTest, ParsesHydratedCatalogPage) {
                     "artist": "Ada",
                     "dj_rating": 4.4,
                     "play_count": 9,
+                    "dj_comment": "Watch the intro",
                     "favour": 0.75,
                     "energy": 0.6
                 }],
@@ -169,6 +173,7 @@ TEST(RestLibraryClientTest, ParsesHydratedCatalogPage) {
     EXPECT_EQ(page.tracks.constFirst().remoteId, QStringLiteral("7"));
     EXPECT_EQ(page.tracks.constFirst().rating, 4);
     EXPECT_EQ(page.tracks.constFirst().playCount, 9);
+    EXPECT_EQ(page.tracks.constFirst().djComment, QStringLiteral("Watch the intro"));
     ASSERT_TRUE(page.tracks.constFirst().favour.has_value());
     ASSERT_TRUE(page.tracks.constFirst().energy.has_value());
     EXPECT_DOUBLE_EQ(*page.tracks.constFirst().favour, 0.75);
@@ -645,6 +650,157 @@ TEST(RestLibraryClientTest, HydratesAuthoritativeCandidatesFromNestedTrackMap) {
     EXPECT_DOUBLE_EQ(track.transitionRisk, 0.1);
     EXPECT_DOUBLE_EQ(track.transitionFit, 0.9);
     EXPECT_EQ(track.reasonCodes, QStringList({QStringLiteral("harmonic")}));
+}
+
+TEST(RestLibraryClientTest, FetchesTrackMutationCapabilitiesAndConfiguredFavourStep) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy metadataSpy(
+            &client, &RestLibraryClient::trackMutationMetadataFetched);
+    MockNetworkReply* pCapabilities = network.ExpectGet(
+            QStringLiteral("/auth/capabilities"),
+            {},
+            200,
+            R"json({"schema_version":1,"capabilities":["library.track.favour.write","library.track.dj_comment.write","library.track.return_to_review"]})json");
+    MockNetworkReply* pConfig = network.ExpectGet(
+            QStringLiteral("/config"),
+            {},
+            200,
+            R"json({"track_favour_feedback_step":0.6})json");
+
+    RestLibrarySettings settings = newMixManSettings();
+    settings.trackDetailPathTemplate = QStringLiteral("/tracks/%1");
+    client.fetchTrackMutationMetadata(settings);
+    pCapabilities->Done(true);
+    pConfig->Done(true);
+
+    ASSERT_EQ(metadataSpy.count(), 1);
+    const auto metadata = qvariant_cast<RestLibraryMutationMetadata>(
+            metadataSpy.takeFirst().at(0));
+    EXPECT_TRUE(metadata.valid);
+    EXPECT_TRUE(metadata.mayWriteFavour);
+    EXPECT_TRUE(metadata.mayWriteDjComment);
+    EXPECT_TRUE(metadata.mayReturnToReview);
+    EXPECT_DOUBLE_EQ(metadata.favourStep, 0.6);
+}
+
+TEST(RestLibraryClientTest, InvalidCapabilityDocumentKeepsMutationsReadOnly) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy metadataSpy(
+            &client, &RestLibraryClient::trackMutationMetadataFetched);
+    MockNetworkReply* pCapabilities = network.ExpectGet(
+            QStringLiteral("/auth/capabilities"),
+            {},
+            200,
+            R"json({"schema_version":2,"capabilities":["library.track.favour.write"]})json");
+
+    client.fetchTrackMutationMetadata(newMixManSettings());
+    pCapabilities->Done(true);
+
+    ASSERT_EQ(metadataSpy.count(), 1);
+    const auto metadata = qvariant_cast<RestLibraryMutationMetadata>(
+            metadataSpy.takeFirst().at(0));
+    EXPECT_FALSE(metadata.valid);
+    EXPECT_FALSE(metadata.mayWriteFavour);
+    EXPECT_DOUBLE_EQ(
+            metadata.favourStep,
+            mixxx::library::rest::config::kDefaultFavourFeedbackStep);
+}
+
+TEST(RestLibraryClientTest, MalformedCapabilityArrayKeepsMutationsReadOnly) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy metadataSpy(
+            &client, &RestLibraryClient::trackMutationMetadataFetched);
+    MockNetworkReply* pCapabilities = network.ExpectGet(
+            QStringLiteral("/auth/capabilities"),
+            {},
+            200,
+            R"json({"schema_version":1,"capabilities":["library.track.favour.write",7]})json");
+
+    client.fetchTrackMutationMetadata(newMixManSettings());
+    pCapabilities->Done(true);
+
+    ASSERT_EQ(metadataSpy.count(), 1);
+    const auto metadata = qvariant_cast<RestLibraryMutationMetadata>(
+            metadataSpy.takeFirst().at(0));
+    EXPECT_FALSE(metadata.valid);
+    EXPECT_FALSE(metadata.mayWriteFavour);
+}
+
+TEST(RestLibraryClientTest, UpdatesFavourWithoutRecommendationOutcome) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy mutationSpy(&client, &RestLibraryClient::trackMutationFinished);
+    MockNetworkReply* pReply = network.ExpectPut(
+            QStringLiteral("/tracks/42"),
+            {},
+            {QStringLiteral("\"favour\":0.56")},
+            200,
+            R"json({"id":42,"title":"Updated","genre":"House","favour":0.56})json");
+    RestLibrarySettings settings = newMixManSettings();
+    settings.trackDetailPathTemplate = QStringLiteral("/tracks/%1");
+
+    client.updateTrackMetadata(
+            settings,
+            QStringLiteral("42"),
+            {{QStringLiteral("favour"), 0.56}},
+            RestLibraryTrackMutation::Favour);
+    pReply->Done(true);
+
+    ASSERT_EQ(mutationSpy.count(), 1);
+    const auto result = qvariant_cast<RestLibraryTrackMutationResult>(
+            mutationSpy.takeFirst().at(0));
+    EXPECT_TRUE(result.success);
+    EXPECT_EQ(result.mutation, RestLibraryTrackMutation::Favour);
+    ASSERT_TRUE(result.track.favour.has_value());
+    EXPECT_DOUBLE_EQ(*result.track.favour, 0.56);
+}
+
+TEST(RestLibraryClientTest, SavesDjCommentAndReturnsTrackToReview) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy mutationSpy(&client, &RestLibraryClient::trackMutationFinished);
+    RestLibrarySettings settings = newMixManSettings();
+    settings.trackDetailPathTemplate = QStringLiteral("/tracks/%1");
+    MockNetworkReply* pNoteReply = network.ExpectPut(
+            QStringLiteral("/tracks/7"),
+            {},
+            {QStringLiteral("\"dj_comment\":\"Bad intro\"")},
+            200,
+            R"json({"id":7,"title":"Needs Work","genre":"House","dj_comment":"Bad intro"})json");
+
+    client.updateTrackMetadata(
+            settings,
+            QStringLiteral("7"),
+            {{QStringLiteral("dj_comment"), QStringLiteral("Bad intro")}},
+            RestLibraryTrackMutation::DjComment);
+    pNoteReply->Done(true);
+
+    ASSERT_EQ(mutationSpy.count(), 1);
+    auto result = qvariant_cast<RestLibraryTrackMutationResult>(
+            mutationSpy.takeFirst().at(0));
+    EXPECT_TRUE(result.success);
+    EXPECT_EQ(result.track.djComment, QStringLiteral("Bad intro"));
+
+    MockNetworkReply* pReviewReply = network.ExpectPost(
+            QStringLiteral("/admin/tracks/7/return-to-review"),
+            {},
+            {QStringLiteral("\"reason\":\"Bad transition\"")},
+            {QStringLiteral("clear_fields")},
+            200,
+            R"json({"status":"moved","track_id":7,"hash_id":"review-hash"})json");
+    client.returnTrackToReview(
+            settings, QStringLiteral("7"), QStringLiteral("Bad transition"));
+    pReviewReply->Done(true);
+
+    ASSERT_EQ(mutationSpy.count(), 1);
+    result = qvariant_cast<RestLibraryTrackMutationResult>(
+            mutationSpy.takeFirst().at(0));
+    EXPECT_TRUE(result.success);
+    EXPECT_EQ(result.mutation, RestLibraryTrackMutation::ReturnToReview);
+    EXPECT_EQ(result.reviewHash, QStringLiteral("review-hash"));
 }
 
 TEST(RestLibraryClientTest, FetchesTrackListWithMockNetworkAccessManager) {

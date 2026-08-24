@@ -93,6 +93,7 @@ QStringList searchableFields(const RestLibraryTrack& track) {
             track.genre,
             track.composer,
             track.comment,
+            track.djComment,
             track.keyText,
             track.sourceLabel,
             track.moveType,
@@ -268,6 +269,55 @@ bool RestLibraryTableModel::updateTracksKeepingIdentity(
         emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1));
     }
     return true;
+}
+
+bool RestLibraryTableModel::updateTrackMetadata(
+        const RestLibraryTrack& updatedTrack) {
+    for (int row = 0; row < m_tracks.size(); ++row) {
+        const RestLibraryTrack& current = m_tracks.at(row);
+        if (current.remoteId != updatedTrack.remoteId) {
+            continue;
+        }
+        RestLibraryTrack merged = updatedTrack;
+        merged.cacheState = current.cacheState;
+        merged.cachedFilePath = current.cachedFilePath;
+        merged.cacheError = current.cacheError;
+        merged.cacheStatusCode = current.cacheStatusCode;
+        merged.cacheNetworkError = current.cacheNetworkError;
+        merged.quality = current.quality;
+        merged.score = current.score;
+        merged.transitionFit = current.transitionFit;
+        merged.transitionRisk = current.transitionRisk;
+        merged.targetDistance = current.targetDistance;
+        merged.targetImprovement = current.targetImprovement;
+        merged.recommendationEventId = current.recommendationEventId;
+        merged.recommendationItemId = current.recommendationItemId;
+        merged.recommendationPosition = current.recommendationPosition;
+        merged.planned = current.planned;
+        merged.mode = current.mode;
+        merged.fallbackMode = current.fallbackMode;
+        merged.moveType = current.moveType;
+        merged.region = current.region;
+        merged.reasonCodes = current.reasonCodes;
+        QList<RestLibraryTrack> tracks = m_tracks;
+        tracks[row] = std::move(merged);
+        setTracks(std::move(tracks));
+        return true;
+    }
+    return false;
+}
+
+bool RestLibraryTableModel::removeTrack(const QString& remoteId) {
+    for (int row = 0; row < m_tracks.size(); ++row) {
+        if (m_tracks.at(row).remoteId != remoteId) {
+            continue;
+        }
+        QList<RestLibraryTrack> tracks = m_tracks;
+        tracks.removeAt(row);
+        setTracks(std::move(tracks));
+        return true;
+    }
+    return false;
 }
 
 void RestLibraryTableModel::setCacheIdentity(const QString& cacheIdentity) {

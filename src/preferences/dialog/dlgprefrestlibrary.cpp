@@ -222,6 +222,8 @@ void DlgPrefRestLibrary::slotUpdate() {
     m_pUi->lineEditMixManSessionId->setText(settings.mixManSessionId);
     m_pUi->spinBoxMixManPathDepth->setValue(settings.mixManPathDepth);
     m_pUi->checkBoxMixManAdminApprovedOnly->setChecked(settings.mixManAdminApprovedOnly);
+    m_pUi->plainTextEditDjNotePresets->setPlainText(
+            settings.djNotePresets.join(QLatin1Char('\n')));
     m_pUi->lineEditTrackListPath->setText(
             m_pConfig->getValueString(restConfig::kTrackListPathKey));
     m_pUi->lineEditTrackDetailPathTemplate->setText(
@@ -268,6 +270,8 @@ void DlgPrefRestLibrary::slotResetToDefaults() {
     m_pUi->spinBoxMixManPathDepth->setValue(restConfig::kDefaultMixManPathDepth);
     m_pUi->checkBoxMixManAdminApprovedOnly->setChecked(
             restConfig::kDefaultMixManAdminApprovedOnly);
+    m_pUi->plainTextEditDjNotePresets->setPlainText(
+            restConfig::defaultDjNotePresets().join(QLatin1Char('\n')));
     m_pUi->lineEditTrackListPath->clear();
     m_pUi->lineEditTrackDetailPathTemplate->clear();
     m_pUi->lineEditTrackLookupPathTemplate->clear();
@@ -551,6 +555,8 @@ RestLibrarySettings DlgPrefRestLibrary::settingsFromUi() const {
     settings.mixManSessionId = m_pUi->lineEditMixManSessionId->text().trimmed();
     settings.mixManPathDepth = m_pUi->spinBoxMixManPathDepth->value();
     settings.mixManAdminApprovedOnly = m_pUi->checkBoxMixManAdminApprovedOnly->isChecked();
+    settings.djNotePresets = restConfig::normalizeDjNotePresets(
+            m_pUi->plainTextEditDjNotePresets->toPlainText().split(QLatin1Char('\n')));
     settings.recommendationLimit = m_pUi->spinBoxRecommendationLimit->value();
     if (settings.useMixManDefaults) {
         settings.trackListPath = restConfig::mixManTrackListPath();
@@ -675,6 +681,12 @@ bool DlgPrefRestLibrary::writeSettings() {
     m_pConfig->setValue(
             restConfig::kMixManAdminApprovedOnlyKey,
             m_pUi->checkBoxMixManAdminApprovedOnly->isChecked());
+    m_pConfig->setValue(
+            restConfig::kDjNotePresetsKey,
+            restConfig::normalizeDjNotePresets(
+                    m_pUi->plainTextEditDjNotePresets->toPlainText().split(
+                            QLatin1Char('\n')))
+                    .join(QLatin1Char('\n')));
     m_pConfig->setValue(
             restConfig::kTrackListPathKey,
             m_pUi->lineEditTrackListPath->text().trimmed());

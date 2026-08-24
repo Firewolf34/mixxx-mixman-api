@@ -1,7 +1,9 @@
 #include "library/rest/restlibrarybrowserfeature.h"
 
 #include <algorithm>
+#include <cmath>
 
+#include <QJsonObject>
 #include <QMenu>
 #include <utility>
 
@@ -83,6 +85,14 @@ RestLibraryBrowserFeature::RestLibraryBrowserFeature(
             &RestLibraryCatalogProvider::mediaStateChanged,
             this,
             &RestLibraryBrowserFeature::slotTrackCacheStateChanged);
+    connect(m_pCatalogProvider,
+            &RestLibraryCatalogProvider::mutationMetadataFetched,
+            this,
+            &RestLibraryBrowserFeature::slotMutationMetadataFetched);
+    connect(m_pCatalogProvider,
+            &RestLibraryCatalogProvider::trackMutationFinished,
+            this,
+            &RestLibraryBrowserFeature::slotTrackMutationFinished);
     if (m_pLoudnessManager) {
         connect(m_pLoudnessManager,
                 &RestLibraryLoudnessManager::trackLoudnessPrepared,
@@ -149,6 +159,22 @@ void RestLibraryBrowserFeature::bindLibraryWidget(
             &DlgRestLibraryBrowser::trackSelected,
             this,
             &RestLibraryBrowserFeature::trackSelected);
+    connect(m_pView,
+            &DlgRestLibraryBrowser::favourBumpRequested,
+            this,
+            &RestLibraryBrowserFeature::slotFavourBumpRequested);
+    connect(m_pView,
+            &DlgRestLibraryBrowser::djNoteRequested,
+            this,
+            &RestLibraryBrowserFeature::slotDjNoteRequested);
+    connect(m_pView,
+            &DlgRestLibraryBrowser::returnToReviewRequested,
+            this,
+            &RestLibraryBrowserFeature::slotReturnToReviewRequested);
+    connect(m_pView,
+            &DlgRestLibraryBrowser::selectedRemoteIdsChanged,
+            this,
+            &RestLibraryBrowserFeature::updateMaintenanceControls);
     connect(this,
             &RestLibraryBrowserFeature::statusTextChanged,
             m_pView,
@@ -156,6 +182,7 @@ void RestLibraryBrowserFeature::bindLibraryWidget(
     if (!m_statusText.isEmpty()) {
         emit statusTextChanged(m_statusText);
     }
+    updateMaintenanceControls();
 }
 
 void RestLibraryBrowserFeature::activate() {
@@ -169,6 +196,7 @@ void RestLibraryBrowserFeature::activate() {
     const RestLibraryCatalogContext context = m_pCatalogProvider->context();
     resetIfContextChanged(context);
     updateLoadCapabilities(context);
+    refreshMutationMetadata(context);
     if (!m_catalogLoaded && !m_refreshing) {
         slotRefresh();
     }
@@ -181,13 +209,18 @@ void RestLibraryBrowserFeature::onRightClick(const QPoint& globalPos) {
 }
 
 void RestLibraryBrowserFeature::slotRefresh() {
+    if (m_mutationBusy) {
+        return;
+    }
     const RestLibraryCatalogContext context = m_pCatalogProvider->context();
     resetIfContextChanged(context);
     updateLoadCapabilities(context);
+    refreshMutationMetadata(context);
     if (!context.configured) {
         m_pCatalogProvider->cancelPageFetch();
         m_refreshing = false;
         m_pRefreshAction->setEnabled(true);
+        updateMaintenanceControls();
         clearPendingIntents();
         setStatusText(tr("Configure a REST Library catalog provider in Preferences."));
         return;
@@ -200,6 +233,7 @@ void RestLibraryBrowserFeature::slotRefresh() {
     m_refreshContext = context;
     m_refreshing = true;
     m_pRefreshAction->setEnabled(false);
+    updateMaintenanceControls();
     setStatusText(tr("Loading REST Library catalog…"));
     requestNextCatalogPage({});
 }
@@ -282,6 +316,7 @@ void RestLibraryBrowserFeature::slotCatalogPageFetched(
     m_catalogLoaded = true;
     m_refreshing = false;
     m_pRefreshAction->setEnabled(true);
+    updateMaintenanceControls();
     updateStatusSummary();
 }
 
@@ -303,6 +338,7 @@ void RestLibraryBrowserFeature::slotCatalogFetchFailed(
     }
     m_refreshing = false;
     m_pRefreshAction->setEnabled(true);
+    updateMaintenanceControls();
     m_stagingTracks.clear();
     m_stagingRemoteIds.clear();
     m_seenCursors.clear();
@@ -462,6 +498,266 @@ void RestLibraryBrowserFeature::slotUnresolvedTracksAddToAutoDJ(
                               .arg(tracksToCache.size()));
     }
     finishAutoDJIfReady();
+}
+
+QString RestLibraryBrowserFeature::selectedRemoteId() const {
+    if (!m_pView) {
+        return {};
+    }
+    const QStringList remoteIds = m_pView->selectedRemoteIds();
+    return remoteIds.size() == 1 ? remoteIds.constFirst() : QString();
+}
+
+void RestLibraryBrowserFeature::slotFavourBumpRequested(int direction) {
+    direction = direction < 0 ? -1 : 1;
+    const QString remoteId = selectedRemoteId();
+    if (remoteId.isEmpty()) {
+        return;
+    }
+    if (m_mutationBusy) {
+        if (m_activeMutation == RestLibraryTrackMutation::Favour &&
+                remoteId == m_mutatingRemoteId) {
+            m_queuedFavourSteps += direction;
+            setStatusText(m_queuedFavourSteps == 0
+                            ? tr("Favour update in progress.")
+                            : tr("Favour update in progress; queued net change: %1.")
+                                      .arg(m_queuedFavourSteps));
+        }
+        return;
+    }
+    startFavourMutation(remoteId, direction);
+}
+
+void RestLibraryBrowserFeature::startFavourMutation(
+        const QString& remoteId,
+        int stepCount) {
+    if (!m_mutationMetadata.valid ||
+            !m_mutationMetadata.mayWriteFavour || stepCount == 0) {
+        updateMaintenanceControls();
+        return;
+    }
+    const RestLibraryTrack track = m_pTableModel->trackForRemoteId(remoteId);
+    if (track.remoteId.isEmpty()) {
+        return;
+    }
+    const double currentDisplayFavour =
+            (track.favour.has_value() ? *track.favour : 0.5) * 5.0;
+    const double targetDisplayFavour = std::clamp(
+            currentDisplayFavour +
+                    stepCount * m_mutationMetadata.favourStep,
+            0.0,
+            5.0);
+    if (qFuzzyCompare(currentDisplayFavour + 1.0, targetDisplayFavour + 1.0)) {
+        setStatusText(targetDisplayFavour <= 0.0
+                        ? tr("Favour is already at its minimum.")
+                        : tr("Favour is already at its maximum."));
+        return;
+    }
+
+    m_mutationContext = m_pCatalogProvider->context();
+    m_mutatingRemoteId = remoteId;
+    m_activeMutation = RestLibraryTrackMutation::Favour;
+    m_mutationBusy = true;
+    updateMaintenanceControls();
+    setStatusText(tr("Updating track favour…"));
+    m_pCatalogProvider->updateTrackMetadata(
+            m_mutationContext,
+            remoteId,
+            {{QStringLiteral("favour"), targetDisplayFavour / 5.0}},
+            RestLibraryTrackMutation::Favour);
+}
+
+void RestLibraryBrowserFeature::slotDjNoteRequested() {
+    if (m_mutationBusy || !m_pView ||
+            !m_mutationMetadata.valid ||
+            !m_mutationMetadata.mayWriteDjComment) {
+        return;
+    }
+    const QString remoteId = selectedRemoteId();
+    const RestLibraryTrack track = m_pTableModel->trackForRemoteId(remoteId);
+    if (track.remoteId.isEmpty()) {
+        return;
+    }
+    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    const std::optional<QString> note =
+            m_pView->editDjNote(track, settings.djNotePresets);
+    if (!note.has_value()) {
+        return;
+    }
+    m_mutationContext = m_pCatalogProvider->context();
+    m_mutatingRemoteId = remoteId;
+    m_activeMutation = RestLibraryTrackMutation::DjComment;
+    m_mutationBusy = true;
+    updateMaintenanceControls();
+    setStatusText(tr("Saving DJ note…"));
+    m_pCatalogProvider->updateTrackMetadata(
+            m_mutationContext,
+            remoteId,
+            {{QStringLiteral("dj_comment"), note->left(config::kMaxDjNoteLength)}},
+            RestLibraryTrackMutation::DjComment);
+}
+
+void RestLibraryBrowserFeature::slotReturnToReviewRequested() {
+    if (m_mutationBusy || !m_pView ||
+            !m_mutationMetadata.valid ||
+            !m_mutationMetadata.mayReturnToReview) {
+        return;
+    }
+    const QString remoteId = selectedRemoteId();
+    const RestLibraryTrack track = m_pTableModel->trackForRemoteId(remoteId);
+    if (track.remoteId.isEmpty()) {
+        return;
+    }
+    const std::optional<QString> reason =
+            m_pView->confirmReturnToReview(track);
+    if (!reason.has_value()) {
+        return;
+    }
+    m_mutationContext = m_pCatalogProvider->context();
+    m_mutatingRemoteId = remoteId;
+    m_activeMutation = RestLibraryTrackMutation::ReturnToReview;
+    m_mutationBusy = true;
+    updateMaintenanceControls();
+    setStatusText(tr("Returning track to review…"));
+    m_pCatalogProvider->returnTrackToReview(
+            m_mutationContext,
+            remoteId,
+            reason->left(config::kMaxDjNoteLength));
+}
+
+void RestLibraryBrowserFeature::refreshMutationMetadata(
+        const RestLibraryCatalogContext& context) {
+    if (!m_pView) {
+        return;
+    }
+    if (!context.configured) {
+        m_mutationMetadata = {};
+        m_mutationMetadataScopeIdentity.clear();
+        m_mutationMetadataLoading = false;
+        updateMaintenanceControls();
+        return;
+    }
+    if (m_mutationMetadataLoading ||
+            (m_mutationMetadata.valid &&
+                    m_mutationMetadataScopeIdentity == context.scopeIdentity)) {
+        return;
+    }
+    m_mutationMetadata = {};
+    m_mutationMetadata.favourStep = config::kDefaultFavourFeedbackStep;
+    m_mutationMetadataScopeIdentity.clear();
+    m_mutationMetadataLoading = true;
+    updateMaintenanceControls();
+    m_pCatalogProvider->fetchMutationMetadata(context);
+}
+
+void RestLibraryBrowserFeature::slotMutationMetadataFetched(
+        const QString& scopeIdentity,
+        const RestLibraryMutationMetadata& metadata) {
+    if (scopeIdentity != m_pCatalogProvider->context().scopeIdentity) {
+        return;
+    }
+    m_mutationMetadataLoading = false;
+    m_mutationMetadata = metadata;
+    m_mutationMetadataScopeIdentity = scopeIdentity;
+    // Capabilities are dynamic but do not change catalog identity. Publish the
+    // provider's current snapshot so a later activation does not reset rows.
+    m_currentContext = m_pCatalogProvider->context();
+    updateLoadCapabilities(m_currentContext);
+    updateMaintenanceControls();
+}
+
+void RestLibraryBrowserFeature::slotTrackMutationFinished(
+        const QString& scopeIdentity,
+        const RestLibraryTrackMutationResult& result) {
+    if (!m_mutationBusy || scopeIdentity != m_mutationContext.scopeIdentity ||
+            result.remoteId != m_mutatingRemoteId ||
+            result.mutation != m_activeMutation) {
+        return;
+    }
+
+    const QStringList selectedRemoteIds =
+            m_pView ? m_pView->selectedRemoteIds() : QStringList{};
+    if (!result.success) {
+        m_queuedFavourSteps = 0;
+        m_mutationBusy = false;
+        m_mutatingRemoteId.clear();
+        setStatusText(result.errorText.isEmpty()
+                        ? tr("REST Library track update failed.")
+                        : result.errorText);
+        updateMaintenanceControls();
+        return;
+    }
+
+    if (result.mutation == RestLibraryTrackMutation::ReturnToReview) {
+        m_pTableModel->removeTrack(result.remoteId);
+        if (m_pView) {
+            m_pView->restoreSelectedRemoteIds(selectedRemoteIds);
+        }
+        m_mutationBusy = false;
+        m_mutatingRemoteId.clear();
+        setStatusText(result.reviewHash.isEmpty()
+                        ? tr("Track returned to the MixMan review queue.")
+                        : tr("Track returned to review as %1.").arg(result.reviewHash));
+        updateMaintenanceControls();
+        return;
+    }
+
+    m_pTableModel->updateTrackMetadata(result.track);
+    if (m_pView) {
+        m_pView->restoreSelectedRemoteIds(selectedRemoteIds);
+    }
+    const int queuedFavourSteps = m_queuedFavourSteps;
+    m_queuedFavourSteps = 0;
+    m_mutationBusy = false;
+    const QString remoteId = m_mutatingRemoteId;
+    m_mutatingRemoteId.clear();
+    if (result.mutation == RestLibraryTrackMutation::Favour &&
+            queuedFavourSteps != 0) {
+        startFavourMutation(remoteId, queuedFavourSteps);
+        return;
+    }
+    setStatusText(result.mutation == RestLibraryTrackMutation::Favour
+                    ? tr("Track favour updated.")
+                    : tr("DJ note saved."));
+    updateMaintenanceControls();
+}
+
+void RestLibraryBrowserFeature::updateMaintenanceControls() {
+    const QString remoteId = selectedRemoteId();
+    const bool hasSingleSelection = !remoteId.isEmpty();
+    const bool metadataCurrent = m_mutationMetadata.valid &&
+            m_mutationMetadataScopeIdentity ==
+                    m_pCatalogProvider->context().scopeIdentity;
+    const bool favourBusyForSelection = m_mutationBusy &&
+            m_activeMutation == RestLibraryTrackMutation::Favour &&
+            remoteId == m_mutatingRemoteId;
+    const bool favourEnabled = hasSingleSelection && metadataCurrent &&
+            m_mutationMetadata.mayWriteFavour && !m_refreshing &&
+            (!m_mutationBusy || favourBusyForSelection);
+    const bool noteEnabled = hasSingleSelection && metadataCurrent &&
+            m_mutationMetadata.mayWriteDjComment && !m_refreshing &&
+            !m_mutationBusy;
+    const bool reviewEnabled = hasSingleSelection && metadataCurrent &&
+            m_mutationMetadata.mayReturnToReview && !m_refreshing &&
+            !m_mutationBusy;
+    QString reviewToolTip;
+    if (hasSingleSelection && metadataCurrent &&
+            !m_mutationMetadata.mayReturnToReview) {
+        reviewToolTip = tr("Return to Review requires the MixMan administrator role.");
+    } else if (hasSingleSelection && !metadataCurrent &&
+            !m_mutationMetadataLoading) {
+        reviewToolTip = tr("This server did not advertise track maintenance capabilities.");
+    }
+    const bool refreshEnabled = !m_refreshing && !m_mutationBusy;
+    m_pRefreshAction->setEnabled(refreshEnabled);
+    if (m_pView) {
+        m_pView->setMaintenanceControlState(
+                favourEnabled,
+                noteEnabled,
+                reviewEnabled,
+                refreshEnabled,
+                reviewToolTip);
+    }
 }
 
 void RestLibraryBrowserFeature::requestTrackCache(
@@ -641,6 +937,7 @@ bool RestLibraryBrowserFeature::resetIfContextChanged(
     m_pCatalogProvider->cancelPageFetch();
     m_pCatalogProvider->cancelAudio(RestLibraryCacheRequestOwner::BrowserLoad);
     m_pCatalogProvider->cancelAudio(RestLibraryCacheRequestOwner::BrowserAutoDJ);
+    m_pCatalogProvider->cancelTrackMutations();
     clearPendingIntents();
     m_stagingTracks.clear();
     m_stagingRemoteIds.clear();
@@ -650,7 +947,13 @@ bool RestLibraryBrowserFeature::resetIfContextChanged(
     m_pTableModel->setCacheIdentity(context.cacheIdentity);
     m_catalogLoaded = false;
     m_refreshing = false;
-    m_pRefreshAction->setEnabled(true);
+    m_mutationMetadata = {};
+    m_mutationMetadataScopeIdentity.clear();
+    m_mutationMetadataLoading = false;
+    m_mutationBusy = false;
+    m_mutatingRemoteId.clear();
+    m_queuedFavourSteps = 0;
+    updateMaintenanceControls();
     return true;
 }
 

@@ -10,6 +10,7 @@
 #include <QDateTime>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
+#include <QSet>
 #include <QUrlQuery>
 #include <QVariant>
 
@@ -49,6 +50,13 @@ const char* kAuthoritativeGenerationProperty = "authoritativeGeneration";
 const char* kRequestMethodProperty = "requestMethod";
 const char* kMutationSequenceProperty = "mutationSequence";
 const char* kResponseTooLargeProperty = "restLibraryResponseTooLarge";
+const char* kTrackMutationProperty = "trackMutation";
+const char* kTrackMutationRemoteIdProperty = "trackMutationRemoteId";
+const QString kFavourWriteCapability = QStringLiteral("library.track.favour.write");
+const QString kDjCommentWriteCapability =
+        QStringLiteral("library.track.dj_comment.write");
+const QString kReturnToReviewCapability =
+        QStringLiteral("library.track.return_to_review");
 
 std::optional<double> normalizedValue(std::optional<double> value) {
     if (!value.has_value() || !std::isfinite(*value) || *value < 0.0 || *value > 1.0) {
@@ -305,6 +313,10 @@ RestLibraryClient::RestLibraryClient(
             "QList<mixxx::library::rest::RestLibraryPolicyPreset>");
     qRegisterMetaType<RestLibraryCatalogPage>(
             "mixxx::library::rest::RestLibraryCatalogPage");
+    qRegisterMetaType<RestLibraryMutationMetadata>(
+            "mixxx::library::rest::RestLibraryMutationMetadata");
+    qRegisterMetaType<RestLibraryTrackMutationResult>(
+            "mixxx::library::rest::RestLibraryTrackMutationResult");
     qRegisterMetaType<RestLibraryPolicyPath>("mixxx::library::rest::RestLibraryPolicyPath");
 }
 
@@ -353,6 +365,141 @@ void RestLibraryClient::cancelTrackCatalogRequest() {
         m_pTrackCatalogReply->abort();
         m_pTrackCatalogReply->deleteLater();
         m_pTrackCatalogReply.clear();
+    }
+}
+
+void RestLibraryClient::fetchTrackMutationMetadata(
+        const RestLibrarySettings& settings) {
+    ++m_trackMutationMetadataGeneration;
+    for (QPointer<QNetworkReply>* ppReply :
+            {&m_pTrackMutationCapabilitiesReply, &m_pTrackMutationConfigReply}) {
+        if (*ppReply) {
+            m_metadataResponseBodies.remove(*ppReply);
+            disconnect(*ppReply, nullptr, this, nullptr);
+            (*ppReply)->abort();
+            (*ppReply)->deleteLater();
+            ppReply->clear();
+        }
+    }
+    m_pendingTrackMutationMetadata = {};
+    m_pendingTrackMutationMetadata.favourStep =
+            config::kDefaultFavourFeedbackStep;
+    m_trackMutationMetadataSettings = settings;
+    if (!m_pNetworkAccessManager || !settings.isConfigured() ||
+            !settings.useMixManDefaults) {
+        emit trackMutationMetadataFetched(m_pendingTrackMutationMetadata);
+        return;
+    }
+
+    QNetworkReply* pReply = m_pNetworkAccessManager->get(
+            newRequest(settings, config::mixManCapabilitiesPath(), 0));
+    monitorMetadataReply(pReply);
+    pReply->setProperty(
+            kRequestGenerationProperty, m_trackMutationMetadataGeneration);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    m_pTrackMutationCapabilitiesReply = pReply;
+    connect(pReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotTrackMutationCapabilitiesFinished);
+}
+
+void RestLibraryClient::updateTrackMetadata(
+        const RestLibrarySettings& settings,
+        const QString& remoteId,
+        const QJsonObject& fields,
+        RestLibraryTrackMutation mutation) {
+    if (m_pTrackMutationReply) {
+        return;
+    }
+    RestLibraryTrackMutationResult immediateResult;
+    immediateResult.mutation = mutation;
+    immediateResult.remoteId = remoteId;
+    if (!m_pNetworkAccessManager || !settings.isConfigured() ||
+            remoteId.trimmed().isEmpty() || fields.isEmpty()) {
+        immediateResult.errorText = tr("REST Library track update is not available.");
+        emit trackMutationFinished(immediateResult);
+        return;
+    }
+
+    const int generation = ++m_trackMutationGeneration;
+    QNetworkRequest request = newRequest(
+            settings,
+            pathForRemoteId(settings.trackDetailPathTemplate, remoteId),
+            0);
+    request.setHeader(
+            QNetworkRequest::ContentTypeHeader,
+            QStringLiteral("application/json"));
+    QNetworkReply* pReply = m_pNetworkAccessManager->put(request, jsonBody(fields));
+    monitorMetadataReply(pReply);
+    pReply->setProperty(kRequestGenerationProperty, generation);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    pReply->setProperty(kTrackMutationProperty, static_cast<int>(mutation));
+    pReply->setProperty(kTrackMutationRemoteIdProperty, remoteId);
+    m_pTrackMutationReply = pReply;
+    connect(pReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotTrackMutationFinished);
+}
+
+void RestLibraryClient::returnTrackToReview(
+        const RestLibrarySettings& settings,
+        const QString& remoteId,
+        const QString& reason) {
+    if (m_pTrackMutationReply) {
+        return;
+    }
+    RestLibraryTrackMutationResult immediateResult;
+    immediateResult.mutation = RestLibraryTrackMutation::ReturnToReview;
+    immediateResult.remoteId = remoteId;
+    if (!m_pNetworkAccessManager || !settings.isConfigured() ||
+            remoteId.trimmed().isEmpty()) {
+        immediateResult.errorText = tr("REST Library return-to-review is not available.");
+        emit trackMutationFinished(immediateResult);
+        return;
+    }
+
+    const int generation = ++m_trackMutationGeneration;
+    QNetworkRequest request = newRequest(
+            settings,
+            config::mixManReturnToReviewPath(remoteId),
+            0);
+    request.setHeader(
+            QNetworkRequest::ContentTypeHeader,
+            QStringLiteral("application/json"));
+    QJsonObject payload;
+    if (!reason.trimmed().isEmpty()) {
+        payload.insert(QStringLiteral("reason"), reason.trimmed());
+    }
+    QNetworkReply* pReply = m_pNetworkAccessManager->post(request, jsonBody(payload));
+    monitorMetadataReply(pReply);
+    pReply->setProperty(kRequestGenerationProperty, generation);
+    pReply->setProperty(kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    pReply->setProperty(kTrackMutationProperty,
+            static_cast<int>(RestLibraryTrackMutation::ReturnToReview));
+    pReply->setProperty(kTrackMutationRemoteIdProperty, remoteId);
+    m_pTrackMutationReply = pReply;
+    connect(pReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotTrackMutationFinished);
+}
+
+void RestLibraryClient::invalidateTrackMutationRequests() {
+    ++m_trackMutationMetadataGeneration;
+    ++m_trackMutationGeneration;
+    for (QPointer<QNetworkReply>* ppReply :
+            {&m_pTrackMutationCapabilitiesReply,
+                    &m_pTrackMutationConfigReply,
+                    &m_pTrackMutationReply}) {
+        if (*ppReply) {
+            m_metadataResponseBodies.remove(*ppReply);
+            disconnect(*ppReply, nullptr, this, nullptr);
+            (*ppReply)->abort();
+            (*ppReply)->deleteLater();
+            ppReply->clear();
+        }
     }
 }
 
@@ -2098,6 +2245,149 @@ void RestLibraryClient::slotTrackCatalogFinished() {
     emit trackCatalogPageFetched(page);
 }
 
+void RestLibraryClient::slotTrackMutationCapabilitiesFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        return;
+    }
+    const bool stale = pReply->property(kRequestGenerationProperty).toInt() !=
+            m_trackMutationMetadataGeneration;
+    if (m_pTrackMutationCapabilitiesReply == pReply) {
+        m_pTrackMutationCapabilitiesReply.clear();
+    }
+    pReply->deleteLater();
+    if (stale) {
+        return;
+    }
+
+    const QByteArray responseBody = takeMetadataReplyBody(pReply);
+    const int statusCode = statusCodeFromReply(*pReply);
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody);
+    const QJsonObject object = document.object();
+    const QJsonValue capabilitiesValue = object.value(QStringLiteral("capabilities"));
+    if (pReply->error() != QNetworkReply::NoError ||
+            !isSuccessStatus(statusCode) || !document.isObject() ||
+            object.value(QStringLiteral("schema_version")).toInt() != 1 ||
+            !capabilitiesValue.isArray()) {
+        emit trackMutationMetadataFetched(m_pendingTrackMutationMetadata);
+        return;
+    }
+
+    QSet<QString> capabilities;
+    for (const QJsonValue& value : capabilitiesValue.toArray()) {
+        if (!value.isString() || value.toString().isEmpty()) {
+            emit trackMutationMetadataFetched(m_pendingTrackMutationMetadata);
+            return;
+        }
+        capabilities.insert(value.toString());
+    }
+    m_pendingTrackMutationMetadata.valid = true;
+    m_pendingTrackMutationMetadata.mayWriteFavour =
+            capabilities.contains(kFavourWriteCapability);
+    m_pendingTrackMutationMetadata.mayWriteDjComment =
+            capabilities.contains(kDjCommentWriteCapability);
+    m_pendingTrackMutationMetadata.mayReturnToReview =
+            capabilities.contains(kReturnToReviewCapability);
+
+    QNetworkReply* pConfigReply = m_pNetworkAccessManager->get(newRequest(
+            m_trackMutationMetadataSettings, config::mixManConfigPath(), 0));
+    monitorMetadataReply(pConfigReply);
+    pConfigReply->setProperty(
+            kRequestGenerationProperty, m_trackMutationMetadataGeneration);
+    pConfigReply->setProperty(
+            kRequestStartedAtProperty, QDateTime::currentMSecsSinceEpoch());
+    m_pTrackMutationConfigReply = pConfigReply;
+    connect(pConfigReply,
+            &QNetworkReply::finished,
+            this,
+            &RestLibraryClient::slotTrackMutationConfigFinished);
+}
+
+void RestLibraryClient::slotTrackMutationConfigFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        return;
+    }
+    const bool stale = pReply->property(kRequestGenerationProperty).toInt() !=
+            m_trackMutationMetadataGeneration;
+    if (m_pTrackMutationConfigReply == pReply) {
+        m_pTrackMutationConfigReply.clear();
+    }
+    pReply->deleteLater();
+    if (stale) {
+        return;
+    }
+
+    const QByteArray responseBody = takeMetadataReplyBody(pReply);
+    const int statusCode = statusCodeFromReply(*pReply);
+    if (pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(statusCode)) {
+        const QJsonDocument document = QJsonDocument::fromJson(responseBody);
+        const double step = document.object()
+                                    .value(QStringLiteral(
+                                            "track_favour_feedback_step"))
+                                    .toDouble(-1.0);
+        if (std::isfinite(step) && step > 0.0 && step <= 5.0) {
+            m_pendingTrackMutationMetadata.favourStep = step;
+        }
+    }
+    emit trackMutationMetadataFetched(m_pendingTrackMutationMetadata);
+}
+
+void RestLibraryClient::slotTrackMutationFinished() {
+    auto* pReply = qobject_cast<QNetworkReply*>(sender());
+    if (!pReply) {
+        return;
+    }
+    const bool stale = pReply->property(kRequestGenerationProperty).toInt() !=
+            m_trackMutationGeneration;
+    if (m_pTrackMutationReply == pReply) {
+        m_pTrackMutationReply.clear();
+    }
+    pReply->deleteLater();
+    if (stale) {
+        return;
+    }
+
+    RestLibraryTrackMutationResult result;
+    result.mutation = static_cast<RestLibraryTrackMutation>(
+            pReply->property(kTrackMutationProperty).toInt());
+    result.remoteId =
+            pReply->property(kTrackMutationRemoteIdProperty).toString();
+    result.statusCode = statusCodeFromReply(*pReply);
+    const QByteArray responseBody = takeMetadataReplyBody(pReply);
+    result.success = pReply->error() == QNetworkReply::NoError &&
+            isSuccessStatus(result.statusCode);
+    if (!result.success) {
+        result.errorText = errorTextFromResponse(responseBody);
+        if (result.errorText.isEmpty()) {
+            result.errorText = result.mutation ==
+                            RestLibraryTrackMutation::ReturnToReview
+                    ? tr("MixMan could not return the track to review.")
+                    : tr("MixMan could not update the track.");
+        }
+        emit trackMutationFinished(result);
+        return;
+    }
+
+    const QJsonDocument document = QJsonDocument::fromJson(responseBody);
+    if (!document.isObject()) {
+        result.success = false;
+        result.errorText = tr("MixMan returned an invalid track update response.");
+        emit trackMutationFinished(result);
+        return;
+    }
+    if (result.mutation == RestLibraryTrackMutation::ReturnToReview) {
+        result.reviewHash = readString(document.object(), {"hash_id", "review_id"});
+    } else {
+        result.track = parseTrackObject(document.object());
+        if (result.track.remoteId.isEmpty()) {
+            result.track.remoteId = result.remoteId;
+        }
+    }
+    emit trackMutationFinished(result);
+}
+
 void RestLibraryClient::startDetailRequests(int requestGeneration, const QStringList& remoteIds) {
     if (!m_pNetworkAccessManager) {
         auto batchIt = m_trackBatches.find(requestGeneration);
@@ -2908,6 +3198,10 @@ RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) 
     track.comment = readString(object, {"comment"});
     if (track.comment.isEmpty()) {
         track.comment = readString(metadata, {"comment"});
+    }
+    track.djComment = readString(object, {"dj_comment"});
+    if (track.djComment.isEmpty()) {
+        track.djComment = readString(metadata, {"dj_comment"});
     }
     track.keyText = readString(object, {"key", "musical_key"});
     if (track.keyText.isEmpty()) {

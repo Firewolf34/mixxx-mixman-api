@@ -904,6 +904,15 @@ view. Repeating the same remote track must reuse its database identity. A
 server-confirmed lookup may map a remote ID to an existing local track; title,
 artist, and other descriptive metadata must never be used to merge tracks.
 Cache eviction must not make an artifact row visible in Tracks.
+Verify the catalog maintenance toolbar against the authenticated capability
+document. Normal users may bump favour and edit/clear the dedicated DJ note;
+only an administrator may return a promoted track to review. Rapid favour
+clicks must coalesce from the last confirmed value, no favour action may emit a
+recommendation outcome, and failed/stale writes must not alter displayed
+metadata. A successful return removes only the catalog row: playback continues
+and credential-scoped cache registration is retained. Confirm configured note
+presets normalize and append without duplicates, and neither tokens nor DJ-note
+contents appear in diagnostics.
 Confirm that direct policy and authoritative recommendation rows expose the
 same hydrated core metadata as the catalog without per-candidate requests.
 For a newly downloaded quiet-master fixture, manual playback and AutoDJ must

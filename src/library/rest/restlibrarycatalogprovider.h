@@ -10,11 +10,15 @@
 #include "preferences/usersettings.h"
 
 class QNetworkAccessManager;
+class QJsonObject;
 
 namespace mixxx::library::rest {
 
 enum class RestLibraryCatalogCapability {
     ResolveAudio = 1 << 0,
+    WriteFavour = 1 << 1,
+    WriteDjComment = 1 << 2,
+    ReturnToReview = 1 << 3,
 };
 Q_DECLARE_FLAGS(RestLibraryCatalogCapabilities, RestLibraryCatalogCapability)
 
@@ -56,6 +60,18 @@ class RestLibraryCatalogProvider : public QObject {
             const QList<RestLibraryTrack>& tracks,
             RestLibraryCacheRequestOwner owner) = 0;
     virtual void cancelAudio(RestLibraryCacheRequestOwner owner) = 0;
+    virtual void fetchMutationMetadata(
+            const RestLibraryCatalogContext& context) = 0;
+    virtual void updateTrackMetadata(
+            const RestLibraryCatalogContext& context,
+            const QString& remoteId,
+            const QJsonObject& fields,
+            RestLibraryTrackMutation mutation) = 0;
+    virtual void returnTrackToReview(
+            const RestLibraryCatalogContext& context,
+            const QString& remoteId,
+            const QString& reason) = 0;
+    virtual void cancelTrackMutations() = 0;
 
   signals:
     void pageFetched(
@@ -66,6 +82,12 @@ class RestLibraryCatalogProvider : public QObject {
             const QString& message);
     void mediaStateChanged(
             const mixxx::library::rest::RestLibraryCacheResult& result);
+    void mutationMetadataFetched(
+            const QString& scopeIdentity,
+            const mixxx::library::rest::RestLibraryMutationMetadata& metadata);
+    void trackMutationFinished(
+            const QString& scopeIdentity,
+            const mixxx::library::rest::RestLibraryTrackMutationResult& result);
 };
 
 /// Catalog-only MixMan adapter. Session-v3 authority remains in
@@ -93,6 +115,18 @@ class MixManRestLibraryCatalogProvider final : public RestLibraryCatalogProvider
             const QList<RestLibraryTrack>& tracks,
             RestLibraryCacheRequestOwner owner) override;
     void cancelAudio(RestLibraryCacheRequestOwner owner) override;
+    void fetchMutationMetadata(
+            const RestLibraryCatalogContext& context) override;
+    void updateTrackMetadata(
+            const RestLibraryCatalogContext& context,
+            const QString& remoteId,
+            const QJsonObject& fields,
+            RestLibraryTrackMutation mutation) override;
+    void returnTrackToReview(
+            const RestLibraryCatalogContext& context,
+            const QString& remoteId,
+            const QString& reason) override;
+    void cancelTrackMutations() override;
 
   private:
     bool settingsForContext(
@@ -103,6 +137,10 @@ class MixManRestLibraryCatalogProvider final : public RestLibraryCatalogProvider
     RestLibraryClient m_client;
     RestLibraryCacheManager* const m_pCacheManager;
     QString m_activeScopeIdentity;
+    QString m_activeMutationMetadataScopeIdentity;
+    QString m_activeMutationScopeIdentity;
+    QString m_mutationMetadataScopeIdentity;
+    RestLibraryMutationMetadata m_mutationMetadata;
 };
 
 } // namespace mixxx::library::rest

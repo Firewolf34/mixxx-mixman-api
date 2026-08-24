@@ -125,6 +125,29 @@ class FakeCatalogProvider final : public RestLibraryCatalogProvider {
     void cancelAudio(RestLibraryCacheRequestOwner owner) override {
         canceledAudioOwners.insert(owner);
     }
+    void fetchMutationMetadata(const RestLibraryCatalogContext&) override {
+    }
+    void updateTrackMetadata(
+            const RestLibraryCatalogContext& context,
+            const QString& remoteId,
+            const QJsonObject& fields,
+            mixxx::library::rest::RestLibraryTrackMutation mutation) override {
+        mutationScopes.append(context.scopeIdentity);
+        mutationRemoteIds.append(remoteId);
+        mutationFields.append(fields);
+        mutations.append(mutation);
+    }
+    void returnTrackToReview(
+            const RestLibraryCatalogContext&,
+            const QString&,
+            const QString&) override {
+    }
+    void cancelTrackMutations() override {
+    }
+    void completeMutation(
+            const mixxx::library::rest::RestLibraryTrackMutationResult& result) {
+        emit trackMutationFinished(currentContext.scopeIdentity, result);
+    }
 
     void completePage(
             const QString& scopeIdentity,
@@ -145,6 +168,10 @@ class FakeCatalogProvider final : public RestLibraryCatalogProvider {
             RestLibraryCacheRequestOwner::BrowserLoad;
     QSet<RestLibraryCacheRequestOwner> canceledAudioOwners;
     int pageCancelCount = 0;
+    QStringList mutationScopes;
+    QStringList mutationRemoteIds;
+    QList<QJsonObject> mutationFields;
+    QList<mixxx::library::rest::RestLibraryTrackMutation> mutations;
 };
 
 } // namespace
@@ -234,6 +261,31 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
             const QModelIndexList& indices,
             PlaylistDAO::AutoDJSendLoc location) {
         m_pFeature->slotUnresolvedTracksAddToAutoDJ(indices, location);
+    }
+
+    void configureFavourMutations(double step) {
+        m_pFeature->m_mutationMetadata.valid = true;
+        m_pFeature->m_mutationMetadata.mayWriteFavour = true;
+        m_pFeature->m_mutationMetadata.favourStep = step;
+        m_pFeature->m_mutationMetadataScopeIdentity =
+                m_pFakeProvider->currentContext.scopeIdentity;
+    }
+
+    void startFavourMutation(const QString& remoteId, int steps) {
+        m_pFeature->startFavourMutation(remoteId, steps);
+    }
+
+    void queueFavourSteps(int steps) {
+        m_pFeature->m_queuedFavourSteps = steps;
+    }
+
+    void primeMutation(
+            const QString& remoteId,
+            mixxx::library::rest::RestLibraryTrackMutation mutation) {
+        m_pFeature->m_mutationContext = m_pFakeProvider->currentContext;
+        m_pFeature->m_mutatingRemoteId = remoteId;
+        m_pFeature->m_activeMutation = mutation;
+        m_pFeature->m_mutationBusy = true;
     }
 
     MockNetworkAccessManager m_network;
@@ -604,6 +656,85 @@ TEST_F(RestLibraryBrowserFeatureTest, AutoDJBatchPreservesSelectionOrder) {
     ASSERT_TRUE(pSecond);
     EXPECT_EQ(playlistDao.getTrackIdsInPlaylistOrder(autoDJPlaylistId),
             (QList<TrackId>{pFirst->getId(), pSecond->getId()}));
+}
+
+TEST_F(RestLibraryBrowserFeatureTest, FavourClicksCoalesceFromConfirmedServerValue) {
+    FakeCatalogProvider* pProvider = useFakeProvider();
+    RestLibraryTrack track;
+    track.remoteId = QStringLiteral("42");
+    track.title = QStringLiteral("Coalesce Me");
+    track.favour = 0.5;
+    track.cacheState = mixxx::library::rest::RestLibraryCacheState::Ready;
+    track.cachedFilePath = QStringLiteral("/cached/42.mp3");
+    model()->setTracks({track});
+    configureFavourMutations(0.5);
+
+    startFavourMutation(track.remoteId, 1);
+
+    ASSERT_EQ(pProvider->mutationFields.size(), 1);
+    EXPECT_DOUBLE_EQ(
+            pProvider->mutationFields.constFirst().value(QStringLiteral("favour")).toDouble(),
+            0.6);
+    queueFavourSteps(2);
+    mixxx::library::rest::RestLibraryTrackMutationResult firstResult;
+    firstResult.success = true;
+    firstResult.mutation = mixxx::library::rest::RestLibraryTrackMutation::Favour;
+    firstResult.remoteId = track.remoteId;
+    firstResult.track = track;
+    firstResult.track.favour = 0.6;
+    pProvider->completeMutation(firstResult);
+
+    ASSERT_EQ(pProvider->mutationFields.size(), 2);
+    EXPECT_DOUBLE_EQ(
+            pProvider->mutationFields.constLast().value(QStringLiteral("favour")).toDouble(),
+            0.8);
+    auto secondResult = firstResult;
+    secondResult.track.favour = 0.8;
+    pProvider->completeMutation(secondResult);
+
+    const RestLibraryTrack updated = model()->trackForRemoteId(track.remoteId);
+    ASSERT_TRUE(updated.favour.has_value());
+    EXPECT_DOUBLE_EQ(*updated.favour, 0.8);
+    EXPECT_EQ(updated.cacheState,
+            mixxx::library::rest::RestLibraryCacheState::Ready);
+    EXPECT_EQ(updated.cachedFilePath, QStringLiteral("/cached/42.mp3"));
+}
+
+TEST_F(RestLibraryBrowserFeatureTest, ReturnToReviewRemovesOnlySuccessfulCatalogRow) {
+    FakeCatalogProvider* pProvider = useFakeProvider();
+    RestLibraryTrack first;
+    first.remoteId = QStringLiteral("1");
+    first.title = QStringLiteral("Keep");
+    RestLibraryTrack second;
+    second.remoteId = QStringLiteral("2");
+    second.title = QStringLiteral("Review");
+    second.cacheState = mixxx::library::rest::RestLibraryCacheState::Ready;
+    second.cachedFilePath = QStringLiteral("/cached/2.mp3");
+    model()->setTracks({first, second});
+    primeMutation(
+            second.remoteId,
+            mixxx::library::rest::RestLibraryTrackMutation::ReturnToReview);
+    mixxx::library::rest::RestLibraryTrackMutationResult failure;
+    failure.mutation =
+            mixxx::library::rest::RestLibraryTrackMutation::ReturnToReview;
+    failure.remoteId = second.remoteId;
+    failure.errorText = QStringLiteral("not allowed");
+
+    pProvider->completeMutation(failure);
+    EXPECT_EQ(model()->trackCount(), 2);
+
+    primeMutation(
+            second.remoteId,
+            mixxx::library::rest::RestLibraryTrackMutation::ReturnToReview);
+    auto success = failure;
+    success.success = true;
+    success.reviewHash = QStringLiteral("review-hash");
+    pProvider->completeMutation(success);
+
+    EXPECT_EQ(model()->trackCount(), 1);
+    EXPECT_EQ(model()->trackForRemoteId(QStringLiteral("1")).title,
+            QStringLiteral("Keep"));
+    EXPECT_TRUE(model()->trackForRemoteId(QStringLiteral("2")).remoteId.isEmpty());
 }
 
 TEST_F(RestLibraryBrowserFeatureTest, AutoDJWaitsForAllReplayGainPreparation) {

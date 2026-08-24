@@ -8,6 +8,8 @@
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QObject>
+#include <QSet>
 #include <QUuid>
 
 #ifdef __QTKEYCHAIN__
@@ -173,6 +175,16 @@ QString mixManSessionsPath() {
     return QStringLiteral("/api/v3/sessions");
 }
 
+QString mixManCapabilitiesPath() {
+    return QStringLiteral("/auth/capabilities");
+}
+
+QString mixManReturnToReviewPath(const QString& remoteId) {
+    return QStringLiteral("/admin/tracks/") +
+            percentEncodedPathSegment(remoteId) +
+            QStringLiteral("/return-to-review");
+}
+
 QString mixManSessionInstancesPath(const QString& sessionId) {
     return QStringLiteral("/api/v3/sessions/") +
             percentEncodedPathSegment(sessionId) +
@@ -302,6 +314,34 @@ bool isLoopbackUrl(const QUrl& url) {
     return !address.isNull() && address.isLoopback();
 }
 
+QStringList defaultDjNotePresets() {
+    return {
+            QObject::tr("Bad intro or transition at start."),
+            QObject::tr("Bad outro or transition at end."),
+            QObject::tr("Incorrect track metadata."),
+            QObject::tr("Audio quality issue."),
+            QObject::tr("Duplicate or wrong version."),
+    };
+}
+
+QStringList normalizeDjNotePresets(const QStringList& presets) {
+    QStringList normalized;
+    QSet<QString> seen;
+    for (const QString& preset : presets) {
+        const QString trimmed = preset.trimmed().left(kMaxDjNotePresetLength);
+        const QString key = trimmed.toCaseFolded();
+        if (trimmed.isEmpty() || seen.contains(key)) {
+            continue;
+        }
+        seen.insert(key);
+        normalized.append(trimmed);
+        if (normalized.size() == kMaxDjNotePresets) {
+            break;
+        }
+    }
+    return normalized;
+}
+
 } // namespace config
 
 RestLibrarySettings RestLibrarySettings::fromConfig(
@@ -415,6 +455,11 @@ RestLibrarySettings RestLibrarySettings::fromConfig(
             config::kMixManTargetColorEnabledKey,
             config::kDefaultMixManTargetColorEnabled);
     settings.mixManTargetColor = pConfig->getValueString(config::kMixManTargetColorKey);
+    settings.djNotePresets = pConfig->exists(config::kDjNotePresetsKey)
+            ? config::normalizeDjNotePresets(
+                      pConfig->getValueString(config::kDjNotePresetsKey)
+                              .split(QLatin1Char('\n')))
+            : config::defaultDjNotePresets();
     settings.mixManTargetBpmEnabled = pConfig->getValue<bool>(
             config::kMixManTargetBpmEnabledKey,
             config::kDefaultMixManTargetBpmEnabled);

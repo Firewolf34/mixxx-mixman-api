@@ -78,6 +78,9 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     config()->setValue(restConfig::kCacheMaxMegabytesKey, 2048);
     config()->setValue(restConfig::kCacheMaxAgeDaysKey, 45);
     config()->setValue(restConfig::kMaxConcurrentDownloadsKey, 4);
+    config()->setValue(
+            restConfig::kDjNotePresetsKey,
+            QStringLiteral("Bad intro\n bad intro \nAudio issue"));
 
     const RestLibrarySettings settings = readSettings();
 
@@ -110,6 +113,8 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     EXPECT_EQ(settings.cacheMaxMegabytes, 2048);
     EXPECT_EQ(settings.cacheMaxAgeDays, 45);
     EXPECT_EQ(settings.maxConcurrentDownloads, 4);
+    EXPECT_EQ(settings.djNotePresets,
+            (QStringList{QStringLiteral("Bad intro"), QStringLiteral("Audio issue")}));
 }
 
 TEST_F(RestLibrarySettingsTest, UsesDefaultsAndFallbackCacheDirectory) {
@@ -140,6 +145,24 @@ TEST_F(RestLibrarySettingsTest, UsesDefaultsAndFallbackCacheDirectory) {
     EXPECT_EQ(settings.cacheMaxAgeDays, restConfig::kDefaultCacheMaxAgeDays);
     EXPECT_EQ(settings.maxConcurrentDownloads, restConfig::kDefaultMaxConcurrentDownloads);
     EXPECT_EQ(settings.cacheDirectoryPath, restConfig::defaultCacheDirectoryPath(config()));
+    EXPECT_EQ(settings.djNotePresets, restConfig::defaultDjNotePresets());
+}
+
+TEST_F(RestLibrarySettingsTest, NormalizesDjNotePresetsWithinBounds) {
+    QStringList presets{
+            QStringLiteral("  First warning  "),
+            QStringLiteral("first WARNING"),
+            QString(),
+            QString(140, QLatin1Char('x'))};
+    for (int i = 0; i < 25; ++i) {
+        presets.append(QStringLiteral("Preset %1").arg(i));
+    }
+
+    const QStringList normalized = restConfig::normalizeDjNotePresets(presets);
+
+    ASSERT_EQ(normalized.size(), restConfig::kMaxDjNotePresets);
+    EXPECT_EQ(normalized.constFirst(), QStringLiteral("First warning"));
+    EXPECT_EQ(normalized.at(1).size(), restConfig::kMaxDjNotePresetLength);
 }
 
 TEST_F(RestLibrarySettingsTest, GeneratesValidStableMixManSessionId) {

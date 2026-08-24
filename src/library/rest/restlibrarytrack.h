@@ -28,6 +28,7 @@ struct RestLibraryTrack {
     QString genre;
     QString composer;
     QString comment;
+    QString djComment;
     QString keyText;
     QString trackNumber;
     QString label;
@@ -65,6 +66,30 @@ struct RestLibraryTrack {
     RestLibraryCacheState cacheState = RestLibraryCacheState::Missing;
 };
 
+enum class RestLibraryTrackMutation {
+    Favour,
+    DjComment,
+    ReturnToReview,
+};
+
+struct RestLibraryMutationMetadata {
+    bool valid = false;
+    bool mayWriteFavour = false;
+    bool mayWriteDjComment = false;
+    bool mayReturnToReview = false;
+    double favourStep = 0.3;
+};
+
+struct RestLibraryTrackMutationResult {
+    RestLibraryTrackMutation mutation = RestLibraryTrackMutation::Favour;
+    QString remoteId;
+    RestLibraryTrack track;
+    QString reviewHash;
+    QString errorText;
+    int statusCode = 0;
+    bool success = false;
+};
+
 struct RestLibraryCatalogPage {
     QList<RestLibraryTrack> tracks;
     QString nextCursor;
@@ -74,3 +99,5 @@ struct RestLibraryCatalogPage {
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryTrack)
 Q_DECLARE_METATYPE(QList<mixxx::library::rest::RestLibraryTrack>)
 Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryCatalogPage)
+Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryMutationMetadata)
+Q_DECLARE_METATYPE(mixxx::library::rest::RestLibraryTrackMutationResult)

@@ -68,6 +68,15 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     void slotUnresolvedTracksAddToAutoDJ(
             const QModelIndexList& indices,
             PlaylistDAO::AutoDJSendLoc location);
+    void slotFavourBumpRequested(int direction);
+    void slotDjNoteRequested();
+    void slotReturnToReviewRequested();
+    void slotMutationMetadataFetched(
+            const QString& scopeIdentity,
+            const RestLibraryMutationMetadata& metadata);
+    void slotTrackMutationFinished(
+            const QString& scopeIdentity,
+            const RestLibraryTrackMutationResult& result);
 
   private:
     friend class ::RestLibraryBrowserFeatureTest;
@@ -121,6 +130,12 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     void updateLoadCapabilities(const RestLibraryCatalogContext& context);
     void setStatusText(const QString& text);
     void updateStatusSummary();
+    void refreshMutationMetadata(const RestLibraryCatalogContext& context);
+    void updateMaintenanceControls();
+    void startFavourMutation(
+            const QString& remoteId,
+            int stepCount);
+    QString selectedRemoteId() const;
 
     parented_ptr<TreeItemModel> m_pSidebarModel;
     parented_ptr<RestLibraryTableModel> m_pTableModel;
@@ -143,6 +158,15 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     QString m_statusText;
     bool m_catalogLoaded = false;
     bool m_refreshing = false;
+    RestLibraryMutationMetadata m_mutationMetadata;
+    QString m_mutationMetadataScopeIdentity;
+    RestLibraryCatalogContext m_mutationContext;
+    QString m_mutatingRemoteId;
+    RestLibraryTrackMutation m_activeMutation =
+            RestLibraryTrackMutation::Favour;
+    int m_queuedFavourSteps = 0;
+    bool m_mutationBusy = false;
+    bool m_mutationMetadataLoading = false;
 
   signals:
     void statusTextChanged(const QString& text);

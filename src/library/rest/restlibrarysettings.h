@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 #include <QUrl>
 
 #include "preferences/usersettings.h"
@@ -102,6 +103,9 @@ inline const ConfigKey kMixManAdminApprovedOnlyKey(
 inline const ConfigKey kMixManPathDepthKey(
         QStringLiteral("[RestLibrary]"),
         QStringLiteral("MixManPathDepth"));
+inline const ConfigKey kDjNotePresetsKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("DjNotePresets"));
 
 constexpr bool kDefaultEnabled = false;
 constexpr bool kDefaultCacheEnabled = true;
@@ -137,6 +141,10 @@ constexpr int kMaxCacheMaxAgeDays = 365;
 constexpr int kDefaultMaxConcurrentDownloads = 2;
 constexpr int kMinMaxConcurrentDownloads = 1;
 constexpr int kMaxMaxConcurrentDownloads = 8;
+constexpr int kMaxDjNotePresets = 20;
+constexpr int kMaxDjNotePresetLength = 120;
+constexpr int kMaxDjNoteLength = 1000;
+constexpr double kDefaultFavourFeedbackStep = 0.3;
 
 QString defaultCacheDirectoryPath(const UserSettingsPointer& pConfig);
 QString mixManTrackListPath();
@@ -149,6 +157,8 @@ QString mixManConfigPath();
 QString mixManIndexStatusPath();
 QString mixManPolicyPresetsPath();
 QString mixManSessionsPath();
+QString mixManCapabilitiesPath();
+QString mixManReturnToReviewPath(const QString& remoteId);
 QString mixManSessionInstancesPath(const QString& sessionId);
 QString mixManSessionInstanceHeartbeatPath(
         const QString& sessionId,
@@ -168,6 +178,8 @@ QString mixManSessionActionsPath(const QString& sessionId);
 QUrl urlWithRestPath(const QUrl& baseUrl, const QString& path);
 bool isSameOrigin(const QUrl& lhs, const QUrl& rhs);
 bool isLoopbackUrl(const QUrl& url);
+QStringList defaultDjNotePresets();
+QStringList normalizeDjNotePresets(const QStringList& presets);
 
 } // namespace config
 
@@ -197,6 +209,7 @@ class RestLibrarySettings final {
     QString cacheDirectoryPath;
     QString mixManPolicyPreset;
     QString mixManTargetColor;
+    QStringList djNotePresets;
     int pageSize = config::kDefaultPageSize;
     int maxCatalogPages = config::kDefaultMaxCatalogPages;
     int maxCatalogTracks = config::kDefaultMaxCatalogTracks;

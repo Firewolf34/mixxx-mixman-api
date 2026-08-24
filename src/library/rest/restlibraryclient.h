@@ -35,6 +35,17 @@ class RestLibraryClient final : public QObject {
             const RestLibrarySettings& settings,
             const QString& cursor = {});
     void cancelTrackCatalogRequest();
+    void fetchTrackMutationMetadata(const RestLibrarySettings& settings);
+    void updateTrackMetadata(
+            const RestLibrarySettings& settings,
+            const QString& remoteId,
+            const QJsonObject& fields,
+            RestLibraryTrackMutation mutation);
+    void returnTrackToReview(
+            const RestLibrarySettings& settings,
+            const QString& remoteId,
+            const QString& reason = {});
+    void invalidateTrackMutationRequests();
     int bufferedMetadataReplyCountForTesting() const {
         return m_metadataResponseBodies.size();
     }
@@ -148,6 +159,10 @@ class RestLibraryClient final : public QObject {
     void trackCatalogPageFetched(
             const mixxx::library::rest::RestLibraryCatalogPage& page);
     void trackCatalogFetchFailed(const QString& message);
+    void trackMutationMetadataFetched(
+            const mixxx::library::rest::RestLibraryMutationMetadata& metadata);
+    void trackMutationFinished(
+            const mixxx::library::rest::RestLibraryTrackMutationResult& result);
     void trackLookupSucceeded(const QString& remoteId);
     void trackLookupMissed(const QString& message);
     void recommendationsFetched(
@@ -176,6 +191,9 @@ class RestLibraryClient final : public QObject {
   private slots:
     void slotTrackListFinished();
     void slotTrackCatalogFinished();
+    void slotTrackMutationCapabilitiesFinished();
+    void slotTrackMutationConfigFinished();
+    void slotTrackMutationFinished();
     void slotTrackDetailFinished();
     void slotHealthFinished();
     void slotIndexStatusFinished();
@@ -328,12 +346,19 @@ class RestLibraryClient final : public QObject {
 
     QPointer<QNetworkAccessManager> m_pNetworkAccessManager;
     QPointer<QNetworkReply> m_pTrackCatalogReply;
+    QPointer<QNetworkReply> m_pTrackMutationCapabilitiesReply;
+    QPointer<QNetworkReply> m_pTrackMutationConfigReply;
+    QPointer<QNetworkReply> m_pTrackMutationReply;
     RestLibrarySettings m_settings;
+    RestLibrarySettings m_trackMutationMetadataSettings;
     QHash<QNetworkReply*, RequestContext> m_requestContexts;
     QHash<QNetworkReply*, QByteArray> m_metadataResponseBodies;
     QHash<int, TrackRequestBatch> m_trackBatches;
     int m_trackListRequestGeneration = 0;
     int m_trackCatalogRequestGeneration = 0;
+    int m_trackMutationMetadataGeneration = 0;
+    int m_trackMutationGeneration = 0;
+    RestLibraryMutationMetadata m_pendingTrackMutationMetadata;
     int m_policyPathRequestGeneration = 0;
     int m_mixManDiagnosticsRequestGeneration = 0;
     int m_policyPresetsRequestGeneration = 0;

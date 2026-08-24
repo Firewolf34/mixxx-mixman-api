@@ -353,6 +353,16 @@ manual client and retain the three newest automatic snapshots.
   track ID, then log out: each change must immediately clear the displayed
   catalog, cancel pending catalog/audio requests, and download to a distinct
   cache entry. Neither token may appear in cache filenames or logs.
+- With exactly one catalog row selected, confirm Favour Up and Favour Down
+  persist one server-configured step, clamp at both ends, and converge after
+  rapid mixed clicks without creating a recommendation outcome. Edit and clear
+  the full DJ note; append each configured preset and confirm duplicates are
+  not added. Note contents must not appear in logs. With a normal user token,
+  Return to Review must remain disabled with an administrator explanation.
+  With an administrator token, cancel once, then submit an optional reason and
+  confirm the row disappears while any currently playing audio and cached
+  artifact continue uninterrupted. Failed writes must retain the row and
+  confirmed metadata. Repeat in explicitly auth-disabled trusted-LAN mode.
 - Compare a track present in REST Library with the same track in direct-policy
   and authoritative REST Recommendations responses. Artist, title, album,
   genre, BPM, key, duration, rating, composer, comment, track number, release

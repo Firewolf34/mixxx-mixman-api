@@ -95,6 +95,24 @@ loaded successfully. Configurable page and unique-track limits (defaulting to
 warning while retaining the prior completed snapshot. Browsing, search, sort,
 and selection never download audio or artwork.
 
+The catalog toolbar discovers native write authority through the authenticated,
+schema-1 `/auth/capabilities` document. Missing, stale, failed, or unknown
+capability metadata keeps every maintenance control read-only. Favour Up and
+Favour Down apply the public `/config` `track_favour_feedback_step` on the 0–5
+display scale (falling back locally to 0.3), clamp, and write only normalized
+`favour` through `PUT /tracks/{id}`. Rapid clicks coalesce behind one in-flight
+write and use the confirmed server value as the next base. These writes never
+publish recommendation liked/disliked outcomes.
+
+DJ Note edits the full dedicated `dj_comment` value, with a 1000-character
+limit and global, normalized one-line presets stored in ordinary REST Library
+preferences. Return to Review remains visible but requires the advertised
+administrator capability, confirms the named track, and sends only an optional
+reason to `POST /admin/tracks/{id}/return-to-review`. A successful return
+removes the promoted catalog row without stopping playback or deleting the
+credential-scoped local cache artifact. Mutation replies are scoped like
+catalog traffic; DJ-note contents never enter diagnostics.
+
 Deck, preview, sampler, and AutoDJ actions download only the selected tracks to
 the configured cache. Cache identity includes the normalized MixMan server,
 non-secret credential-context namespace, and remote track ID; ambiguous legacy

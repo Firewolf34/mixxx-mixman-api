@@ -68,6 +68,31 @@ MixManRestLibraryCatalogProvider::MixManRestLibraryCatalogProvider(
                     emit pageFetchFailed(m_activeScopeIdentity, message);
                 }
             });
+    connect(&m_client,
+            &RestLibraryClient::trackMutationMetadataFetched,
+            this,
+            [this](const RestLibraryMutationMetadata& metadata) {
+                if (m_activeMutationMetadataScopeIdentity.isEmpty()) {
+                    return;
+                }
+                m_mutationMetadataScopeIdentity =
+                        m_activeMutationMetadataScopeIdentity;
+                m_mutationMetadata = metadata;
+                const QString scopeIdentity =
+                        std::exchange(m_activeMutationMetadataScopeIdentity, {});
+                emit mutationMetadataFetched(scopeIdentity, metadata);
+            });
+    connect(&m_client,
+            &RestLibraryClient::trackMutationFinished,
+            this,
+            [this](const RestLibraryTrackMutationResult& result) {
+                if (m_activeMutationScopeIdentity.isEmpty()) {
+                    return;
+                }
+                const QString scopeIdentity =
+                        std::exchange(m_activeMutationScopeIdentity, {});
+                emit trackMutationFinished(scopeIdentity, result);
+            });
     if (m_pCacheManager) {
         connect(m_pCacheManager,
                 &RestLibraryCacheManager::trackCacheStateChanged,
@@ -88,6 +113,18 @@ RestLibraryCatalogContext MixManRestLibraryCatalogProvider::context() const {
     context.configured = settings.isConfigured() && settings.useMixManDefaults;
     if (context.configured && settings.hasAudioDownloadConfigured()) {
         context.capabilities |= RestLibraryCatalogCapability::ResolveAudio;
+    }
+    if (context.scopeIdentity == m_mutationMetadataScopeIdentity &&
+            m_mutationMetadata.valid) {
+        if (m_mutationMetadata.mayWriteFavour) {
+            context.capabilities |= RestLibraryCatalogCapability::WriteFavour;
+        }
+        if (m_mutationMetadata.mayWriteDjComment) {
+            context.capabilities |= RestLibraryCatalogCapability::WriteDjComment;
+        }
+        if (m_mutationMetadata.mayReturnToReview) {
+            context.capabilities |= RestLibraryCatalogCapability::ReturnToReview;
+        }
     }
     return context;
 }
@@ -138,6 +175,58 @@ void MixManRestLibraryCatalogProvider::cancelAudio(
     if (m_pCacheManager) {
         m_pCacheManager->cancelRequests(owner);
     }
+}
+
+void MixManRestLibraryCatalogProvider::fetchMutationMetadata(
+        const RestLibraryCatalogContext& requestedContext) {
+    RestLibrarySettings settings;
+    if (!settingsForContext(requestedContext, &settings)) {
+        emit mutationMetadataFetched(requestedContext.scopeIdentity, {});
+        return;
+    }
+    m_activeMutationMetadataScopeIdentity = requestedContext.scopeIdentity;
+    m_client.fetchTrackMutationMetadata(settings);
+}
+
+void MixManRestLibraryCatalogProvider::updateTrackMetadata(
+        const RestLibraryCatalogContext& requestedContext,
+        const QString& remoteId,
+        const QJsonObject& fields,
+        RestLibraryTrackMutation mutation) {
+    RestLibrarySettings settings;
+    if (!settingsForContext(requestedContext, &settings)) {
+        RestLibraryTrackMutationResult result;
+        result.mutation = mutation;
+        result.remoteId = remoteId;
+        result.errorText = tr("REST Library settings changed.");
+        emit trackMutationFinished(requestedContext.scopeIdentity, result);
+        return;
+    }
+    m_activeMutationScopeIdentity = requestedContext.scopeIdentity;
+    m_client.updateTrackMetadata(settings, remoteId, fields, mutation);
+}
+
+void MixManRestLibraryCatalogProvider::returnTrackToReview(
+        const RestLibraryCatalogContext& requestedContext,
+        const QString& remoteId,
+        const QString& reason) {
+    RestLibrarySettings settings;
+    if (!settingsForContext(requestedContext, &settings)) {
+        RestLibraryTrackMutationResult result;
+        result.mutation = RestLibraryTrackMutation::ReturnToReview;
+        result.remoteId = remoteId;
+        result.errorText = tr("REST Library settings changed.");
+        emit trackMutationFinished(requestedContext.scopeIdentity, result);
+        return;
+    }
+    m_activeMutationScopeIdentity = requestedContext.scopeIdentity;
+    m_client.returnTrackToReview(settings, remoteId, reason);
+}
+
+void MixManRestLibraryCatalogProvider::cancelTrackMutations() {
+    m_client.invalidateTrackMutationRequests();
+    m_activeMutationMetadataScopeIdentity.clear();
+    m_activeMutationScopeIdentity.clear();
 }
 
 bool MixManRestLibraryCatalogProvider::settingsForContext(
