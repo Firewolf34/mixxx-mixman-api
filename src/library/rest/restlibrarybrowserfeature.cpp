@@ -634,6 +634,10 @@ bool RestLibraryBrowserFeature::resetIfContextChanged(
     if (context == m_currentContext) {
         return false;
     }
+    // Publish the new scope before cancellation. Cache cancellation emits
+    // synchronously, and reentrant completions from the old scope must not
+    // trigger a second reset or an unintended catalog refresh.
+    m_currentContext = context;
     m_pCatalogProvider->cancelPageFetch();
     m_pCatalogProvider->cancelAudio(RestLibraryCacheRequestOwner::BrowserLoad);
     m_pCatalogProvider->cancelAudio(RestLibraryCacheRequestOwner::BrowserAutoDJ);
@@ -647,7 +651,6 @@ bool RestLibraryBrowserFeature::resetIfContextChanged(
     m_catalogLoaded = false;
     m_refreshing = false;
     m_pRefreshAction->setEnabled(true);
-    m_currentContext = context;
     return true;
 }
 
