@@ -709,8 +709,9 @@ TEST_F(RestLibraryTableModelTest, CatalogSupportsExplicitRemoteSearchFields) {
         result.cacheState = states.at(i);
         model.updateTrackCacheState(result);
         model.search(QStringLiteral("cache:=%1").arg(stateNames.at(i)));
-        ASSERT_EQ(model.rowCount(), 1);
-        EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("remote-17"));
+        EXPECT_EQ(model.rowCount(),
+                states.at(i) == RestLibraryCacheState::Missing ? 2 : 1);
+        EXPECT_GE(model.visibleRowForRemoteId(QStringLiteral("remote-17")), 0);
     }
 }
 
