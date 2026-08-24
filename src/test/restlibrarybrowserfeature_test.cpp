@@ -23,6 +23,10 @@ namespace {
 namespace restConfig = mixxx::library::rest::config;
 using mixxx::library::rest::RestLibraryBackend;
 using mixxx::library::rest::RestLibraryBrowserFeature;
+using mixxx::library::rest::RestLibraryCacheRequestOwner;
+using mixxx::library::rest::RestLibraryCatalogContext;
+using mixxx::library::rest::RestLibraryCatalogPage;
+using mixxx::library::rest::RestLibraryCatalogProvider;
 using mixxx::library::rest::RestLibraryLoudnessManager;
 using mixxx::library::rest::RestLibraryLoudnessResult;
 using mixxx::library::rest::RestLibraryLoudnessState;
@@ -81,6 +85,68 @@ class FakeLoudnessManager final : public RestLibraryLoudnessManager {
     QSet<TrackId> m_readyTrackIds;
 };
 
+class FakeCatalogProvider final : public RestLibraryCatalogProvider {
+  public:
+    FakeCatalogProvider() {
+        currentContext.providerId = QStringLiteral("fake");
+        currentContext.scopeIdentity = QStringLiteral("fake:scope-a");
+        currentContext.cacheIdentity = QStringLiteral("fake-cache-a");
+        currentContext.displayName = QStringLiteral("Fake Catalog");
+        currentContext.maxPages = 4;
+        currentContext.maxTracks = 20;
+        currentContext.configured = true;
+    }
+
+    RestLibraryCatalogContext context() const override {
+        return currentContext;
+    }
+    void fetchPage(
+            const RestLibraryCatalogContext& context,
+            const QString& cursor) override {
+        requestedScopes.append(context.scopeIdentity);
+        requestedCursors.append(cursor);
+    }
+    void cancelPageFetch() override {
+        ++pageCancelCount;
+    }
+    void reconcileTracks(
+            const RestLibraryCatalogContext& context,
+            const QList<RestLibraryTrack>& tracks) override {
+        reconciledScope = context.scopeIdentity;
+        reconciledTracks = tracks;
+    }
+    void resolveAudio(
+            const RestLibraryCatalogContext&,
+            const QList<RestLibraryTrack>& tracks,
+            RestLibraryCacheRequestOwner owner) override {
+        resolvedTracks = tracks;
+        lastResolveOwner = owner;
+    }
+    void cancelAudio(RestLibraryCacheRequestOwner owner) override {
+        canceledAudioOwners.insert(owner);
+    }
+
+    void completePage(
+            const QString& scopeIdentity,
+            const RestLibraryCatalogPage& page) {
+        emit pageFetched(scopeIdentity, page);
+    }
+    void failPage(const QString& scopeIdentity, const QString& message) {
+        emit pageFetchFailed(scopeIdentity, message);
+    }
+
+    RestLibraryCatalogContext currentContext;
+    QStringList requestedScopes;
+    QStringList requestedCursors;
+    QString reconciledScope;
+    QList<RestLibraryTrack> reconciledTracks;
+    QList<RestLibraryTrack> resolvedTracks;
+    RestLibraryCacheRequestOwner lastResolveOwner =
+            RestLibraryCacheRequestOwner::BrowserLoad;
+    QSet<RestLibraryCacheRequestOwner> canceledAudioOwners;
+    int pageCancelCount = 0;
+};
+
 } // namespace
 
 class RestLibraryBrowserFeatureTest : public LibraryTest {
@@ -124,8 +190,25 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
         m_pFeature->slotRefresh();
     }
 
-    bool resetForSettings(const RestLibrarySettings& settings) {
-        return m_pFeature->resetIfSettingsChanged(settings);
+    RestLibraryCatalogContext providerContext() const {
+        return m_pFeature->m_pCatalogProvider->context();
+    }
+
+    bool resetForCurrentContext() {
+        return m_pFeature->resetIfContextChanged(providerContext());
+    }
+
+    FakeCatalogProvider* useFakeProvider() {
+        m_pFeature.reset();
+        m_pFakeProvider = std::make_unique<FakeCatalogProvider>();
+        m_pFeature.reset(new RestLibraryBrowserFeature(
+                nullptr,
+                config(),
+                &m_backend,
+                trackCollectionManager(),
+                &m_loudness,
+                m_pFakeProvider.get()));
+        return m_pFakeProvider.get();
     }
 
     void requestDefaultLoad(const QModelIndex& index) {
@@ -157,8 +240,58 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
     QTemporaryDir m_cacheDir;
     RestLibraryBackend m_backend;
     FakeLoudnessManager m_loudness;
+    std::unique_ptr<FakeCatalogProvider> m_pFakeProvider;
     std::unique_ptr<RestLibraryBrowserFeature> m_pFeature;
 };
+
+TEST_F(RestLibraryBrowserFeatureTest, FakeProviderProvesPaginationScopeAndAtomicRefresh) {
+    FakeCatalogProvider* pProvider = useFakeProvider();
+    RestLibraryTrack first;
+    first.remoteId = QStringLiteral("1");
+    first.title = QStringLiteral("One");
+    RestLibraryTrack second;
+    second.remoteId = QStringLiteral("2");
+    second.title = QStringLiteral("Two");
+    RestLibraryTrack duplicate = second;
+    duplicate.title = QStringLiteral("Duplicate");
+    RestLibraryTrack third;
+    third.remoteId = QStringLiteral("3");
+    third.title = QStringLiteral("Three");
+
+    activate();
+    ASSERT_EQ(pProvider->requestedCursors, QStringList{QString()});
+    pProvider->completePage(
+            pProvider->currentContext.scopeIdentity,
+            {{first, second}, QStringLiteral("next")});
+    ASSERT_EQ(pProvider->requestedCursors,
+            (QStringList{QString(), QStringLiteral("next")}));
+    pProvider->completePage(
+            pProvider->currentContext.scopeIdentity,
+            {{duplicate, third}, {}});
+
+    ASSERT_EQ(model()->trackCount(), 3);
+    EXPECT_EQ(model()->trackForRemoteId(QStringLiteral("2")).title,
+            QStringLiteral("Two"));
+    EXPECT_EQ(pProvider->reconciledTracks.size(), 3);
+    EXPECT_EQ(pProvider->reconciledScope, pProvider->currentContext.scopeIdentity);
+
+    refresh();
+    pProvider->completePage(QStringLiteral("fake:stale"), {{third}, {}});
+    EXPECT_EQ(model()->trackCount(), 3);
+    pProvider->failPage(
+            pProvider->currentContext.scopeIdentity,
+            QStringLiteral("temporary failure"));
+    EXPECT_EQ(model()->trackCount(), 3);
+
+    pProvider->currentContext.scopeIdentity = QStringLiteral("fake:scope-b");
+    pProvider->currentContext.cacheIdentity = QStringLiteral("fake-cache-b");
+    refresh();
+    EXPECT_EQ(model()->trackCount(), 0);
+    EXPECT_TRUE(pProvider->canceledAudioOwners.contains(
+            RestLibraryCacheRequestOwner::BrowserLoad));
+    EXPECT_TRUE(pProvider->canceledAudioOwners.contains(
+            RestLibraryCacheRequestOwner::BrowserAutoDJ));
+}
 
 TEST_F(RestLibraryBrowserFeatureTest, LoadsAndDeduplicatesMultipleCatalogPages) {
     MockNetworkReply* pFirst = m_network.ExpectGet(
@@ -237,7 +370,7 @@ TEST_F(RestLibraryBrowserFeatureTest, SettingsChangeRestartsCatalogOnNewOrigin) 
     EXPECT_TRUE(model()->trackForRemoteId(QStringLiteral("1")).remoteId.isEmpty());
 }
 
-TEST_F(RestLibraryBrowserFeatureTest, CredentialRotationAndLogoutClearCatalogImmediately) {
+TEST_F(RestLibraryBrowserFeatureTest, ProviderScopeChangeAndLogoutClearCatalogImmediately) {
     MockNetworkReply* pInitial = m_network.ExpectGet(
             QStringLiteral("/tracks"),
             {},
@@ -253,12 +386,14 @@ TEST_F(RestLibraryBrowserFeatureTest, CredentialRotationAndLogoutClearCatalogImm
             200,
             catalogPage(QStringLiteral(R"json({"id":2,"title":"Stale"})json")));
     refresh();
-    RestLibrarySettings accountA = RestLibrarySettings::fromConfig(config());
-    accountA.bearerToken = QStringLiteral("account-a-secret-token");
-    EXPECT_TRUE(resetForSettings(accountA));
+    config()->setValue(
+            restConfig::kBaseUrlKey,
+            QStringLiteral("http://127.0.0.1:8766"));
+    EXPECT_TRUE(resetForCurrentContext());
     EXPECT_TRUE(pPending->WasAborted());
     EXPECT_EQ(model()->trackCount(), 0);
 
+    RestLibrarySettings accountA = RestLibrarySettings::fromConfig(config());
     RestLibraryTrack accountATrack;
     accountATrack.remoteId = QStringLiteral("7");
     accountATrack.title = QStringLiteral("Account A cached catalog");
@@ -266,22 +401,22 @@ TEST_F(RestLibraryBrowserFeatureTest, CredentialRotationAndLogoutClearCatalogImm
     model()->setTracks({accountATrack});
     ASSERT_EQ(model()->trackCount(), 1);
     MockNetworkReply* pAccountAAudio = m_network.ExpectGet(
-            QStringLiteral("/download"),
+            QStringLiteral("127.0.0.1:8766/download"),
             {{QStringLiteral("track_id"), QStringLiteral("7")}},
             200,
             QByteArrayLiteral("account a audio"));
     m_backend.cacheManager()->cacheTracks({accountATrack}, accountA);
 
-    RestLibrarySettings rotated = accountA;
-    rotated.bearerToken = QStringLiteral("account-b-rotated-token");
-    EXPECT_TRUE(resetForSettings(rotated));
+    config()->setValue(
+            restConfig::kBaseUrlKey,
+            QStringLiteral("http://127.0.0.1:8767"));
+    EXPECT_TRUE(resetForCurrentContext());
     EXPECT_TRUE(pAccountAAudio->WasAborted());
     EXPECT_EQ(model()->trackCount(), 0);
 
     model()->setTracks({accountATrack});
-    RestLibrarySettings loggedOut = rotated;
-    loggedOut.bearerToken.clear();
-    EXPECT_TRUE(resetForSettings(loggedOut));
+    config()->setValue(restConfig::kEnabledKey, false);
+    EXPECT_TRUE(resetForCurrentContext());
     EXPECT_EQ(model()->trackCount(), 0);
 }
 

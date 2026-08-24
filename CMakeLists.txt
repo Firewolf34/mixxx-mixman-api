@@ -1468,6 +1468,7 @@ add_library(
   src/library/rest/dlgrestlibrarybrowser.cpp
   src/library/rest/restlibrarybackend.cpp
   src/library/rest/restlibrarybrowserfeature.cpp
+  src/library/rest/restlibrarycatalogprovider.cpp
   src/library/rest/restlibrarycachemanager.cpp
   src/library/rest/restlibrarycachestatedelegate.cpp
   src/library/rest/restlibraryclient.cpp

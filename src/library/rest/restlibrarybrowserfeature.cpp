@@ -3,14 +3,12 @@
 #include <algorithm>
 
 #include <QMenu>
-#include <QUrl>
 #include <utility>
 
 #include "control/controlobject.h"
 #include "controllers/keyboard/keyboardeventfilter.h"
 #include "library/library.h"
 #include "library/rest/dlgrestlibrarybrowser.h"
-#include "library/rest/restlibrarysettings.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
 #include "library/treeitem.h"
@@ -45,7 +43,8 @@ RestLibraryBrowserFeature::RestLibraryBrowserFeature(
         UserSettingsPointer pConfig,
         RestLibraryBackend* pBackend,
         TrackCollectionManager* pTrackCollectionManager,
-        RestLibraryLoudnessManager* pLoudnessManager)
+        RestLibraryLoudnessManager* pLoudnessManager,
+        RestLibraryCatalogProvider* pCatalogProvider)
         : LibraryFeature(pLibrary, std::move(pConfig), QStringLiteral("computer")),
           m_pSidebarModel(make_parented<TreeItemModel>(this)),
           m_pTableModel(make_parented<RestLibraryTableModel>(
@@ -53,29 +52,35 @@ RestLibraryBrowserFeature::RestLibraryBrowserFeature(
                   pTrackCollectionManager,
                   RestLibraryTableModel::Mode::Catalog)),
           m_pRefreshAction(make_parented<QAction>(tr("Refresh"), this)),
-          m_pBackend(pBackend),
           m_pTrackCollectionManager(pTrackCollectionManager),
-          m_pLoudnessManager(pLoudnessManager),
-          m_client(pBackend->networkAccessManager(), this),
-          m_settingsIdentity(
-                  settingsIdentity(RestLibrarySettings::fromConfig(m_pConfig))) {
-    m_pTableModel->setCacheIdentity(RestLibraryCacheManager::cacheIdentity(
-            RestLibrarySettings::fromConfig(m_pConfig)));
+          m_pLoudnessManager(pLoudnessManager) {
+    if (pCatalogProvider) {
+        m_pCatalogProvider = pCatalogProvider;
+    } else {
+        m_pOwnedCatalogProvider =
+                std::make_unique<MixManRestLibraryCatalogProvider>(
+                        m_pConfig,
+                        pBackend->networkAccessManager(),
+                        pBackend->cacheManager());
+        m_pCatalogProvider = m_pOwnedCatalogProvider.get();
+    }
+    m_currentContext = m_pCatalogProvider->context();
+    m_pTableModel->setCacheIdentity(m_currentContext.cacheIdentity);
     m_pSidebarModel->setRootItem(TreeItem::newRoot(this));
     connect(m_pRefreshAction,
             &QAction::triggered,
             this,
             &RestLibraryBrowserFeature::slotRefresh);
-    connect(&m_client,
-            &RestLibraryClient::trackCatalogPageFetched,
+    connect(m_pCatalogProvider,
+            &RestLibraryCatalogProvider::pageFetched,
             this,
             &RestLibraryBrowserFeature::slotCatalogPageFetched);
-    connect(&m_client,
-            &RestLibraryClient::trackCatalogFetchFailed,
+    connect(m_pCatalogProvider,
+            &RestLibraryCatalogProvider::pageFetchFailed,
             this,
             &RestLibraryBrowserFeature::slotCatalogFetchFailed);
-    connect(m_pBackend->cacheManager(),
-            &RestLibraryCacheManager::trackCacheStateChanged,
+    connect(m_pCatalogProvider,
+            &RestLibraryCatalogProvider::mediaStateChanged,
             this,
             &RestLibraryBrowserFeature::slotTrackCacheStateChanged);
     if (m_pLoudnessManager) {
@@ -161,9 +166,9 @@ void RestLibraryBrowserFeature::activate() {
     }
     emit enableCoverArtDisplay(false);
 
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    resetIfSettingsChanged(settings);
-    updateLoadCapabilities(settings);
+    const RestLibraryCatalogContext context = m_pCatalogProvider->context();
+    resetIfContextChanged(context);
+    updateLoadCapabilities(context);
     if (!m_catalogLoaded && !m_refreshing) {
         slotRefresh();
     }
@@ -176,23 +181,23 @@ void RestLibraryBrowserFeature::onRightClick(const QPoint& globalPos) {
 }
 
 void RestLibraryBrowserFeature::slotRefresh() {
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    resetIfSettingsChanged(settings);
-    updateLoadCapabilities(settings);
-    if (!settings.isConfigured() || !settings.useMixManDefaults) {
-        m_client.cancelTrackCatalogRequest();
+    const RestLibraryCatalogContext context = m_pCatalogProvider->context();
+    resetIfContextChanged(context);
+    updateLoadCapabilities(context);
+    if (!context.configured) {
+        m_pCatalogProvider->cancelPageFetch();
         m_refreshing = false;
         m_pRefreshAction->setEnabled(true);
         clearPendingIntents();
-        setStatusText(tr("Configure a MixMan REST Library connection in Preferences."));
+        setStatusText(tr("Configure a REST Library catalog provider in Preferences."));
         return;
     }
-    m_client.cancelTrackCatalogRequest();
+    m_pCatalogProvider->cancelPageFetch();
     m_stagingTracks.clear();
     m_stagingRemoteIds.clear();
     m_seenCursors.clear();
-    m_catalogLimits.reset(settings.maxCatalogPages, settings.maxCatalogTracks);
-    m_refreshSettings = settings;
+    m_catalogLimits.reset(context.maxPages, context.maxTracks);
+    m_refreshContext = context;
     m_refreshing = true;
     m_pRefreshAction->setEnabled(false);
     setStatusText(tr("Loading REST Library catalog…"));
@@ -201,7 +206,10 @@ void RestLibraryBrowserFeature::slotRefresh() {
 
 void RestLibraryBrowserFeature::requestNextCatalogPage(const QString& cursor) {
     if (!cursor.isEmpty() && m_seenCursors.contains(cursor)) {
-        slotCatalogFetchFailed(tr("MixMan returned a repeated catalog cursor."));
+        slotCatalogFetchFailed(
+                m_refreshContext.scopeIdentity,
+                tr("%1 returned a repeated catalog cursor.")
+                        .arg(m_refreshContext.displayName));
         return;
     }
     if (!cursor.isEmpty()) {
@@ -213,22 +221,25 @@ void RestLibraryBrowserFeature::requestNextCatalogPage(const QString& cursor) {
                 "REST Library catalog refresh reached the configured maximum of %1 pages.")
                                         .arg(m_catalogLimits.maxPages());
         kLogger.warning() << message;
-        slotCatalogFetchFailed(message);
+        slotCatalogFetchFailed(m_refreshContext.scopeIdentity, message);
         return;
     }
-    m_client.fetchTrackCatalogPage(m_refreshSettings, cursor);
+    m_pCatalogProvider->fetchPage(m_refreshContext, cursor);
 }
 
 void RestLibraryBrowserFeature::slotCatalogPageFetched(
+        const QString& scopeIdentity,
         const RestLibraryCatalogPage& page) {
-    const RestLibrarySettings currentSettings =
-            RestLibrarySettings::fromConfig(m_pConfig);
-    if (resetIfSettingsChanged(currentSettings)) {
-        updateLoadCapabilities(currentSettings);
-        if (currentSettings.isConfigured() && currentSettings.useMixManDefaults) {
+    if (scopeIdentity != m_refreshContext.scopeIdentity) {
+        return;
+    }
+    const RestLibraryCatalogContext currentContext = m_pCatalogProvider->context();
+    if (resetIfContextChanged(currentContext)) {
+        updateLoadCapabilities(currentContext);
+        if (currentContext.configured) {
             slotRefresh();
         } else {
-            setStatusText(tr("Configure a MixMan REST Library connection in Preferences."));
+            setStatusText(tr("Configure a REST Library catalog provider in Preferences."));
         }
         return;
     }
@@ -238,7 +249,7 @@ void RestLibraryBrowserFeature::slotCatalogPageFetched(
                 "REST Library catalog refresh reached the configured maximum of %1 tracks.")
                                         .arg(m_catalogLimits.maxTracks());
         kLogger.warning() << message;
-        slotCatalogFetchFailed(message);
+        slotCatalogFetchFailed(m_refreshContext.scopeIdentity, message);
         return;
     }
     for (const RestLibraryTrack& track : page.tracks) {
@@ -254,7 +265,7 @@ void RestLibraryBrowserFeature::slotCatalogPageFetched(
         return;
     }
 
-    updateLoadCapabilities(currentSettings);
+    updateLoadCapabilities(currentContext);
     const QStringList selectedRemoteIds =
             m_pView ? m_pView->selectedRemoteIds() : QStringList{};
     const QList<RestLibraryTrack> completedTracks = std::move(m_stagingTracks);
@@ -262,27 +273,31 @@ void RestLibraryBrowserFeature::slotCatalogPageFetched(
     if (m_pView) {
         m_pView->restoreSelectedRemoteIds(selectedRemoteIds);
     }
-    m_pBackend->cacheManager()->reconcileTracks(completedTracks, currentSettings);
+    m_pCatalogProvider->reconcileTracks(currentContext, completedTracks);
     m_stagingRemoteIds.clear();
     m_seenCursors.clear();
     m_catalogLimits.reset(
-            currentSettings.maxCatalogPages,
-            currentSettings.maxCatalogTracks);
+            currentContext.maxPages,
+            currentContext.maxTracks);
     m_catalogLoaded = true;
     m_refreshing = false;
     m_pRefreshAction->setEnabled(true);
     updateStatusSummary();
 }
 
-void RestLibraryBrowserFeature::slotCatalogFetchFailed(const QString& message) {
-    const RestLibrarySettings currentSettings =
-            RestLibrarySettings::fromConfig(m_pConfig);
-    if (resetIfSettingsChanged(currentSettings)) {
-        updateLoadCapabilities(currentSettings);
-        if (currentSettings.isConfigured() && currentSettings.useMixManDefaults) {
+void RestLibraryBrowserFeature::slotCatalogFetchFailed(
+        const QString& scopeIdentity,
+        const QString& message) {
+    if (scopeIdentity != m_refreshContext.scopeIdentity) {
+        return;
+    }
+    const RestLibraryCatalogContext currentContext = m_pCatalogProvider->context();
+    if (resetIfContextChanged(currentContext)) {
+        updateLoadCapabilities(currentContext);
+        if (currentContext.configured) {
             slotRefresh();
         } else {
-            setStatusText(tr("Configure a MixMan REST Library connection in Preferences."));
+            setStatusText(tr("Configure a REST Library catalog provider in Preferences."));
         }
         return;
     }
@@ -292,22 +307,22 @@ void RestLibraryBrowserFeature::slotCatalogFetchFailed(const QString& message) {
     m_stagingRemoteIds.clear();
     m_seenCursors.clear();
     m_catalogLimits.reset(
-            currentSettings.maxCatalogPages,
-            currentSettings.maxCatalogTracks);
+            currentContext.maxPages,
+            currentContext.maxTracks);
     setStatusText(message.isEmpty() ? tr("REST Library catalog refresh failed.") : message);
 }
 
 void RestLibraryBrowserFeature::slotTrackCacheStateChanged(
         const RestLibraryCacheResult& result) {
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    if (resetIfSettingsChanged(settings)) {
-        updateLoadCapabilities(settings);
-        if (settings.isConfigured() && settings.useMixManDefaults) {
+    const RestLibraryCatalogContext context = m_pCatalogProvider->context();
+    if (resetIfContextChanged(context)) {
+        updateLoadCapabilities(context);
+        if (context.configured) {
             slotRefresh();
         }
         return;
     }
-    if (result.cacheIdentity != RestLibraryCacheManager::cacheIdentity(settings)) {
+    if (result.cacheIdentity != context.cacheIdentity) {
         return;
     }
     m_pTableModel->updateTrackCacheState(result);
@@ -355,8 +370,8 @@ void RestLibraryBrowserFeature::slotTrackCacheStateChanged(
 }
 
 void RestLibraryBrowserFeature::slotUnresolvedTrackLoad(const QModelIndex& index) {
-    RestLibrarySettings settings;
-    if (!validateDownloadSettings(&settings)) {
+    RestLibraryCatalogContext context;
+    if (!validateDownloadContext(&context)) {
         return;
     }
     const QString remoteId = m_pTableModel->remoteIdForIndex(index);
@@ -364,7 +379,7 @@ void RestLibraryBrowserFeature::slotUnresolvedTrackLoad(const QModelIndex& index
         return;
     }
     m_pendingDefaultLoadRemoteId = remoteId;
-    requestTrackCache(remoteId, settings);
+    requestTrackCache(remoteId, context);
 }
 
 #ifdef __STEM__
@@ -379,8 +394,8 @@ void RestLibraryBrowserFeature::slotUnresolvedTrackLoadToPlayer(
         const QString& group,
         bool play) {
 #endif
-    RestLibrarySettings settings;
-    if (!validateDownloadSettings(&settings)) {
+    RestLibraryCatalogContext context;
+    if (!validateDownloadContext(&context)) {
         return;
     }
     const QString remoteId = m_pTableModel->remoteIdForIndex(index);
@@ -395,14 +410,14 @@ void RestLibraryBrowserFeature::slotUnresolvedTrackLoadToPlayer(
     intent.stemMask = stemMask;
 #endif
     m_pendingPlayerLoads.insert(group, intent);
-    requestTrackCache(remoteId, settings);
+    requestTrackCache(remoteId, context);
 }
 
 void RestLibraryBrowserFeature::slotUnresolvedTracksAddToAutoDJ(
         const QModelIndexList& indices,
         PlaylistDAO::AutoDJSendLoc location) {
-    RestLibrarySettings settings;
-    if (!validateDownloadSettings(&settings)) {
+    RestLibraryCatalogContext context;
+    if (!validateDownloadContext(&context)) {
         return;
     }
     if (m_autoDJIntent.active()) {
@@ -439,9 +454,9 @@ void RestLibraryBrowserFeature::slotUnresolvedTracksAddToAutoDJ(
         return;
     }
     if (!tracksToCache.isEmpty()) {
-        m_pBackend->cacheManager()->cacheTracks(
+        m_pCatalogProvider->resolveAudio(
+                context,
                 tracksToCache,
-                settings,
                 RestLibraryCacheRequestOwner::BrowserAutoDJ);
         setStatusText(tr("Downloading %1 tracks for AutoDJ…")
                               .arg(tracksToCache.size()));
@@ -451,7 +466,7 @@ void RestLibraryBrowserFeature::slotUnresolvedTracksAddToAutoDJ(
 
 void RestLibraryBrowserFeature::requestTrackCache(
         const QString& remoteId,
-        const RestLibrarySettings& settings) {
+        const RestLibraryCatalogContext& context) {
     const RestLibraryTrack track = m_pTableModel->trackForRemoteId(remoteId);
     if (track.remoteId.isEmpty()) {
         return;
@@ -461,9 +476,9 @@ void RestLibraryBrowserFeature::requestTrackCache(
         finishPendingLoads(remoteId);
         return;
     }
-    m_pBackend->cacheManager()->cacheTracks(
+    m_pCatalogProvider->resolveAudio(
+            context,
             {track},
-            settings,
             RestLibraryCacheRequestOwner::BrowserLoad);
     setStatusText(tr("Downloading %1 — %2…").arg(track.artist, track.title));
 }
@@ -614,48 +629,48 @@ bool RestLibraryBrowserFeature::mayLoadToGroup(const QString& group) const {
     return allow || ControlObject::get(ConfigKey(group, QStringLiteral("play"))) <= 0.0;
 }
 
-bool RestLibraryBrowserFeature::resetIfSettingsChanged(
-        const RestLibrarySettings& settings) {
-    const QString identity = settingsIdentity(settings);
-    if (identity == m_settingsIdentity) {
+bool RestLibraryBrowserFeature::resetIfContextChanged(
+        const RestLibraryCatalogContext& context) {
+    if (context == m_currentContext) {
         return false;
     }
-    m_client.cancelTrackCatalogRequest();
-    m_pBackend->cacheManager()->abortAll();
+    m_pCatalogProvider->cancelPageFetch();
+    m_pCatalogProvider->cancelAudio(RestLibraryCacheRequestOwner::BrowserLoad);
+    m_pCatalogProvider->cancelAudio(RestLibraryCacheRequestOwner::BrowserAutoDJ);
     clearPendingIntents();
     m_stagingTracks.clear();
     m_stagingRemoteIds.clear();
     m_seenCursors.clear();
-    m_catalogLimits.reset(settings.maxCatalogPages, settings.maxCatalogTracks);
+    m_catalogLimits.reset(context.maxPages, context.maxTracks);
     m_pTableModel->setTracks({});
-    m_pTableModel->setCacheIdentity(
-            RestLibraryCacheManager::cacheIdentity(settings));
+    m_pTableModel->setCacheIdentity(context.cacheIdentity);
     m_catalogLoaded = false;
     m_refreshing = false;
     m_pRefreshAction->setEnabled(true);
-    m_settingsIdentity = identity;
+    m_currentContext = context;
     return true;
 }
 
-bool RestLibraryBrowserFeature::validateDownloadSettings(
-        RestLibrarySettings* pSettings) {
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    if (resetIfSettingsChanged(settings)) {
-        updateLoadCapabilities(settings);
-        if (settings.isConfigured() && settings.useMixManDefaults) {
+bool RestLibraryBrowserFeature::validateDownloadContext(
+        RestLibraryCatalogContext* pContext) {
+    const RestLibraryCatalogContext context = m_pCatalogProvider->context();
+    if (resetIfContextChanged(context)) {
+        updateLoadCapabilities(context);
+        if (context.configured) {
             slotRefresh();
         }
         return false;
     }
-    updateLoadCapabilities(settings);
-    if (!settings.isConfigured() || !settings.useMixManDefaults ||
-            !settings.hasAudioDownloadConfigured()) {
+    updateLoadCapabilities(context);
+    if (!context.configured ||
+            !context.capabilities.testFlag(
+                    RestLibraryCatalogCapability::ResolveAudio)) {
         clearPendingIntents();
         setStatusText(tr("REST Library audio download is not configured."));
         return false;
     }
-    if (pSettings) {
-        *pSettings = settings;
+    if (pContext) {
+        *pContext = context;
     }
     return true;
 }
@@ -668,25 +683,11 @@ void RestLibraryBrowserFeature::clearPendingIntents() {
 }
 
 void RestLibraryBrowserFeature::updateLoadCapabilities(
-        const RestLibrarySettings& settings) {
+        const RestLibraryCatalogContext& context) {
     m_pTableModel->setCacheLoadCapabilitiesEnabled(
-            settings.isConfigured() && settings.useMixManDefaults &&
-            settings.hasAudioDownloadConfigured());
-}
-
-QString RestLibraryBrowserFeature::settingsIdentity(
-        const RestLibrarySettings& settings) const {
-    QUrl url = settings.baseUrl.adjusted(
-            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment);
-    QString path = url.path();
-    while (path.endsWith(QLatin1Char('/'))) {
-        path.chop(1);
-    }
-    url.setPath(path);
-    return url.toString(QUrl::FullyEncoded) + QLatin1Char('|') +
-            settings.trackListPath + QLatin1Char('|') +
-            (settings.useMixManDefaults ? QStringLiteral("mixman") : QStringLiteral("custom")) +
-            QLatin1Char('|') + settings.credentialContextNamespace();
+            context.configured &&
+            context.capabilities.testFlag(
+                    RestLibraryCatalogCapability::ResolveAudio));
 }
 
 void RestLibraryBrowserFeature::setStatusText(const QString& text) {
