@@ -176,6 +176,34 @@ TEST(RestLibraryClientTest, ParsesHydratedCatalogPage) {
     EXPECT_EQ(page.nextCursor, QStringLiteral("cursor-2"));
 }
 
+TEST(RestLibraryClientTest, ValidatesIntegerFieldsBeforeConversion) {
+    bool valid = false;
+    const auto page = RestLibraryClient::parseTrackCatalogPageForTesting(
+            QJsonDocument::fromJson(R"json({
+                "items": [
+                    {"id": 1, "play_count": 2147483647},
+                    {"id": 2, "play_count": "2147483647"},
+                    {"id": 3, "play_count": 2147483648},
+                    {"id": 4, "play_count": "2147483648"},
+                    {"id": 5, "play_count": 1.5},
+                    {"id": 6, "play_count": "nan"},
+                    {"id": 7, "play_count": -1}
+                ],
+                "next_cursor": null
+            })json"),
+            &valid);
+
+    ASSERT_TRUE(valid);
+    ASSERT_EQ(page.tracks.size(), 7);
+    EXPECT_EQ(page.tracks.at(0).playCount, std::numeric_limits<int>::max());
+    EXPECT_EQ(page.tracks.at(1).playCount, std::numeric_limits<int>::max());
+    EXPECT_EQ(page.tracks.at(2).playCount, 0);
+    EXPECT_EQ(page.tracks.at(3).playCount, 0);
+    EXPECT_EQ(page.tracks.at(4).playCount, 0);
+    EXPECT_EQ(page.tracks.at(5).playCount, 0);
+    EXPECT_EQ(page.tracks.at(6).playCount, 0);
+}
+
 TEST(RestLibraryClientTest, PreservesNormalizedZeroAndRejectsInvalidNormalizedValues) {
     bool valid = false;
     const auto page = RestLibraryClient::parseTrackCatalogPageForTesting(

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -2969,9 +2970,10 @@ RestLibraryTrack RestLibraryClient::parseTrackObject(const QJsonObject& object) 
     track.moveType = readString(object, {"resolved_move_type", "move_type"});
     track.color = readString(object, {"color", "colour"});
     track.region = readString(object, {"region", "region_id"});
-    track.playCount = static_cast<int>(readDouble(object, {"play_count"}));
+    track.playCount = readOptionalNonNegativeInt(object, {"play_count"}).value_or(0);
     if (track.playCount <= 0) {
-        track.playCount = static_cast<int>(readDouble(metadata, {"play_count"}));
+        track.playCount =
+                readOptionalNonNegativeInt(metadata, {"play_count"}).value_or(0);
     }
     track.favour = normalizedValue(readOptionalDouble(object, {"favour"}));
     if (!track.favour.has_value()) {
@@ -3072,7 +3074,7 @@ RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocument(const QJsonDocu
     result.policyPreset = readString(root, {"policy_preset"});
     result.resolvedMoveType = readString(root, {"resolved_move_type"});
     result.recommendationEventId =
-            static_cast<int>(readDouble(root, {"recommendation_event_id"}));
+            readOptionalNonNegativeInt(root, {"recommendation_event_id"}).value_or(0);
     result.selectedBranchScore = readDouble(pathSource, {"selected_branch_score"});
 
     const QJsonArray alternatives = plan.value(QStringLiteral("alternatives")).toArray();
@@ -3101,12 +3103,14 @@ RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocument(const QJsonDocu
         }
         track.score = readDouble(recommendation, {"score"});
         track.quality = track.score;
-        track.recommendationEventId =
-                static_cast<int>(readDouble(recommendation, {"recommendation_event_id"}));
-        track.recommendationItemId =
-                static_cast<int>(readDouble(recommendation, {"recommendation_item_id"}));
+        track.recommendationEventId = readOptionalNonNegativeInt(
+                recommendation, {"recommendation_event_id"})
+                                              .value_or(0);
+        track.recommendationItemId = readOptionalNonNegativeInt(
+                recommendation, {"recommendation_item_id"})
+                                             .value_or(0);
         track.recommendationPosition =
-                static_cast<int>(readDouble(recommendation, {"position"}));
+                readOptionalNonNegativeInt(recommendation, {"position"}).value_or(0);
         track.planned = recommendation.value(QStringLiteral("planned")).toBool(false);
         track.moveType = readString(recommendation, {"resolved_move_type", "move_type"});
         track.transitionRisk = readDouble(recommendation, {"transition_risk"});
@@ -3155,7 +3159,8 @@ RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocument(const QJsonDocu
         step.title = track.title;
         step.artist = track.artist;
         step.score = readDouble(stepObject, {"score"});
-        step.position = static_cast<int>(readDouble(stepObject, {"position"}));
+        step.position =
+                readOptionalNonNegativeInt(stepObject, {"position"}).value_or(0);
         step.moveType = readString(stepObject, {"resolved_move_type", "move_type"});
         step.color = track.color;
         if (step.color.isEmpty()) {
@@ -3184,13 +3189,15 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
             : root;
     state.raw = authoritative;
     state.sessionId = readString(authoritative, {"session_id"});
-    state.revision = static_cast<int>(readDouble(authoritative, {"revision"}));
-    state.pressureRevision =
-            static_cast<int>(readDouble(authoritative, {"pressure_revision"}));
+    state.revision =
+            readOptionalNonNegativeInt(authoritative, {"revision"}).value_or(0);
+    state.pressureRevision = readOptionalNonNegativeInt(
+            authoritative, {"pressure_revision"})
+                                     .value_or(0);
     if (authoritative.value(QStringLiteral("playback")).isObject()) {
         state.playback = authoritative.value(QStringLiteral("playback")).toObject();
         state.playbackRevision =
-                static_cast<int>(readDouble(state.playback, {"revision"}));
+                readOptionalNonNegativeInt(state.playback, {"revision"}).value_or(0);
     }
     if (authoritative.value(QStringLiteral("pressure_state")).isObject()) {
         state.pressureState = authoritative.value(QStringLiteral("pressure_state")).toObject();
@@ -3206,8 +3213,9 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
                 readString(state.playbackController, {"instance_id"});
         state.playbackLease.leaseId =
                 readString(state.playbackController, {"lease_id"});
-        state.playbackLease.generation = static_cast<int>(
-                readDouble(state.playbackController, {"generation"}));
+        state.playbackLease.generation = readOptionalNonNegativeInt(
+                state.playbackController, {"generation"})
+                                                 .value_or(0);
         state.playbackLease.active =
                 state.playbackController.value(QStringLiteral("active")).toBool(false);
     }
@@ -3255,7 +3263,7 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
         track.score = readDouble(candidate, {"score"});
         track.quality = track.score > 0.0 ? track.score : readDouble(candidate, {"quality"});
         track.recommendationPosition =
-                static_cast<int>(readDouble(candidate, {"position"}));
+                readOptionalNonNegativeInt(candidate, {"position"}).value_or(0);
         track.planned = candidate.value(QStringLiteral("planned")).toBool(false);
         track.moveType = readString(candidate, {"resolved_move_type", "move_type"});
         track.transitionRisk = readDouble(candidate, {"transition_risk"});
@@ -3303,7 +3311,8 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
         step.artist = track.artist.isEmpty() ? readString(stepObject, {"artist"})
                                              : track.artist;
         step.score = readDouble(stepObject, {"score"});
-        step.position = static_cast<int>(readDouble(stepObject, {"position"}));
+        step.position =
+                readOptionalNonNegativeInt(stepObject, {"position"}).value_or(0);
         step.moveType = readString(stepObject, {"resolved_move_type", "move_type"});
         step.color = track.color.isEmpty() ? readString(stepObject, {"color", "colour"})
                                            : track.color;
@@ -3350,8 +3359,10 @@ RestLibraryDiagnostics RestLibraryClient::parseIndexStatusDocument(const QJsonDo
     }
     const QJsonObject object = document.object();
     diagnostics.indexReady = object.value(QStringLiteral("ready")).toBool(false);
-    diagnostics.indexCount = static_cast<int>(readDouble(object, {"count"}));
-    diagnostics.indexDimension = static_cast<int>(readDouble(object, {"dim"}));
+    diagnostics.indexCount =
+            readOptionalNonNegativeInt(object, {"count"}).value_or(0);
+    diagnostics.indexDimension =
+            readOptionalNonNegativeInt(object, {"dim"}).value_or(0);
     return diagnostics;
 }
 
@@ -3539,15 +3550,43 @@ std::optional<double> RestLibraryClient::readOptionalDouble(
     return std::nullopt;
 }
 
+std::optional<int> RestLibraryClient::readOptionalNonNegativeInt(
+        const QJsonObject& object,
+        std::initializer_list<QString> keys) {
+    for (const QString& key : keys) {
+        const QJsonValue value = object.value(key);
+        if (value.isUndefined() || value.isNull()) {
+            continue;
+        }
+
+        bool ok = false;
+        double number = 0.0;
+        if (value.isDouble()) {
+            number = value.toDouble();
+            ok = true;
+        } else if (value.isString()) {
+            number = value.toString().toDouble(&ok);
+        }
+
+        if (!ok || !std::isfinite(number) || std::trunc(number) != number ||
+                number < 0.0 ||
+                number > static_cast<double>(std::numeric_limits<int>::max())) {
+            return std::nullopt;
+        }
+        return static_cast<int>(number);
+    }
+    return std::nullopt;
+}
+
 int RestLibraryClient::readRating(const QJsonObject& object) {
     const double rating = readDouble(object, {"rating", "dj_rating"});
-    if (rating <= 0.0) {
+    if (!std::isfinite(rating) || rating <= 0.0) {
         return 0;
     }
     if (rating <= 5.0) {
         return static_cast<int>(std::round(rating));
     }
-    return std::clamp(static_cast<int>(std::round(rating)), 0, 100);
+    return static_cast<int>(std::round(std::min(rating, 100.0)));
 }
 
 } // namespace mixxx::library::rest

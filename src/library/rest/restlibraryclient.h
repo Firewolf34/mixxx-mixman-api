@@ -321,6 +321,9 @@ class RestLibraryClient final : public QObject {
     static std::optional<double> readOptionalDouble(
             const QJsonObject& object,
             std::initializer_list<QString> keys);
+    static std::optional<int> readOptionalNonNegativeInt(
+            const QJsonObject& object,
+            std::initializer_list<QString> keys);
     static int readRating(const QJsonObject& object);
 
     QPointer<QNetworkAccessManager> m_pNetworkAccessManager;
