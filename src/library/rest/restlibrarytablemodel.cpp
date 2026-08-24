@@ -49,6 +49,23 @@ QString cacheStateText(RestLibraryCacheState state) {
     return {};
 }
 
+QString cacheStateSearchValue(RestLibraryCacheState state) {
+    switch (state) {
+    case RestLibraryCacheState::Missing:
+        return QStringLiteral("missing");
+    case RestLibraryCacheState::Downloading:
+        return QStringLiteral("downloading");
+    case RestLibraryCacheState::Ready:
+        return QStringLiteral("ready");
+    case RestLibraryCacheState::Failed:
+        return QStringLiteral("failed");
+    case RestLibraryCacheState::Stale:
+        return QStringLiteral("stale");
+    }
+    DEBUG_ASSERT(!"unreachable");
+    return {};
+}
+
 QString durationText(double seconds) {
     if (seconds <= 0.0) {
         return {};
@@ -118,6 +135,43 @@ RestLibraryTableModel::RestLibraryTableModel(
                         QStringLiteral("duration"),
                         QStringLiteral("rating"),
                         QStringLiteral("filetype")});
+        m_pSearchQueryParser->setInMemoryFieldOverrides(
+                {QStringLiteral("remote_id"),
+                        QStringLiteral("source"),
+                        QStringLiteral("cache")},
+                {QStringLiteral("lo"),
+                        QStringLiteral("location"),
+                        QStringLiteral("dir"),
+                        QStringLiteral("directory"),
+                        QStringLiteral("c"),
+                        QStringLiteral("crate"),
+                        QStringLiteral("id"),
+                        QStringLiteral("ad"),
+                        QStringLiteral("added"),
+                        QStringLiteral("dateadded"),
+                        QStringLiteral("datetime_added"),
+                        QStringLiteral("date_added")},
+                [this](const TrackPointer& pTrack, const QString& field) -> QVariant {
+                    if (!pTrack) {
+                        return {};
+                    }
+                    const auto rowIt = m_searchRows.constFind(pTrack.get());
+                    if (rowIt == m_searchRows.cend() ||
+                            *rowIt < 0 || *rowIt >= m_tracks.size()) {
+                        return {};
+                    }
+                    const RestLibraryTrack& track = m_tracks.at(*rowIt);
+                    if (field == QStringLiteral("remote_id")) {
+                        return track.remoteId;
+                    }
+                    if (field == QStringLiteral("source")) {
+                        return track.sourceLabel;
+                    }
+                    if (field == QStringLiteral("cache")) {
+                        return cacheStateSearchValue(track.cacheState);
+                    }
+                    return {};
+                });
     }
     m_sortColumn = m_mode == Mode::Recommendations
             ? ColumnRecommendationRank
@@ -141,8 +195,10 @@ void RestLibraryTableModel::setTracks(QList<RestLibraryTrack> tracks) {
     m_tracks = std::move(tracks);
     rebuildRecommendationRanks();
     m_searchTracks.clear();
+    m_searchRows.clear();
     if (m_mode == Mode::Catalog) {
-        for (const RestLibraryTrack& remoteTrack : std::as_const(m_tracks)) {
+        for (int row = 0; row < m_tracks.size(); ++row) {
+            const RestLibraryTrack& remoteTrack = m_tracks.at(row);
             TrackPointer pTrack = Track::newTemporary();
             pTrack->setArtist(remoteTrack.artist);
             pTrack->setTitle(remoteTrack.title);
@@ -164,6 +220,7 @@ void RestLibraryTableModel::setTracks(QList<RestLibraryTrack> tracks) {
                             ? remoteTrack.releaseDate.toString(Qt::ISODate)
                             : QString());
             pTrack->setType(remoteTrack.audioFileExtension);
+            m_searchRows.insert(pTrack.get(), row);
             m_searchTracks.insert(remoteTrack.remoteId, std::move(pTrack));
         }
         m_pSearchQuery = m_pSearchQueryParser->parseQuery(m_currentSearch, {});
@@ -190,6 +247,13 @@ void RestLibraryTableModel::updateTrackCacheState(const RestLibraryCacheResult& 
         return;
     }
 
+    const bool rebuildRows =
+            (m_mode == Mode::Catalog && !m_currentSearch.trimmed().isEmpty()) ||
+            m_sortColumn == ColumnCacheState;
+    if (rebuildRows) {
+        beginResetModel();
+    }
+    bool updated = false;
     for (int i = 0; i < m_tracks.size(); ++i) {
         RestLibraryTrack& track = m_tracks[i];
         if (track.remoteId != result.remoteId) {
@@ -200,8 +264,9 @@ void RestLibraryTableModel::updateTrackCacheState(const RestLibraryCacheResult& 
         track.cacheError = result.errorText;
         track.cacheStatusCode = result.statusCode;
         track.cacheNetworkError = result.networkError;
+        updated = true;
 
-        const int visibleRow = m_visibleRows.indexOf(i);
+        const int visibleRow = rebuildRows ? -1 : m_visibleRows.indexOf(i);
         if (visibleRow >= 0) {
             emit dataChanged(
                     index(visibleRow, ColumnCacheState),
@@ -213,6 +278,12 @@ void RestLibraryTableModel::updateTrackCacheState(const RestLibraryCacheResult& 
                             Qt::AccessibleDescriptionRole,
                             TrackModel::kDataExportRole});
         }
+    }
+    if (rebuildRows) {
+        if (updated) {
+            rebuildVisibleRows();
+        }
+        endResetModel();
     }
 }
 

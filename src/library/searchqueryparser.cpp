@@ -162,6 +162,22 @@ void SearchQueryParser::setSearchColumns(QStringList searchColumns) {
     }
 }
 
+void SearchQueryParser::setInMemoryFieldOverrides(
+        const QSet<QString>& textFields,
+        const QSet<QString>& unsupportedFields,
+        InMemoryTrackValueResolver resolver) {
+    m_inMemoryTextFields = textFields;
+    m_unsupportedFields = unsupportedFields;
+    m_inMemoryValueResolver = std::move(resolver);
+    for (const QString& field : textFields) {
+        if (!m_textFilters.contains(field)) {
+            m_textFilters.append(field);
+        }
+    }
+    m_textFilterMatcher = QRegularExpression(
+            QString("^-?(%1):(.*)$").arg(m_textFilters.join("|")));
+}
+
 SearchQueryParser::TextArgumentResult SearchQueryParser::getTextArgument(QString argument,
         QStringList* tokens,
         bool removeLeadingEqualsSign) const {
@@ -201,14 +217,37 @@ void SearchQueryParser::parseTokens(QStringList tokens,
         bool negate = token.startsWith(kNegatePrefix);
         std::unique_ptr<QueryNode> pNode;
 
+        QString overrideField = token.section(QLatin1Char(':'), 0, 0);
+        if (overrideField.startsWith(kNegatePrefix) ||
+                overrideField.startsWith(kFuzzyPrefix)) {
+            overrideField.remove(0, 1);
+        }
+        if (m_unsupportedFields.contains(overrideField)) {
+            getTextArgument(token.section(QLatin1Char(':'), 1), &tokens);
+            pNode = std::make_unique<FalseQueryNode>();
+        }
+
         const QRegularExpressionMatch textFilterMatch = m_textFilterMatcher.match(token);
         const QRegularExpressionMatch numericFilterMatch = m_numericFilterMatcher.match(token);
         const QRegularExpressionMatch specialFilterMatch = m_specialFilterMatcher.match(token);
-        if (textFilterMatch.hasMatch()) {
+        if (pNode) {
+            // An explicit in-memory override already handled this token.
+        } else if (textFilterMatch.hasMatch()) {
             QString field = textFilterMatch.captured(1);
             auto [argument, matchMode] = getTextArgument(textFilterMatch.captured(2), &tokens);
 
-            if (argument == kMissingFieldSearchTerm) {
+            if (m_inMemoryTextFields.contains(field)) {
+                if (!argument.isEmpty()) {
+                    pNode = std::make_unique<InMemoryTextFilterNode>(
+                            field,
+                            argument == kMissingFieldSearchTerm
+                                    ? QString()
+                                    : argument,
+                            matchMode,
+                            argument == kMissingFieldSearchTerm,
+                            m_inMemoryValueResolver);
+                }
+            } else if (argument == kMissingFieldSearchTerm) {
                 qDebug() << "argument explicit empty";
                 if (field == "crate") {
                     pNode = std::make_unique<NoCrateFilterNode>(

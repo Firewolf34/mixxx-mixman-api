@@ -127,6 +127,7 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
     std::unique_ptr<QueryNode> m_pSearchQuery;
     QList<RestLibraryTrack> m_tracks;
     QHash<QString, TrackPointer> m_searchTracks;
+    QHash<const Track*, int> m_searchRows;
     QVector<int> m_recommendationRanks;
     QVector<int> m_visibleRows;
     QString m_currentSearch;

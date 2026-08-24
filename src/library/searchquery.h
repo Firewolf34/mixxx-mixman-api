@@ -6,6 +6,7 @@
 #include <QSqlDatabase>
 #include <QString>
 #include <QStringList>
+#include <functional>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -34,6 +35,40 @@ class QueryNode {
 
   protected:
     QueryNode() = default;
+};
+
+using InMemoryTrackValueResolver =
+        std::function<QVariant(const TrackPointer&, const QString&)>;
+
+/// Match-only text field used by non-database models. toSql() fails closed so
+/// these nodes cannot silently broaden a database query.
+class InMemoryTextFilterNode : public QueryNode {
+  public:
+    InMemoryTextFilterNode(QString field,
+            QString argument,
+            StringMatch matchMode,
+            bool matchMissing,
+            InMemoryTrackValueResolver resolver);
+
+    bool match(const TrackPointer& pTrack) const override;
+    QString toSql() const override;
+
+  private:
+    QString m_field;
+    QString m_argument;
+    StringMatch m_matchMode;
+    bool m_matchMissing;
+    InMemoryTrackValueResolver m_resolver;
+};
+
+class FalseQueryNode : public QueryNode {
+  public:
+    bool match(const TrackPointer&) const override {
+        return false;
+    }
+    QString toSql() const override {
+        return QStringLiteral("FALSE");
+    }
 };
 
 class GroupNode : public QueryNode {

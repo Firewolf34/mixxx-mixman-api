@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QRegularExpression>
+#include <QSet>
 #include <QString>
 #include <memory>
 
@@ -16,6 +17,14 @@ class SearchQueryParser {
     explicit SearchQueryParser(TrackCollection* pTrackCollection, QStringList searchColumns);
 
     void setSearchColumns(QStringList searchColumns);
+
+    /// Adds match-only text fields and overrides unsupported fields for an
+    /// in-memory model. Unsupported positive filters are always false; normal
+    /// parser negation therefore makes their negative form true.
+    void setInMemoryFieldOverrides(
+            const QSet<QString>& textFields,
+            const QSet<QString>& unsupportedFields,
+            InMemoryTrackValueResolver resolver);
 
     std::unique_ptr<QueryNode> parseQuery(
             const QString& query,
@@ -54,6 +63,9 @@ class SearchQueryParser {
     QRegularExpression m_crateFilterMatcher;
     QRegularExpression m_numericFilterMatcher;
     QRegularExpression m_specialFilterMatcher;
+    QSet<QString> m_inMemoryTextFields;
+    QSet<QString> m_unsupportedFields;
+    InMemoryTrackValueResolver m_inMemoryValueResolver;
 
     DISALLOW_COPY_AND_ASSIGN(SearchQueryParser);
 };

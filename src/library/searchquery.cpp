@@ -2,6 +2,7 @@
 
 #include <QLocale>
 #include <QRegularExpression>
+#include <utility>
 
 #include "library/dao/trackschema.h"
 #include "library/queryutil.h"
@@ -156,6 +157,41 @@ QString OrNode::toSql() const {
 
 bool NotNode::match(const TrackPointer& pTrack) const {
     return !m_pNode->match(pTrack);
+}
+
+InMemoryTextFilterNode::InMemoryTextFilterNode(QString field,
+        QString argument,
+        StringMatch matchMode,
+        bool matchMissing,
+        InMemoryTrackValueResolver resolver)
+        : m_field(std::move(field)),
+          m_argument(std::move(argument)),
+          m_matchMode(matchMode),
+          m_matchMissing(matchMissing),
+          m_resolver(std::move(resolver)) {
+    mixxx::DbConnection::makeStringLatinLow(&m_argument);
+}
+
+bool InMemoryTextFilterNode::match(const TrackPointer& pTrack) const {
+    if (!m_resolver) {
+        return false;
+    }
+    const QVariant value = m_resolver(pTrack, m_field);
+    if (!value.isValid() || !value.canConvert<QString>()) {
+        return m_matchMissing;
+    }
+    QString text = value.toString();
+    if (m_matchMissing) {
+        return text.isEmpty();
+    }
+    mixxx::DbConnection::makeStringLatinLow(&text);
+    return m_matchMode == StringMatch::Equals
+            ? text == m_argument
+            : text.contains(m_argument);
+}
+
+QString InMemoryTextFilterNode::toSql() const {
+    return QStringLiteral("FALSE");
 }
 
 QString NotNode::toSql() const {

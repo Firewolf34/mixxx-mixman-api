@@ -660,6 +660,81 @@ TEST_F(RestLibraryTableModelTest, CatalogUsesMixxxSearchOperatorsAndNumericSort)
     EXPECT_EQ(model.visibleRowForRemoteId(QStringLiteral("missing")), -1);
 }
 
+TEST_F(RestLibraryTableModelTest, CatalogSupportsExplicitRemoteSearchFields) {
+    RestLibraryTableModel model(
+            nullptr,
+            trackCollectionManager(),
+            RestLibraryTableModel::Mode::Catalog);
+    RestLibraryTrack ready = newTrack(
+            QStringLiteral("remote-17"),
+            QStringLiteral("Alpha"),
+            QStringLiteral("First"),
+            RestLibraryCacheState::Ready);
+    ready.sourceLabel = QStringLiteral("MixMan Archive");
+    RestLibraryTrack missing = newTrack(
+            QStringLiteral("remote-18"),
+            QStringLiteral("Beta"),
+            QStringLiteral("Second"),
+            RestLibraryCacheState::Missing);
+    missing.sourceLabel = QStringLiteral("Guest Library");
+    model.setTracks({ready, missing});
+
+    model.search(QStringLiteral("remote_id:=remote-17"));
+    ASSERT_EQ(model.rowCount(), 1);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("remote-17"));
+
+    model.search(QStringLiteral("source:\"mixman archive\""));
+    ASSERT_EQ(model.rowCount(), 1);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("remote-17"));
+
+    model.search(QStringLiteral("cache:missing OR -source:guest"));
+    EXPECT_EQ(model.rowCount(), 2);
+
+    const QList<RestLibraryCacheState> states{
+            RestLibraryCacheState::Missing,
+            RestLibraryCacheState::Downloading,
+            RestLibraryCacheState::Ready,
+            RestLibraryCacheState::Failed,
+            RestLibraryCacheState::Stale};
+    const QStringList stateNames{
+            QStringLiteral("missing"),
+            QStringLiteral("downloading"),
+            QStringLiteral("ready"),
+            QStringLiteral("failed"),
+            QStringLiteral("stale")};
+    for (int i = 0; i < states.size(); ++i) {
+        RestLibraryCacheResult result;
+        result.remoteId = QStringLiteral("remote-17");
+        result.cacheState = states.at(i);
+        model.updateTrackCacheState(result);
+        model.search(QStringLiteral("cache:=%1").arg(stateNames.at(i)));
+        ASSERT_EQ(model.rowCount(), 1);
+        EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("remote-17"));
+    }
+}
+
+TEST_F(RestLibraryTableModelTest, CatalogCacheSearchUpdatesWhenStateChanges) {
+    RestLibraryTableModel model(
+            nullptr,
+            trackCollectionManager(),
+            RestLibraryTableModel::Mode::Catalog);
+    model.setTracks({newTrack(
+            QStringLiteral("1"),
+            QStringLiteral("Alpha"),
+            QStringLiteral("First"),
+            RestLibraryCacheState::Downloading)});
+    model.search(QStringLiteral("cache:ready"));
+    EXPECT_EQ(model.rowCount(), 0);
+
+    RestLibraryCacheResult result;
+    result.remoteId = QStringLiteral("1");
+    result.cacheState = RestLibraryCacheState::Ready;
+    model.updateTrackCacheState(result);
+
+    ASSERT_EQ(model.rowCount(), 1);
+    EXPECT_EQ(model.remoteIdForIndex(model.index(0, 0)), QStringLiteral("1"));
+}
+
 TEST_F(RestLibraryTableModelTest, CatalogLeavesLocalOnlySearchFieldsUnavailable) {
     RestLibraryTableModel model(
             nullptr,
@@ -668,9 +743,25 @@ TEST_F(RestLibraryTableModelTest, CatalogLeavesLocalOnlySearchFieldsUnavailable)
     model.setTracks({newTrack(
             QStringLiteral("1"), QStringLiteral("Alpha"), QStringLiteral("First"))});
 
-    model.search(QStringLiteral("location:remote"));
+    const QStringList unsupportedQueries{
+            QStringLiteral("location:remote"),
+            QStringLiteral("lo:remote"),
+            QStringLiteral("directory:music"),
+            QStringLiteral("dir:music"),
+            QStringLiteral("crate:dance"),
+            QStringLiteral("c:dance"),
+            QStringLiteral("id:1"),
+            QStringLiteral("added:today"),
+            QStringLiteral("dateadded:today"),
+            QStringLiteral("datetime_added:today"),
+            QStringLiteral("date_added:today")};
+    for (const QString& query : unsupportedQueries) {
+        model.search(query);
+        EXPECT_EQ(model.rowCount(), 0) << query.toStdString();
+    }
 
-    EXPECT_EQ(model.rowCount(), 0);
+    model.search(QStringLiteral("-location:remote"));
+    EXPECT_EQ(model.rowCount(), 1);
 }
 
 TEST_F(RestLibraryTableModelTest, NormalizedValuesKeepZeroDistinctFromMissing) {
