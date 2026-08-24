@@ -8,6 +8,7 @@
 #include <QTemporaryDir>
 
 #include "library/dao/playlistdao.h"
+#include "library/dao/trackschema.h"
 #include "library/rest/restlibrarybackend.h"
 #include "library/rest/restlibraryfeature.h"
 #include "library/rest/restlibrarysettings.h"
@@ -118,6 +119,27 @@ class RestLibraryFeatureTest : public LibraryTest {
         m_pFeature->slotFetchFailed(message);
     }
 
+    mixxx::library::rest::RestLibraryTableModel* tableModel() const {
+        return m_pFeature->m_pTableModel.get();
+    }
+
+    QStringList autoDJRemoteIds() const {
+        return m_pFeature->m_autoDJRemoteIds;
+    }
+
+    int autoDJPendingCount() const {
+        return m_pFeature->m_autoDJPendingIds.size();
+    }
+
+    bool autoDJPendingIsEmpty() const {
+        return m_pFeature->m_autoDJPendingIds.isEmpty();
+    }
+
+    void mapPendingTrack(const TrackPointer& pTrack, const QString& remoteId) {
+        m_pFeature->m_pendingTrackLookup = pTrack;
+        m_pFeature->slotTrackLookupSucceeded(remoteId);
+    }
+
     QList<TrackId> autoDJTrackIds() {
         PlaylistDAO& playlistDao = internalCollection()->getPlaylistDAO();
         return playlistDao.getTrackIdsInPlaylistOrder(
@@ -152,14 +174,14 @@ TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForAllDownloadsAndPreservesOrder)
     pFirstAudio->Done(true);
 
     const TrackPointer pFirst =
-            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("12"));
+            tableModel()->materializeTrack(QStringLiteral("12"));
     const TrackPointer pSecond =
-            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("11"));
+            tableModel()->materializeTrack(QStringLiteral("11"));
     ASSERT_TRUE(pFirst);
     ASSERT_TRUE(pSecond);
     EXPECT_EQ(autoDJTrackIds(),
             (QList<TrackId>{pFirst->getId(), pSecond->getId()}));
-    EXPECT_TRUE(m_pFeature->m_autoDJRemoteIds.isEmpty());
+    EXPECT_TRUE(autoDJRemoteIds().isEmpty());
 }
 
 TEST_F(RestLibraryFeatureTest, AutoDJUsesExplicitlySortedDisplayOrder) {
@@ -185,10 +207,9 @@ TEST_F(RestLibraryFeatureTest, AutoDJUsesExplicitlySortedDisplayOrder) {
     setRecommendations({primary, alternate});
 
     const int artistColumn =
-            m_pFeature->m_pTableModel->fieldIndex(QStringLiteral("artist"));
-    m_pFeature->m_pTableModel->sort(artistColumn, Qt::AscendingOrder);
-    ASSERT_EQ(m_pFeature->m_pTableModel->remoteIdForIndex(
-                      m_pFeature->m_pTableModel->index(0, 0)),
+            tableModel()->fieldIndex(QStringLiteral("artist"));
+    tableModel()->sort(artistColumn, Qt::AscendingOrder);
+    ASSERT_EQ(tableModel()->remoteIdForIndex(tableModel()->index(0, 0)),
             QStringLiteral("81"));
     queueRecommendations();
 
@@ -196,9 +217,9 @@ TEST_F(RestLibraryFeatureTest, AutoDJUsesExplicitlySortedDisplayOrder) {
     pAlternateAudio->Done(true);
 
     const TrackPointer pAlternate =
-            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("81"));
+            tableModel()->materializeTrack(QStringLiteral("81"));
     const TrackPointer pPrimary =
-            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("82"));
+            tableModel()->materializeTrack(QStringLiteral("82"));
     ASSERT_TRUE(pAlternate);
     ASSERT_TRUE(pPrimary);
     EXPECT_EQ(autoDJTrackIds(),
@@ -226,9 +247,9 @@ TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForReplayGainPreparation) {
 
     EXPECT_TRUE(autoDJTrackIds().isEmpty());
     const TrackPointer pFirst =
-            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("52"));
+            tableModel()->materializeTrack(QStringLiteral("52"));
     const TrackPointer pSecond =
-            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("51"));
+            tableModel()->materializeTrack(QStringLiteral("51"));
     ASSERT_TRUE(pFirst);
     ASSERT_TRUE(pSecond);
     m_loudness.complete(pSecond, true);
@@ -249,7 +270,7 @@ TEST_F(RestLibraryFeatureTest, ManualPlayerLoadWaitsForReplayGainPreparation) {
             {recommendation(QStringLiteral("61"), QStringLiteral("Quiet Master"))});
     pAudio->Done(true);
     const TrackPointer pTrack =
-            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("61"));
+            tableModel()->materializeTrack(QStringLiteral("61"));
     ASSERT_TRUE(pTrack);
     m_loudness.defer = true;
     QSignalSpy loadSpy(m_pFeature.get(), &LibraryFeature::loadTrackToPlayer);
@@ -285,7 +306,7 @@ TEST_F(RestLibraryFeatureTest, AutoDJBatchQueuesSuccessfulTracksAfterPartialFail
     pSecondAudio->Done(true);
 
     const TrackPointer pGood =
-            m_pFeature->m_pTableModel->materializeTrack(QStringLiteral("21"));
+            tableModel()->materializeTrack(QStringLiteral("21"));
     ASSERT_TRUE(pGood);
     EXPECT_EQ(autoDJTrackIds(), (QList<TrackId>{pGood->getId()}));
     ASSERT_GT(statusSpy.count(), 0);
@@ -302,14 +323,13 @@ TEST_F(RestLibraryFeatureTest, ServerLookupMappingQueuesExistingLocalTrackWithou
     const TrackPointer pLocalTrack = getOrAddTrackByLocation(localPath);
     ASSERT_TRUE(pLocalTrack);
 
-    m_pFeature->m_pendingTrackLookup = pLocalTrack;
-    m_pFeature->slotTrackLookupSucceeded(QStringLiteral("77"));
+    mapPendingTrack(pLocalTrack, QStringLiteral("77"));
     setRecommendations({recommendation(QStringLiteral("77"), QStringLiteral("Mapped"))});
     queueRecommendations();
 
     EXPECT_EQ(autoDJTrackIds(), (QList<TrackId>{pLocalTrack->getId()}));
-    EXPECT_FALSE(m_pFeature->m_pTableModel->isCacheArtifact(pLocalTrack->getId()));
-    EXPECT_EQ(m_pFeature->m_pTableModel->remoteIdForTrack(pLocalTrack),
+    EXPECT_FALSE(tableModel()->isCacheArtifact(pLocalTrack->getId()));
+    EXPECT_EQ(tableModel()->remoteIdForTrack(pLocalTrack),
             QStringLiteral("77"));
 }
 
@@ -334,7 +354,7 @@ TEST_F(RestLibraryFeatureTest, UnchangedCandidatesDoNotCancelActiveAutoDJBatch) 
 
     setRecommendations(tracks);
     queueRecommendations();
-    ASSERT_EQ(m_pFeature->m_autoDJRemoteIds,
+    ASSERT_EQ(autoDJRemoteIds(),
             (QStringList{QStringLiteral("31"), QStringLiteral("32")}));
 
     QList<RestLibraryTrack> updatedTracks = tracks;
@@ -345,10 +365,10 @@ TEST_F(RestLibraryFeatureTest, UnchangedCandidatesDoNotCancelActiveAutoDJBatch) 
     updatedTracks[1].color = QStringLiteral("#fedcba");
     setRecommendations(updatedTracks);
 
-    EXPECT_EQ(m_pFeature->m_autoDJRemoteIds,
+    EXPECT_EQ(autoDJRemoteIds(),
             (QStringList{QStringLiteral("31"), QStringLiteral("32")}));
-    EXPECT_EQ(m_pFeature->m_autoDJPendingIds.size(), 2);
-    const auto* pModel = m_pFeature->m_pTableModel.get();
+    EXPECT_EQ(autoDJPendingCount(), 2);
+    const auto* pModel = tableModel();
     ASSERT_NE(pModel, nullptr);
     EXPECT_EQ(pModel->remoteIdForIndex(pModel->index(0, 0)), QStringLiteral("32"));
     const int rankColumn = pModel->fieldIndex(QStringLiteral("recommendation_rank"));
@@ -375,7 +395,7 @@ TEST_F(RestLibraryFeatureTest, ChangedCandidatesCancelActiveAutoDJBatch) {
     setRecommendations(
             {recommendation(QStringLiteral("41"), QStringLiteral("Old"))});
     queueRecommendations();
-    ASSERT_FALSE(m_pFeature->m_autoDJRemoteIds.isEmpty());
+    ASSERT_FALSE(autoDJRemoteIds().isEmpty());
 
     MockNetworkReply* pNewAudio = m_network.ExpectGet(
             QStringLiteral("/download"),
@@ -385,8 +405,8 @@ TEST_F(RestLibraryFeatureTest, ChangedCandidatesCancelActiveAutoDJBatch) {
     setRecommendations(
             {recommendation(QStringLiteral("42"), QStringLiteral("New"))});
 
-    EXPECT_TRUE(m_pFeature->m_autoDJRemoteIds.isEmpty());
-    EXPECT_TRUE(m_pFeature->m_autoDJPendingIds.isEmpty());
+    EXPECT_TRUE(autoDJRemoteIds().isEmpty());
+    EXPECT_TRUE(autoDJPendingIsEmpty());
     EXPECT_TRUE(pOldAudio->WasAborted());
     pNewAudio->Done(true);
 }
@@ -396,11 +416,11 @@ TEST_F(RestLibraryFeatureTest, FailedRefreshRetainsLastValidRecommendations) {
     const QList<RestLibraryTrack> tracks{
             recommendation(QStringLiteral("71"), QStringLiteral("Keep Me"))};
     setRecommendations(tracks);
-    ASSERT_EQ(m_pFeature->m_pTableModel->trackCount(), 1);
+    ASSERT_EQ(tableModel()->trackCount(), 1);
 
     failFetch(QStringLiteral("MixMan policy path response was not valid JSON."));
 
-    ASSERT_EQ(m_pFeature->m_pTableModel->trackCount(), 1);
-    EXPECT_EQ(m_pFeature->m_pTableModel->trackForRemoteId(QStringLiteral("71")).title,
+    ASSERT_EQ(tableModel()->trackCount(), 1);
+    EXPECT_EQ(tableModel()->trackForRemoteId(QStringLiteral("71")).title,
             QStringLiteral("Keep Me"));
 }
