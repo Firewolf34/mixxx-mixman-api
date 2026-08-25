@@ -34,8 +34,8 @@ Agent tool selection:
   with `tools/mixxx_deck_ci.sh install` without running deck setup.
 - `$forgejo-issues` owns Forgejo issue search/create/comment/close on enrolled
   workstations. Follow the installed skill's generation-correct client; the
-  shared 0.3 generation uses `forgejo-collab`. It does not inspect or dispatch
-  Actions.
+  installed shared workflow uses `forgejo-collab`. It does not inspect or
+  dispatch Actions.
 - In the shared generation, `forgejo-collab` selects exactly one configured
   backend: the managed VPS socket or an enrolled workstation HTTPS adapter. Do
   not infer transport from the machine name and do not fall back after a
