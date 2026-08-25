@@ -13,8 +13,8 @@
 #include "library/rest/restlibraryfeature.h"
 #include "library/rest/restlibrarysettings.h"
 #include "library/rest/restlibrarytrack.h"
-#include "test/librarytest.h"
 #include "test/mock_networkaccessmanager.h"
+#include "test/restlibrarytest.h"
 #include "track/track.h"
 
 namespace {
@@ -74,7 +74,7 @@ RestLibraryTrack recommendation(const QString& remoteId, const QString& title) {
 
 } // namespace
 
-class RestLibraryFeatureTest : public LibraryTest {
+class RestLibraryFeatureTest : public RestLibraryTest {
   public:
     RestLibraryFeatureTest()
             : m_backend(nullptr, &m_network) {

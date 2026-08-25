@@ -22,7 +22,8 @@
 #include "library/rest/restlibrarytablemodel.h"
 #include "library/tabledelegates/colordelegate.h"
 #include "library/tabledelegates/percentagedelegate.h"
-#include "test/librarytest.h"
+#include "test/restlibrarytest.h"
+#include "track/track.h"
 #include "track/keyutils.h"
 #include "util/color/rgbcolor.h"
 
@@ -51,8 +52,12 @@ RestLibraryTrack newTrack(
 
 } // namespace
 
-class RestLibraryTableModelTest : public LibraryTest {
+class RestLibraryTableModelTest : public RestLibraryTest {
 };
+
+TEST_F(RestLibraryTableModelTest, InitializesPlayerInfoForRestLibraryTests) {
+    EXPECT_EQ(&PlayerInfo::instance(), &PlayerInfo::instance());
+}
 
 TEST_F(RestLibraryTableModelTest, ExposesRowsAndKeepsLoadCapabilitiesDisabled) {
     RestLibraryTableModel model(nullptr, trackCollectionManager());
