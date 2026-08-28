@@ -272,33 +272,24 @@ bool RestLibraryTableModel::updateTracksKeepingIdentity(
 }
 
 bool RestLibraryTableModel::updateTrackMetadata(
-        const RestLibraryTrack& updatedTrack) {
+        const RestLibraryTrack& updatedTrack,
+        RestLibraryTrackMutation mutation) {
     for (int row = 0; row < m_tracks.size(); ++row) {
         const RestLibraryTrack& current = m_tracks.at(row);
         if (current.remoteId != updatedTrack.remoteId) {
             continue;
         }
-        RestLibraryTrack merged = updatedTrack;
-        merged.cacheState = current.cacheState;
-        merged.cachedFilePath = current.cachedFilePath;
-        merged.cacheError = current.cacheError;
-        merged.cacheStatusCode = current.cacheStatusCode;
-        merged.cacheNetworkError = current.cacheNetworkError;
-        merged.quality = current.quality;
-        merged.score = current.score;
-        merged.transitionFit = current.transitionFit;
-        merged.transitionRisk = current.transitionRisk;
-        merged.targetDistance = current.targetDistance;
-        merged.targetImprovement = current.targetImprovement;
-        merged.recommendationEventId = current.recommendationEventId;
-        merged.recommendationItemId = current.recommendationItemId;
-        merged.recommendationPosition = current.recommendationPosition;
-        merged.planned = current.planned;
-        merged.mode = current.mode;
-        merged.fallbackMode = current.fallbackMode;
-        merged.moveType = current.moveType;
-        merged.region = current.region;
-        merged.reasonCodes = current.reasonCodes;
+        RestLibraryTrack merged = current;
+        switch (mutation) {
+        case RestLibraryTrackMutation::Favour:
+            merged.favour = updatedTrack.favour;
+            break;
+        case RestLibraryTrackMutation::DjComment:
+            merged.djComment = updatedTrack.djComment;
+            break;
+        case RestLibraryTrackMutation::ReturnToReview:
+            return false;
+        }
         QList<RestLibraryTrack> tracks = m_tracks;
         tracks[row] = std::move(merged);
         setTracks(std::move(tracks));

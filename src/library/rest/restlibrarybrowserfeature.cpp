@@ -702,7 +702,7 @@ void RestLibraryBrowserFeature::slotTrackMutationFinished(
         return;
     }
 
-    m_pTableModel->updateTrackMetadata(result.track);
+    m_pTableModel->updateTrackMetadata(result.track, result.mutation);
     if (m_pView) {
         m_pView->restoreSelectedRemoteIds(selectedRemoteIds);
     }

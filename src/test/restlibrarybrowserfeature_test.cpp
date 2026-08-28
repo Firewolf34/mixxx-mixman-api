@@ -700,6 +700,78 @@ TEST_F(RestLibraryBrowserFeatureTest, FavourClicksCoalesceFromConfirmedServerVal
     EXPECT_EQ(updated.cachedFilePath, QStringLiteral("/cached/42.mp3"));
 }
 
+TEST_F(RestLibraryBrowserFeatureTest, SparseDjCommentResponsePreservesCatalogTrack) {
+    FakeCatalogProvider* pProvider = useFakeProvider();
+    RestLibraryTrack track;
+    track.remoteId = QStringLiteral("42");
+    track.reviewId = QStringLiteral("review-42");
+    track.title = QStringLiteral("Original Title");
+    track.artist = QStringLiteral("Original Artist");
+    track.album = QStringLiteral("Original Album");
+    track.genre = QStringLiteral("Original Genre");
+    track.composer = QStringLiteral("Original Composer");
+    track.comment = QStringLiteral("Original Comment");
+    track.djComment = QStringLiteral("Clear this note");
+    track.bpm = 126.0;
+    track.durationSeconds = 321.0;
+    track.rating = 4;
+    track.playCount = 12;
+    track.favour = 0.8;
+    track.energy = 0.7;
+    track.sourceLabel = QStringLiteral("Original Source");
+    track.audioFileExtension = QStringLiteral("flac");
+    track.color = QStringLiteral("#123456");
+    track.cacheState = mixxx::library::rest::RestLibraryCacheState::Ready;
+    track.cachedFilePath = QStringLiteral("/cached/42.flac");
+    track.recommendationPosition = 3;
+    model()->setTracks({track});
+    primeMutation(
+            track.remoteId,
+            mixxx::library::rest::RestLibraryTrackMutation::DjComment);
+
+    mixxx::library::rest::RestLibraryTrackMutationResult result;
+    result.success = true;
+    result.mutation = mixxx::library::rest::RestLibraryTrackMutation::DjComment;
+    result.remoteId = track.remoteId;
+    result.track.remoteId = track.remoteId;
+    result.track.title = QStringLiteral("Needs Work");
+    result.track.genre = QStringLiteral("House");
+    result.track.djComment = QString();
+    pProvider->completeMutation(result);
+
+    const RestLibraryTrack updated = model()->trackForRemoteId(track.remoteId);
+    EXPECT_EQ(updated.reviewId, track.reviewId);
+    EXPECT_EQ(updated.title, track.title);
+    EXPECT_EQ(updated.artist, track.artist);
+    EXPECT_EQ(updated.album, track.album);
+    EXPECT_EQ(updated.genre, track.genre);
+    EXPECT_EQ(updated.composer, track.composer);
+    EXPECT_EQ(updated.comment, track.comment);
+    EXPECT_TRUE(updated.djComment.isEmpty());
+    EXPECT_DOUBLE_EQ(updated.bpm, track.bpm);
+    EXPECT_DOUBLE_EQ(updated.durationSeconds, track.durationSeconds);
+    EXPECT_EQ(updated.rating, track.rating);
+    EXPECT_EQ(updated.playCount, track.playCount);
+    EXPECT_EQ(updated.favour, track.favour);
+    EXPECT_EQ(updated.energy, track.energy);
+    EXPECT_EQ(updated.sourceLabel, track.sourceLabel);
+    EXPECT_EQ(updated.audioFileExtension, track.audioFileExtension);
+    EXPECT_EQ(updated.color, track.color);
+    EXPECT_EQ(updated.cacheState, track.cacheState);
+    EXPECT_EQ(updated.cachedFilePath, track.cachedFilePath);
+    EXPECT_EQ(updated.recommendationPosition, track.recommendationPosition);
+
+    configureFavourMutations(0.3);
+    startFavourMutation(track.remoteId, 1);
+
+    ASSERT_EQ(pProvider->mutationFields.size(), 1);
+    EXPECT_DOUBLE_EQ(
+            pProvider->mutationFields.constFirst()
+                    .value(QStringLiteral("favour"))
+                    .toDouble(),
+            0.86);
+}
+
 TEST_F(RestLibraryBrowserFeatureTest, ReturnToReviewRemovesOnlySuccessfulCatalogRow) {
     FakeCatalogProvider* pProvider = useFakeProvider();
     RestLibraryTrack first;
