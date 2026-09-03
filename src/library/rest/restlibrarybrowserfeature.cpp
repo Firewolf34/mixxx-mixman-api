@@ -714,6 +714,7 @@ void RestLibraryBrowserFeature::slotTrackMutationFinished(
     if (result.mutation == RestLibraryTrackMutation::Favour &&
             queuedFavourSteps != 0) {
         startFavourMutation(remoteId, queuedFavourSteps);
+        updateMaintenanceControls();
         return;
     }
     setStatusText(result.mutation == RestLibraryTrackMutation::Favour

@@ -279,6 +279,54 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
         m_pFeature->m_queuedFavourSteps = steps;
     }
 
+    bool mutationBusy() const {
+        return m_pFeature->m_mutationBusy;
+    }
+
+    bool refreshEnabled() const {
+        return m_pFeature->m_pRefreshAction->isEnabled();
+    }
+
+    void expectQueuedFavourAtBoundRestoresControls(int direction) {
+        FakeCatalogProvider* pProvider = useFakeProvider();
+        RestLibraryTrack track;
+        track.remoteId = QStringLiteral("42");
+        track.title = QStringLiteral("Favour Bound");
+        track.favour = direction > 0 ? 0.98 : 0.02;
+        model()->setTracks({track});
+        configureFavourMutations(0.3);
+        const double bound = direction > 0 ? 1.0 : 0.0;
+
+        startFavourMutation(track.remoteId, direction);
+
+        ASSERT_EQ(pProvider->mutationFields.size(), 1);
+        EXPECT_DOUBLE_EQ(
+                pProvider->mutationFields.constFirst()
+                        .value(QStringLiteral("favour"))
+                        .toDouble(),
+                bound);
+        ASSERT_TRUE(mutationBusy());
+        ASSERT_FALSE(refreshEnabled());
+        queueFavourSteps(direction);
+        mixxx::library::rest::RestLibraryTrackMutationResult result;
+        result.success = true;
+        result.mutation = mixxx::library::rest::RestLibraryTrackMutation::Favour;
+        result.remoteId = track.remoteId;
+        result.track = track;
+        result.track.favour = bound;
+
+        pProvider->completeMutation(result);
+
+        EXPECT_EQ(pProvider->mutationFields.size(), 1);
+        EXPECT_FALSE(mutationBusy());
+        EXPECT_EQ(m_pFeature->m_queuedFavourSteps, 0);
+        EXPECT_TRUE(m_pFeature->m_mutatingRemoteId.isEmpty());
+        EXPECT_TRUE(refreshEnabled());
+        const RestLibraryTrack updated = model()->trackForRemoteId(track.remoteId);
+        ASSERT_TRUE(updated.favour.has_value());
+        EXPECT_DOUBLE_EQ(*updated.favour, bound);
+    }
+
     void primeMutation(
             const QString& remoteId,
             mixxx::library::rest::RestLibraryTrackMutation mutation) {
@@ -671,6 +719,8 @@ TEST_F(RestLibraryBrowserFeatureTest, FavourClicksCoalesceFromConfirmedServerVal
 
     startFavourMutation(track.remoteId, 1);
 
+    EXPECT_TRUE(mutationBusy());
+    EXPECT_FALSE(refreshEnabled());
     ASSERT_EQ(pProvider->mutationFields.size(), 1);
     EXPECT_DOUBLE_EQ(
             pProvider->mutationFields.constFirst().value(QStringLiteral("favour")).toDouble(),
@@ -684,6 +734,8 @@ TEST_F(RestLibraryBrowserFeatureTest, FavourClicksCoalesceFromConfirmedServerVal
     firstResult.track.favour = 0.6;
     pProvider->completeMutation(firstResult);
 
+    EXPECT_TRUE(mutationBusy());
+    EXPECT_FALSE(refreshEnabled());
     ASSERT_EQ(pProvider->mutationFields.size(), 2);
     EXPECT_DOUBLE_EQ(
             pProvider->mutationFields.constLast().value(QStringLiteral("favour")).toDouble(),
@@ -692,12 +744,22 @@ TEST_F(RestLibraryBrowserFeatureTest, FavourClicksCoalesceFromConfirmedServerVal
     secondResult.track.favour = 0.8;
     pProvider->completeMutation(secondResult);
 
+    EXPECT_FALSE(mutationBusy());
+    EXPECT_TRUE(refreshEnabled());
     const RestLibraryTrack updated = model()->trackForRemoteId(track.remoteId);
     ASSERT_TRUE(updated.favour.has_value());
     EXPECT_DOUBLE_EQ(*updated.favour, 0.8);
     EXPECT_EQ(updated.cacheState,
             mixxx::library::rest::RestLibraryCacheState::Ready);
     EXPECT_EQ(updated.cachedFilePath, QStringLiteral("/cached/42.mp3"));
+}
+
+TEST_F(RestLibraryBrowserFeatureTest, QueuedFavourAtUpperBoundRestoresControls) {
+    expectQueuedFavourAtBoundRestoresControls(1);
+}
+
+TEST_F(RestLibraryBrowserFeatureTest, QueuedFavourAtLowerBoundRestoresControls) {
+    expectQueuedFavourAtBoundRestoresControls(-1);
 }
 
 TEST_F(RestLibraryBrowserFeatureTest, SparseDjCommentResponsePreservesCatalogTrack) {
