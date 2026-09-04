@@ -723,8 +723,10 @@ void RestLibraryBrowserFeature::slotTrackMutationFinished(
     updateMaintenanceControls();
 }
 
-void RestLibraryBrowserFeature::updateMaintenanceControls() {
-    const QString remoteId = selectedRemoteId();
+RestLibraryBrowserFeature::MaintenanceControlState
+RestLibraryBrowserFeature::maintenanceControlStateForRemoteId(
+        const QString& remoteId) const {
+    MaintenanceControlState state;
     const bool hasSingleSelection = !remoteId.isEmpty();
     const bool metadataCurrent = m_mutationMetadata.valid &&
             m_mutationMetadataScopeIdentity ==
@@ -732,32 +734,39 @@ void RestLibraryBrowserFeature::updateMaintenanceControls() {
     const bool favourBusyForSelection = m_mutationBusy &&
             m_activeMutation == RestLibraryTrackMutation::Favour &&
             remoteId == m_mutatingRemoteId;
-    const bool favourEnabled = hasSingleSelection && metadataCurrent &&
+    state.favourEnabled = hasSingleSelection && metadataCurrent &&
             m_mutationMetadata.mayWriteFavour && !m_refreshing &&
             (!m_mutationBusy || favourBusyForSelection);
-    const bool noteEnabled = hasSingleSelection && metadataCurrent &&
+    state.djNoteEnabled = hasSingleSelection && metadataCurrent &&
             m_mutationMetadata.mayWriteDjComment && !m_refreshing &&
             !m_mutationBusy;
-    const bool reviewEnabled = hasSingleSelection && metadataCurrent &&
+    state.returnToReviewEnabled = hasSingleSelection && metadataCurrent &&
             m_mutationMetadata.mayReturnToReview && !m_refreshing &&
             !m_mutationBusy;
-    QString reviewToolTip;
     if (hasSingleSelection && metadataCurrent &&
             !m_mutationMetadata.mayReturnToReview) {
-        reviewToolTip = tr("Return to Review requires the MixMan administrator role.");
+        state.returnToReviewToolTip =
+                tr("Return to Review requires the MixMan administrator role.");
     } else if (hasSingleSelection && !metadataCurrent &&
             !m_mutationMetadataLoading) {
-        reviewToolTip = tr("This server did not advertise track maintenance capabilities.");
+        state.returnToReviewToolTip =
+                tr("This server did not advertise track maintenance capabilities.");
     }
-    const bool refreshEnabled = !m_refreshing && !m_mutationBusy;
-    m_pRefreshAction->setEnabled(refreshEnabled);
+    state.refreshEnabled = !m_refreshing && !m_mutationBusy;
+    return state;
+}
+
+void RestLibraryBrowserFeature::updateMaintenanceControls() {
+    const MaintenanceControlState state =
+            maintenanceControlStateForRemoteId(selectedRemoteId());
+    m_pRefreshAction->setEnabled(state.refreshEnabled);
     if (m_pView) {
         m_pView->setMaintenanceControlState(
-                favourEnabled,
-                noteEnabled,
-                reviewEnabled,
-                refreshEnabled,
-                reviewToolTip);
+                state.favourEnabled,
+                state.djNoteEnabled,
+                state.returnToReviewEnabled,
+                state.refreshEnabled,
+                state.returnToReviewToolTip);
     }
 }
 

@@ -287,6 +287,11 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
         return m_pFeature->m_pRefreshAction->isEnabled();
     }
 
+    RestLibraryBrowserFeature::MaintenanceControlState maintenanceControlState(
+            const QString& remoteId) const {
+        return m_pFeature->maintenanceControlStateForRemoteId(remoteId);
+    }
+
     void expectQueuedFavourAtBoundRestoresControls(int direction) {
         FakeCatalogProvider* pProvider = useFakeProvider();
         RestLibraryTrack track;
@@ -295,7 +300,14 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
         track.favour = direction > 0 ? 0.98 : 0.02;
         model()->setTracks({track});
         configureFavourMutations(0.3);
+        m_pFeature->m_mutationMetadata.mayWriteDjComment = true;
+        m_pFeature->m_mutationMetadata.mayReturnToReview = true;
         const double bound = direction > 0 ? 1.0 : 0.0;
+        const auto initialControls = maintenanceControlState(track.remoteId);
+        EXPECT_TRUE(initialControls.favourEnabled);
+        EXPECT_TRUE(initialControls.djNoteEnabled);
+        EXPECT_TRUE(initialControls.returnToReviewEnabled);
+        EXPECT_TRUE(initialControls.refreshEnabled);
 
         startFavourMutation(track.remoteId, direction);
 
@@ -307,6 +319,11 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
                 bound);
         ASSERT_TRUE(mutationBusy());
         ASSERT_FALSE(refreshEnabled());
+        const auto busyControls = maintenanceControlState(track.remoteId);
+        EXPECT_TRUE(busyControls.favourEnabled);
+        EXPECT_FALSE(busyControls.djNoteEnabled);
+        EXPECT_FALSE(busyControls.returnToReviewEnabled);
+        EXPECT_FALSE(busyControls.refreshEnabled);
         queueFavourSteps(direction);
         mixxx::library::rest::RestLibraryTrackMutationResult result;
         result.success = true;
@@ -322,9 +339,22 @@ class RestLibraryBrowserFeatureTest : public LibraryTest {
         EXPECT_EQ(m_pFeature->m_queuedFavourSteps, 0);
         EXPECT_TRUE(m_pFeature->m_mutatingRemoteId.isEmpty());
         EXPECT_TRUE(refreshEnabled());
+        const auto restoredControls = maintenanceControlState(track.remoteId);
+        EXPECT_TRUE(restoredControls.favourEnabled);
+        EXPECT_TRUE(restoredControls.djNoteEnabled);
+        EXPECT_TRUE(restoredControls.returnToReviewEnabled);
+        EXPECT_TRUE(restoredControls.refreshEnabled);
         const RestLibraryTrack updated = model()->trackForRemoteId(track.remoteId);
         ASSERT_TRUE(updated.favour.has_value());
         EXPECT_DOUBLE_EQ(*updated.favour, bound);
+
+        m_pFeature->m_mutationMetadata.mayWriteDjComment = false;
+        m_pFeature->m_mutationMetadata.mayReturnToReview = false;
+        const auto restrictedControls = maintenanceControlState(track.remoteId);
+        EXPECT_TRUE(restrictedControls.favourEnabled);
+        EXPECT_FALSE(restrictedControls.djNoteEnabled);
+        EXPECT_FALSE(restrictedControls.returnToReviewEnabled);
+        EXPECT_TRUE(restrictedControls.refreshEnabled);
     }
 
     void primeMutation(

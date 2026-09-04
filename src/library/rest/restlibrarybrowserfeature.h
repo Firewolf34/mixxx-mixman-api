@@ -115,6 +115,14 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
         }
     };
 
+    struct MaintenanceControlState {
+        bool favourEnabled = false;
+        bool djNoteEnabled = false;
+        bool returnToReviewEnabled = false;
+        bool refreshEnabled = false;
+        QString returnToReviewToolTip;
+    };
+
     void requestNextCatalogPage(const QString& cursor);
     void requestTrackCache(
             const QString& remoteId,
@@ -131,6 +139,8 @@ class RestLibraryBrowserFeature final : public LibraryFeature {
     void setStatusText(const QString& text);
     void updateStatusSummary();
     void refreshMutationMetadata(const RestLibraryCatalogContext& context);
+    MaintenanceControlState maintenanceControlStateForRemoteId(
+            const QString& remoteId) const;
     void updateMaintenanceControls();
     void startFavourMutation(
             const QString& remoteId,
