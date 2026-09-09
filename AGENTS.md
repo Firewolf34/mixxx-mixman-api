@@ -357,6 +357,10 @@ Agent tool selection:
 - Normal desktop launches must use `mixxx-deck run` and hold a shared lock for
   the Mixxx process lifetime. Automatic activation uses a nonblocking exclusive
   lock and rechecks `flatpak ps` after download.
+- Show-time launch must be local-only: it explicitly runs the installed user
+  `org.mixxx.Mixxx/x86_64/master` ref and must not add, inspect, refresh, or
+  contact Flathub. Cached activation must use Flatpak `--no-pull`; remote setup
+  belongs only in setup and update operations.
 - The user timer starts through systemd linger, triggers the service within one
   minute and every four hours after a completed check, and the service waits for
   NetworkManager. Download/deploy requires AC power. Running detection must

@@ -59,6 +59,8 @@ silently publish a candidate solely to gain build access.
   boot and every four hours after each completed check.
 - Automatically activate only when Mixxx is stopped, the shared launch lock is
   free, and the laptop is on AC power.
+- Launch the installed user Flatpak without requiring DNS, network access, or a
+  configured Flathub remote.
 
 ## Non-Goals
 
@@ -745,8 +747,10 @@ the installed app.
 
 Takes a deployment lock and refuses while Mixxx is running. It verifies the
 cached checksum, snapshots a different installed app into the rollback cache,
-installs the user bundle, verifies its source SHA from Flatpak metadata, records
-state, and prunes unneeded cache entries.
+installs the user bundle with `--no-pull`, verifies its source SHA from Flatpak
+metadata, records state, and prunes unneeded cache entries. Cached activation
+is local-only; a missing local runtime or object fails instead of contacting a
+remote.
 
 Snapshot creation copies the exact installed OSTree commit into a temporary
 archive repository and binds the canonical app ref to that commit before
@@ -788,9 +792,21 @@ mixxx-break-glass rollback
 
 ### Run
 
-Launches the user Flatpak while holding a shared deployment lock for the
-process lifetime. The local desktop entry routes normal graphical launches
-through this command and preserves Flatpak file forwarding.
+Launches the explicitly user-scoped `org.mixxx.Mixxx/x86_64/master` Flatpak
+while holding a shared deployment lock for the process lifetime. The launch
+path performs no remote add, inspection, refresh, or network operation. The
+local desktop entry routes normal graphical launches through this command and
+preserves Flatpak file forwarding.
+
+From a text TTY on Coal, target the already-running graphical display while
+retaining the canonical launch lock:
+
+```bash
+DISPLAY=:0 mixxx-deck run
+```
+
+This command remains local-only and does not require a user-scoped Flathub
+remote.
 
 ### Automatic update
 

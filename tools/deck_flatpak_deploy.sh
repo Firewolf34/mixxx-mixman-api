@@ -185,7 +185,7 @@ ensure_directories() {
         "${STATE_ROOT}" "${CONFIG_ROOT}"
 }
 
-ensure_flatpak() {
+configure_flathub_remote() {
     require_command flatpak
     flatpak remote-add --user --if-not-exists flathub "${FLATHUB_REPO_URL}"
 }
@@ -1030,7 +1030,7 @@ activate_build() {
     require_command jq
     require_command ostree
     require_command sha256sum
-    ensure_flatpak
+    require_command flatpak
     ensure_directories
     exec 9>"${LOCK_FILE}"
     flock 9
@@ -1054,7 +1054,8 @@ activate_build() {
         old_key="$(snapshot_installed_build "${old_sha}" "${old_commit}")"
     fi
 
-    flatpak install --user --bundle --reinstall --noninteractive -y "${bundle_path}"
+    flatpak install --user --bundle --no-pull --reinstall --noninteractive -y \
+        "${bundle_path}"
     verified_sha="$(installed_source_sha || true)"
     verified_commit="$(installed_commit || true)"
     if [[ -n "${expected_source}" ]]; then
@@ -1281,7 +1282,7 @@ setup_client() {
     local installed_https_helper="${HOME}/.local/bin/deck_https_fetch.sh"
     local installed_signed_helper="${HOME}/.local/bin/deck_signed_candidate.sh"
     local ci_helper="${SCRIPT_DIR}/mixxx_deck_ci.sh"
-    ensure_flatpak
+    configure_flathub_remote
     require_command curl
     require_command jq
     require_command sha256sum
@@ -1409,12 +1410,12 @@ case "${command_name}" in
         exec "${AUTO_UPDATE_CLIENT}" auto-update
         ;;
     run)
-        ensure_flatpak
+        require_command flatpak
         require_command flock
         ensure_directories
         exec 8>"${LOCK_FILE}"
         flock -s 8
-        flatpak run --branch=master --arch="${EXPECTED_ARCH}" --command=mixxx \
+        flatpak run --user --branch=master --arch="${EXPECTED_ARCH}" --command=mixxx \
             --file-forwarding "${APP_ID}" "$@"
         ;;
     -h|--help|help)

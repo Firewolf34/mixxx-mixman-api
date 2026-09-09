@@ -1,5 +1,5 @@
 #!/bin/bash
-# Lightweight mocked tests for offline manual rollback and state migration.
+# Lightweight mocked tests for offline launch, activation, rollback, and state migration.
 
 set -euo pipefail
 
@@ -52,6 +52,13 @@ case "$1" in
         printf '%s\n' "${TEST_ROLLBACK_COMMIT}" >"${TEST_INSTALLED_COMMIT_FILE}"
         printf '%s\n' "${TEST_ROLLBACK_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
         ;;
+    run)
+        [[ "$*" == *"--user --branch=master --arch=x86_64 --command=mixxx"* ]] || exit 93
+        if flock -n "${XDG_STATE_HOME}/mixxx-deck/deploy.lock" -c true; then
+            echo "Mixxx run did not retain the shared deployment lock" >&2
+            exit 94
+        fi
+        ;;
     *)
         echo "unexpected flatpak command: $*" >&2
         exit 2
@@ -99,6 +106,15 @@ printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
     >"${TEST_INSTALLED_COMMIT_FILE}"
 printf '%s\n' "${TEST_INSTALLED_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
 
+# Show-time launch is local-only, explicitly selects the user Flatpak, and
+# retains the shared deployment lock for the Flatpak process lifetime.
+: >"${TEST_COMMAND_LOG}"
+DISPLAY=:0 "${SCRIPT_DIR}/deck_flatpak_deploy.sh" run --developer
+grep -Fxq \
+    'run --user --branch=master --arch=x86_64 --command=mixxx --file-forwarding org.mixxx.Mixxx --developer' \
+    "${TEST_COMMAND_LOG}"
+! grep -Eq 'remote|update|install' "${TEST_COMMAND_LOG}"
+
 rollback_dir="${XDG_CACHE_HOME}/mixxx-deck/repo-rollback/${TEST_ROLLBACK_SOURCE}"
 mkdir -p "${rollback_dir}"
 printf 'verified rollback bundle\n' >"${rollback_dir}/Mixxx.flatpak"
@@ -132,6 +148,12 @@ grep -Fq "pull-local --depth=0 ${XDG_DATA_HOME}/flatpak/repo aaaaaaaaaaaaaaaaaaa
     "${TEST_COMMAND_LOG}"
 grep -Fq 'refs --create=app/org.mixxx.Mixxx/x86_64/master aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     "${TEST_COMMAND_LOG}"
+
+# Cached activation is also local-only and forbids Flatpak from pulling.
+: >"${TEST_COMMAND_LOG}"
+"${SCRIPT_DIR}/deck_flatpak_deploy.sh" activate "repo:${TEST_ROLLBACK_SOURCE}"
+grep -q '^install .*--no-pull' "${TEST_COMMAND_LOG}"
+! grep -Eq 'remote-(add|modify|info|ls)' "${TEST_COMMAND_LOG}"
 
 printf '%s\n' "${TEST_INSTALLED_SOURCE}" >"${TEST_INSTALLED_SOURCE_FILE}"
 printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
@@ -195,4 +217,4 @@ fi
 MIXXX_DECK_CLIENT="${SCRIPT_DIR}/deck_flatpak_deploy.sh" \
     "${SCRIPT_DIR}/mixxx_break_glass.sh" --help >/dev/null
 
-echo "Deck manual rollback tests passed."
+echo "Deck offline launch, activation, and rollback tests passed."

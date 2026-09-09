@@ -284,7 +284,8 @@ Before replacing a different installed build, activation exports it from the
 local Flatpak repository into the rollback cache. The export uses a temporary
 ref pinned to the exact installed OSTree commit, so an already downloaded
 pending update cannot be mislabeled as the previous build. This does not
-compile Mixxx.
+compile Mixxx. Cached activation uses `--no-pull`; if a required object or
+runtime is not already local, it fails instead of contacting Flathub.
 An installed Flatpak without a Deck source subject is retained as
 `snapshot:<ostree-commit>` with schema-1 provenance and can be restored by the
 same offline rollback path.
@@ -336,13 +337,30 @@ reinstalling a candidate that already failed validation.
 Successful updates share `repo:<source-sha>` current/previous state with the
 manual client and retain the three newest automatic snapshots.
 
+## Offline Show-Time Launch
+
+`mixxx-deck run` explicitly launches the installed user-scoped
+`org.mixxx.Mixxx/x86_64/master` ref while retaining the shared deployment lock.
+It does not add, inspect, refresh, or contact Flathub. From Coal's text TTY,
+launch onto the existing graphical display with:
+
+```bash
+DISPLAY=:0 mixxx-deck run
+```
+
+Verify this with DNS/network disabled and no user-scoped Flathub remote. A raw
+`flatpak run` remains an emergency diagnostic only because it bypasses the
+deployment lock.
+
 ## Acceptance Checklist
 
 - Run `tools/deck_artifact_safety_test.sh`; confirm low-space, oversized,
   untracked/ignored input, downgrade, cross-origin, unsigned, and commit
   mismatch fixtures all fail closed.
-- Run `tools/deck_flatpak_deploy_test.sh`; confirm non-Deck snapshots record
-  exact-commit provenance and a changed exported base fails before mutation.
+- Run `tools/deck_flatpak_deploy_test.sh`; confirm show-time launch and cached
+  activation issue no remote operation, activation passes `--no-pull`, launch
+  retains the shared lock, non-Deck snapshots record exact-commit provenance,
+  and a changed exported base fails before mutation.
 
 - Confirm the authoritative Forgejo Actions run finished **Success** for the
   exact candidate SHA.
