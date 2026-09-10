@@ -237,6 +237,75 @@ TEST_F(RestLibraryFeatureTest, ResetIsStagedAndFailedUpdateRetainsDraft) {
     EXPECT_FALSE(config()->exists(restConfig::kMixManPolicyOverrideEnabledKey));
 }
 
+TEST_F(RestLibraryFeatureTest, FailedPolicyRefreshStartsClaimForQueuedPlayback) {
+    using MutationKind =
+            mixxx::library::rest::RestLibraryMutationSequencer::Kind;
+    m_pFeature->m_mixManSession.id = QStringLiteral("session-1");
+    m_pFeature->m_mixManRegistration.instance.instanceId = QStringLiteral("inst-1");
+
+    const quint64 policySequence =
+            m_pFeature->m_mutationSequencer.queue(MutationKind::PolicyRefresh);
+    ASSERT_TRUE(m_pFeature->m_mutationSequencer.takeNext({}));
+    m_pFeature->m_mutationSequencer.queue(MutationKind::Playback);
+    m_pFeature->m_mutationSequencer.queue(MutationKind::Snapshot);
+
+    m_network.ExpectPost(
+            QStringLiteral("/api/v3/sessions/session-1/playback-control/claim"),
+            {},
+            {QStringLiteral("\"instance_id\":\"inst-1\"")},
+            200,
+            R"json({"session_id":"session-1","playback_controller":{"instance_id":"inst-1","lease_id":"lease-1","generation":1,"active":true}})json");
+
+    mixxx::library::rest::RestLibrarySessionWriteStatus failure;
+    failure.operation = QStringLiteral("session_policy_refresh");
+    failure.mutationSequence = policySequence;
+    failure.statusCode = 422;
+    failure.errorText = QStringLiteral("invalid steering");
+    m_pFeature->slotMixManSessionWriteStatusUpdated(failure);
+
+    EXPECT_TRUE(m_pFeature->m_playbackControlClaimPending);
+    EXPECT_TRUE(m_pFeature->m_mutationSequencer.hasInFlight());
+    EXPECT_TRUE(m_pFeature->m_mutationSequencer.hasQueued(MutationKind::Playback));
+    EXPECT_TRUE(m_pFeature->m_mutationSequencer.hasQueued(MutationKind::Snapshot));
+}
+
+TEST_F(RestLibraryFeatureTest, FailedPolicyRefreshDrainsQueuedPlaybackWithLease) {
+    using MutationKind =
+            mixxx::library::rest::RestLibraryMutationSequencer::Kind;
+    m_pFeature->m_mixManSession.id = QStringLiteral("session-1");
+    m_pFeature->m_mixManRegistration.instance.instanceId = QStringLiteral("inst-1");
+    m_pFeature->m_playbackLease = {
+            QStringLiteral("inst-1"), QStringLiteral("lease-1"), 3, true};
+    m_pFeature->m_playbackLeaseOwned = true;
+    m_pFeature->m_pendingPlayback.currentTrackId = QStringLiteral("8");
+    m_pFeature->m_pendingPlayback.playbackState = QStringLiteral("playing");
+
+    const quint64 policySequence =
+            m_pFeature->m_mutationSequencer.queue(MutationKind::PolicyRefresh);
+    ASSERT_TRUE(m_pFeature->m_mutationSequencer.takeNext({}));
+    m_pFeature->m_mutationSequencer.queue(MutationKind::Playback);
+    m_pFeature->m_mutationSequencer.queue(MutationKind::Snapshot);
+
+    m_network.ExpectPost(
+            QStringLiteral("/api/v3/sessions/session-1/playback"),
+            {},
+            {QStringLiteral("\"lease_id\":\"lease-1\""),
+                    QStringLiteral("\"lease_generation\":3"),
+                    QStringLiteral("\"current_track_id\":8")},
+            200,
+            R"json({"session":{"id":"session-1"},"authoritative":{"session_id":"session-1"}})json");
+
+    mixxx::library::rest::RestLibrarySessionWriteStatus failure;
+    failure.operation = QStringLiteral("session_policy_refresh");
+    failure.mutationSequence = policySequence;
+    failure.statusCode = 503;
+    failure.errorText = QStringLiteral("temporarily unavailable");
+    m_pFeature->slotMixManSessionWriteStatusUpdated(failure);
+
+    EXPECT_TRUE(m_pFeature->m_mutationSequencer.hasInFlight());
+    EXPECT_TRUE(m_pFeature->m_mutationSequencer.hasQueued(MutationKind::Snapshot));
+}
+
 TEST_F(RestLibraryFeatureTest, TrackChangeDiscardsUnappliedSteeringDraft) {
     config()->setValue(restConfig::kUseMixManDefaultsKey, false);
     m_pFeature->slotRecommendationLensChanged(QStringLiteral("semantic"));
