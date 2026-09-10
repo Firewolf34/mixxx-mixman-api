@@ -25,6 +25,7 @@ using mixxx::library::rest::RestLibraryFeature;
 using mixxx::library::rest::RestLibraryLoudnessManager;
 using mixxx::library::rest::RestLibraryLoudnessResult;
 using mixxx::library::rest::RestLibraryLoudnessState;
+using mixxx::library::rest::RestLibrarySettings;
 using mixxx::library::rest::RestLibraryTrack;
 
 class FakeLoudnessManager final : public RestLibraryLoudnessManager {
@@ -304,6 +305,102 @@ TEST_F(RestLibraryFeatureTest, FailedPolicyRefreshDrainsQueuedPlaybackWithLease)
 
     EXPECT_TRUE(m_pFeature->m_mutationSequencer.hasInFlight());
     EXPECT_TRUE(m_pFeature->m_mutationSequencer.hasQueued(MutationKind::Snapshot));
+}
+
+TEST_F(RestLibraryFeatureTest, FailedAutomaticPolicyRefreshDispatchesQueuedUserUpdate) {
+    using MutationKind =
+            mixxx::library::rest::RestLibraryMutationSequencer::Kind;
+    m_pFeature->m_mixManSession.id = QStringLiteral("session-1");
+    m_pFeature->m_mixManRegistration.instance.instanceId = QStringLiteral("inst-1");
+    RestLibrarySettings automaticSettings = RestLibrarySettings::fromConfig(config());
+    automaticSettings.mixManRecommendationLens = QStringLiteral("auto");
+    m_pFeature->m_mixManAppliedSettings = automaticSettings;
+    m_pFeature->m_mixManDraftSettings = automaticSettings;
+
+    MockNetworkReply* pAutomaticReply = m_network.ExpectPost(
+            QStringLiteral("/api/v3/sessions/session-1/actions"),
+            {},
+            {QStringLiteral("\"action_type\":\"policy_refresh\""),
+                    QStringLiteral("\"recommendation_lens\":\"auto\"")},
+            500,
+            R"json({"detail":"temporary failure"})json");
+    m_pFeature->requestMixManPolicyRefresh(automaticSettings);
+
+    MockNetworkReply* pUserReply = m_network.ExpectPost(
+            QStringLiteral("/api/v3/sessions/session-1/actions"),
+            {},
+            {QStringLiteral("\"action_type\":\"policy_refresh\""),
+                    QStringLiteral("\"recommendation_lens\":\"semantic\"")},
+            422,
+            R"json({"detail":"invalid steering"})json");
+    m_pFeature->slotRecommendationLensChanged(QStringLiteral("semantic"));
+    m_pFeature->slotUpdateSuggestionsRequested();
+
+    EXPECT_TRUE(m_pFeature->m_policyRefreshPersistsDraft);
+    EXPECT_EQ(m_pFeature->m_policyRefreshPersistSequence, 0u);
+    EXPECT_TRUE(m_pFeature->m_mutationSequencer.hasQueued(MutationKind::PolicyRefresh));
+
+    pAutomaticReply->Done();
+
+    EXPECT_TRUE(m_pFeature->m_policyRefreshPersistsDraft);
+    EXPECT_GT(m_pFeature->m_policyRefreshPersistSequence, 0u);
+    EXPECT_TRUE(m_pFeature->m_mutationSequencer.hasInFlight());
+    EXPECT_FALSE(m_pFeature->m_mutationSequencer.hasQueued(MutationKind::PolicyRefresh));
+
+    pUserReply->Done();
+
+    EXPECT_FALSE(m_pFeature->m_policyRefreshPersistsDraft);
+    EXPECT_EQ(m_pFeature->m_policyRefreshPersistSequence, 0u);
+    EXPECT_FALSE(m_pFeature->m_mutationSequencer.hasInFlight());
+    EXPECT_EQ(m_pFeature->m_mixManDraftSettings.mixManRecommendationLens,
+            QStringLiteral("semantic"));
+    EXPECT_EQ(m_pFeature->m_mixManAppliedSettings.mixManRecommendationLens,
+            QStringLiteral("auto"));
+    EXPECT_FALSE(config()->exists(restConfig::kMixManRecommendationLensKey));
+}
+
+TEST_F(RestLibraryFeatureTest, QueuedUserUpdatePersistsAfterAutomaticPolicyFailure) {
+    m_pFeature->m_mixManSession.id = QStringLiteral("session-1");
+    m_pFeature->m_mixManRegistration.instance.instanceId = QStringLiteral("inst-1");
+    RestLibrarySettings automaticSettings = RestLibrarySettings::fromConfig(config());
+    automaticSettings.mixManRecommendationLens = QStringLiteral("auto");
+    m_pFeature->m_mixManAppliedSettings = automaticSettings;
+    m_pFeature->m_mixManDraftSettings = automaticSettings;
+
+    MockNetworkReply* pAutomaticReply = m_network.ExpectPost(
+            QStringLiteral("/api/v3/sessions/session-1/actions"),
+            {},
+            {QStringLiteral("\"action_type\":\"policy_refresh\""),
+                    QStringLiteral("\"recommendation_lens\":\"auto\"")},
+            503,
+            R"json({"detail":"temporary failure"})json");
+    m_pFeature->requestMixManPolicyRefresh(automaticSettings);
+
+    MockNetworkReply* pUserReply = m_network.ExpectPost(
+            QStringLiteral("/api/v3/sessions/session-1/actions"),
+            {},
+            {QStringLiteral("\"action_type\":\"policy_refresh\""),
+                    QStringLiteral("\"recommendation_lens\":\"semantic\"")},
+            200,
+            R"json({"session":{"id":"session-1"},"authoritative":{"session_id":"session-1"}})json");
+    m_pFeature->slotRecommendationLensChanged(QStringLiteral("semantic"));
+    m_pFeature->slotUpdateSuggestionsRequested();
+
+    pAutomaticReply->Done();
+    ASSERT_TRUE(m_pFeature->m_policyRefreshPersistsDraft);
+    ASSERT_GT(m_pFeature->m_policyRefreshPersistSequence, 0u);
+
+    pUserReply->Done();
+
+    EXPECT_FALSE(m_pFeature->m_policyRefreshPersistsDraft);
+    EXPECT_EQ(m_pFeature->m_policyRefreshPersistSequence, 0u);
+    EXPECT_FALSE(m_pFeature->m_mutationSequencer.hasInFlight());
+    EXPECT_EQ(m_pFeature->m_mixManDraftSettings.mixManRecommendationLens,
+            QStringLiteral("semantic"));
+    EXPECT_EQ(m_pFeature->m_mixManAppliedSettings.mixManRecommendationLens,
+            QStringLiteral("semantic"));
+    EXPECT_EQ(config()->getValueString(restConfig::kMixManRecommendationLensKey),
+            QStringLiteral("semantic"));
 }
 
 TEST_F(RestLibraryFeatureTest, TrackChangeDiscardsUnappliedSteeringDraft) {

@@ -1035,7 +1035,7 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
         }
         if (status.operation == kSessionPolicyRefreshOperation) {
             // The failed policy request has released the sequencer. Advance any
-            // newer coalesced playback work while the session is still valid.
+            // newer coalesced mutation while the session is still valid.
             flushMixManPlaybackMutations(RestLibrarySettings::fromConfig(m_pConfig));
         }
         if (status.statusCode == 409) {
