@@ -39,10 +39,12 @@ TEST(DlgRestLibraryTest, ExposesLibraryViewContractAndSignals) {
     EXPECT_TRUE(hasSignal(metaObject, "refreshRequested()"));
     EXPECT_TRUE(hasSignal(metaObject, "followCurrentTrackChanged(bool)"));
     EXPECT_TRUE(hasSignal(metaObject, "policyPresetChanged(QString)"));
+    EXPECT_TRUE(hasSignal(metaObject, "recommendationLensChanged(QString)"));
     EXPECT_TRUE(hasSignal(metaObject, "targetEnergyChanged(bool,int)"));
     EXPECT_TRUE(hasSignal(metaObject, "targetColorChanged(bool,QString)"));
     EXPECT_TRUE(hasSignal(metaObject, "targetBpmChanged(bool,int)"));
-    EXPECT_TRUE(hasSignal(metaObject, "rerollRequested()"));
+    EXPECT_TRUE(hasSignal(metaObject, "updateSuggestionsRequested()"));
+    EXPECT_TRUE(hasSignal(metaObject, "resetSteeringRequested()"));
     EXPECT_TRUE(hasSignal(metaObject, "autoDJToggleRequested(bool)"));
     EXPECT_TRUE(hasSignal(metaObject, "autoDJFadeNowRequested()"));
     EXPECT_TRUE(hasSignal(metaObject, "autoDJSkipNextRequested()"));
@@ -57,9 +59,11 @@ TEST(DlgRestLibraryTest, PolicyControlsUseAccessibleTwoRowNarrowLayout) {
 
     auto* pLayout = qobject_cast<QGridLayout*>(ui.MixManControls->layout());
     ASSERT_NE(pLayout, nullptr);
-    EXPECT_EQ(pLayout->rowCount(), 2);
+    EXPECT_EQ(pLayout->rowCount(), 3);
     EXPECT_EQ(layoutRow(pLayout, ui.comboBoxPolicyPreset), 0);
+    EXPECT_EQ(layoutRow(pLayout, ui.comboBoxRecommendationLens), 0);
     EXPECT_EQ(layoutRow(pLayout, ui.pushButtonReroll), 0);
+    EXPECT_EQ(layoutRow(pLayout, ui.pushButtonResetSteering), 0);
     EXPECT_EQ(layoutRow(pLayout, ui.checkBoxTargetEnergy), 1);
     EXPECT_EQ(layoutRow(pLayout, ui.horizontalSliderTargetEnergy), 1);
     EXPECT_EQ(layoutRow(pLayout, ui.labelTargetEnergyValue), 1);
@@ -81,7 +85,9 @@ TEST(DlgRestLibraryTest, PolicyControlsUseAccessibleTwoRowNarrowLayout) {
     EXPECT_EQ(ui.pushButtonRefresh->text(), QStringLiteral("Sync"));
     EXPECT_FALSE(ui.pushButtonRefresh->accessibleName().isEmpty());
     EXPECT_FALSE(ui.pushButtonRefresh->toolTip().isEmpty());
-    EXPECT_EQ(ui.pushButtonReroll->text(), QStringLiteral("New suggestions"));
+    EXPECT_EQ(ui.comboBoxRecommendationLens->itemData(0).toString(), QStringLiteral("auto"));
+    EXPECT_EQ(ui.comboBoxRecommendationLens->itemData(5).toString(), QStringLiteral("consensus"));
+    EXPECT_EQ(ui.pushButtonReroll->text(), QStringLiteral("Update suggestions"));
     EXPECT_FALSE(ui.pushButtonReroll->accessibleName().isEmpty());
     EXPECT_FALSE(ui.pushButtonReroll->toolTip().isEmpty());
     EXPECT_FALSE(ui.pushButtonTargetColor->accessibleName().isEmpty());

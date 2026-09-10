@@ -68,6 +68,8 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     config()->setValue(restConfig::kRecommendationLimitKey, 7);
     config()->setValue(restConfig::kMixManPathDepthKey, 8);
     config()->setValue(restConfig::kMixManPolicyPresetKey, QStringLiteral("explore"));
+    config()->setValue(restConfig::kMixManPolicyOverrideEnabledKey, true);
+    config()->setValue(restConfig::kMixManRecommendationLensKey, QStringLiteral("semantic"));
     config()->setValue(restConfig::kMixManTargetEnergyEnabledKey, true);
     config()->setValue(restConfig::kMixManTargetEnergyKey, 4);
     config()->setValue(restConfig::kMixManTargetColorEnabledKey, true);
@@ -102,6 +104,8 @@ TEST_F(RestLibrarySettingsTest, ReadsConfiguredValues) {
     EXPECT_EQ(settings.recommendationLimit, 7);
     EXPECT_EQ(settings.mixManPathDepth, 8);
     EXPECT_EQ(settings.mixManPolicyPreset, QStringLiteral("explore"));
+    EXPECT_TRUE(settings.mixManPolicyOverrideEnabled);
+    EXPECT_EQ(settings.mixManRecommendationLens, QStringLiteral("semantic"));
     EXPECT_TRUE(settings.mixManTargetEnergyEnabled);
     EXPECT_EQ(settings.mixManTargetEnergy, 4);
     EXPECT_DOUBLE_EQ(settings.mixManTargetEnergyNormalized(), 0.8);
@@ -135,6 +139,9 @@ TEST_F(RestLibrarySettingsTest, UsesDefaultsAndFallbackCacheDirectory) {
     EXPECT_EQ(settings.recommendationLimit, restConfig::kDefaultRecommendationLimit);
     EXPECT_EQ(settings.mixManPathDepth, restConfig::kDefaultMixManPathDepth);
     EXPECT_EQ(settings.mixManPolicyPreset, QStringLiteral("dj_assist"));
+    EXPECT_FALSE(settings.mixManPolicyOverrideEnabled);
+    EXPECT_EQ(settings.mixManRecommendationLens, QStringLiteral("auto"));
+    EXPECT_EQ(restConfig::kDefaultRecommendationLimit, 5);
     EXPECT_EQ(settings.mixManTargetEnergyEnabled, restConfig::kDefaultMixManTargetEnergyEnabled);
     EXPECT_EQ(settings.mixManTargetEnergy, restConfig::kDefaultMixManTargetEnergy);
     EXPECT_EQ(settings.mixManTargetColorEnabled, restConfig::kDefaultMixManTargetColorEnabled);

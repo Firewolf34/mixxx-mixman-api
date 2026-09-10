@@ -153,6 +153,104 @@ class RestLibraryFeatureTest : public RestLibraryTest {
     std::unique_ptr<RestLibraryFeature> m_pFeature;
 };
 
+TEST_F(RestLibraryFeatureTest, SteeringEditsStayLocalUntilOneCompleteUpdate) {
+    m_pFeature->m_mixManSession.id = QStringLiteral("session-1");
+    m_pFeature->m_mixManRegistration.instance.instanceId = QStringLiteral("inst-1");
+
+    m_pFeature->slotPolicyPresetChanged(QStringLiteral("explore"));
+    m_pFeature->slotRecommendationLensChanged(QStringLiteral("semantic"));
+    m_pFeature->slotTargetEnergyChanged(true, 2);
+    m_pFeature->slotTargetColorChanged(true, QStringLiteral("#00ffff"));
+    m_pFeature->slotTargetBpmChanged(true, 124);
+
+    EXPECT_FALSE(config()->getValue<bool>(
+            restConfig::kMixManPolicyOverrideEnabledKey, false));
+    EXPECT_FALSE(config()->exists(restConfig::kMixManRecommendationLensKey));
+    EXPECT_FALSE(config()->getValue<bool>(
+            restConfig::kMixManTargetEnergyEnabledKey, false));
+
+    MockNetworkReply* pReply = m_network.ExpectPost(
+            QStringLiteral("/api/v3/sessions/session-1/actions"),
+            {},
+            {QStringLiteral("\"action_type\":\"policy_refresh\""),
+                    QStringLiteral("\"policy_preset\":\"explore\""),
+                    QStringLiteral("\"recommendation_lens\":\"semantic\""),
+                    QStringLiteral("\"candidate_limit\":5"),
+                    QStringLiteral("\"target_energy\":0.4"),
+                    QStringLiteral("\"target_color\":\"#00ffff\""),
+                    QStringLiteral("\"target_bpm\":124")},
+            200,
+            R"json({"session":{"id":"session-1"},"authoritative":{"session_id":"session-1"}})json");
+
+    m_pFeature->slotUpdateSuggestionsRequested();
+    pReply->Done();
+
+    EXPECT_TRUE(config()->getValue<bool>(
+            restConfig::kMixManPolicyOverrideEnabledKey, false));
+    EXPECT_EQ(config()->getValueString(restConfig::kMixManPolicyPresetKey),
+            QStringLiteral("explore"));
+    EXPECT_EQ(config()->getValueString(restConfig::kMixManRecommendationLensKey),
+            QStringLiteral("semantic"));
+    EXPECT_TRUE(config()->getValue<bool>(
+            restConfig::kMixManTargetEnergyEnabledKey, false));
+}
+
+TEST_F(RestLibraryFeatureTest, ResetIsStagedAndFailedUpdateRetainsDraft) {
+    m_pFeature->m_mixManAppliedSettings.mixManPolicyOverrideEnabled = true;
+    m_pFeature->m_mixManAppliedSettings.mixManPolicyPreset = QStringLiteral("explore");
+    m_pFeature->m_mixManAppliedSettings.mixManRecommendationLens =
+            QStringLiteral("semantic");
+    m_pFeature->m_mixManAppliedSettings.mixManTargetEnergyEnabled = true;
+    m_pFeature->m_mixManAppliedSettings.mixManTargetColorEnabled = true;
+    m_pFeature->m_mixManAppliedSettings.mixManTargetBpmEnabled = true;
+    m_pFeature->m_mixManDraftSettings = m_pFeature->m_mixManAppliedSettings;
+
+    m_pFeature->slotResetSteeringRequested();
+
+    EXPECT_FALSE(m_pFeature->m_mixManDraftSettings.mixManPolicyOverrideEnabled);
+    EXPECT_EQ(m_pFeature->m_mixManDraftSettings.mixManRecommendationLens,
+            QStringLiteral("auto"));
+    EXPECT_FALSE(m_pFeature->m_mixManDraftSettings.mixManTargetEnergyEnabled);
+    EXPECT_FALSE(m_pFeature->m_mixManDraftSettings.mixManTargetColorEnabled);
+    EXPECT_FALSE(m_pFeature->m_mixManDraftSettings.mixManTargetBpmEnabled);
+    EXPECT_FALSE(config()->exists(restConfig::kMixManPolicyOverrideEnabledKey));
+
+    m_pFeature->m_mixManPendingAppliedSettings =
+            m_pFeature->m_mixManDraftSettings;
+    m_pFeature->m_policyRefreshPersistsDraft = true;
+    m_pFeature->m_mutationSequencer.queue(
+            mixxx::library::rest::RestLibraryMutationSequencer::Kind::PolicyRefresh);
+    const auto dispatch = m_pFeature->m_mutationSequencer.takeNext({});
+    ASSERT_TRUE(dispatch);
+    m_pFeature->m_policyRefreshPersistSequence = dispatch->sequence;
+
+    mixxx::library::rest::RestLibrarySessionWriteStatus failure;
+    failure.operation = QStringLiteral("session_policy_refresh");
+    failure.mutationSequence = dispatch->sequence;
+    failure.statusCode = 422;
+    failure.errorText = QStringLiteral("invalid steering");
+    m_pFeature->slotMixManSessionWriteStatusUpdated(failure);
+
+    EXPECT_FALSE(m_pFeature->m_policyRefreshPersistsDraft);
+    EXPECT_FALSE(m_pFeature->m_mixManDraftSettings.mixManPolicyOverrideEnabled);
+    EXPECT_TRUE(m_pFeature->m_mixManAppliedSettings.mixManPolicyOverrideEnabled);
+    EXPECT_FALSE(config()->exists(restConfig::kMixManPolicyOverrideEnabledKey));
+}
+
+TEST_F(RestLibraryFeatureTest, TrackChangeDiscardsUnappliedSteeringDraft) {
+    config()->setValue(restConfig::kUseMixManDefaultsKey, false);
+    m_pFeature->slotRecommendationLensChanged(QStringLiteral("semantic"));
+    ASSERT_EQ(m_pFeature->m_mixManDraftSettings.mixManRecommendationLens,
+            QStringLiteral("semantic"));
+
+    m_pFeature->slotCurrentPlayingTrackChanged({});
+
+    EXPECT_EQ(m_pFeature->m_mixManDraftSettings.mixManRecommendationLens,
+            QStringLiteral("auto"));
+    EXPECT_EQ(m_pFeature->m_mixManAppliedSettings.mixManRecommendationLens,
+            QStringLiteral("auto"));
+}
+
 TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForAllDownloadsAndPreservesOrder) {
     MockNetworkReply* pFirstAudio = m_network.ExpectGet(
             QStringLiteral("/download"),

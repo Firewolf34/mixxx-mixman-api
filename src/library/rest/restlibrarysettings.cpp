@@ -442,6 +442,18 @@ RestLibrarySettings RestLibrarySettings::fromConfig(
     if (settings.mixManPolicyPreset.trimmed().isEmpty()) {
         settings.mixManPolicyPreset = QStringLiteral("dj_assist");
     }
+    settings.mixManPolicyOverrideEnabled = pConfig->getValue<bool>(
+            config::kMixManPolicyOverrideEnabledKey,
+            config::kDefaultMixManPolicyOverrideEnabled);
+    settings.mixManRecommendationLens = pConfig->getValueString(
+            config::kMixManRecommendationLensKey).trimmed().toLower();
+    static const QSet<QString> kRecommendationLenses{
+            QStringLiteral("auto"), QStringLiteral("vector"),
+            QStringLiteral("hybrid"), QStringLiteral("colour"),
+            QStringLiteral("semantic"), QStringLiteral("consensus")};
+    if (!kRecommendationLenses.contains(settings.mixManRecommendationLens)) {
+        settings.mixManRecommendationLens = QStringLiteral("auto");
+    }
     settings.mixManTargetEnergyEnabled = pConfig->getValue<bool>(
             config::kMixManTargetEnergyEnabledKey,
             config::kDefaultMixManTargetEnergyEnabled);

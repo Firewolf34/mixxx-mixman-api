@@ -1233,8 +1233,13 @@ void RestLibraryClient::publishMixManPolicyRefreshAction(
     QJsonObject payload{
             {QStringLiteral("action_type"), QStringLiteral("policy_refresh")},
             {QStringLiteral("instance_id"), instanceId},
+            {QStringLiteral("recommendation_lens"), m_settings.mixManRecommendationLens},
+            {QStringLiteral("candidate_limit"), m_settings.recommendationLimit},
     };
-    insertIfNotEmpty(&payload, QStringLiteral("policy_preset"), m_settings.mixManPolicyPreset);
+    if (m_settings.mixManPolicyOverrideEnabled) {
+        insertIfNotEmpty(
+                &payload, QStringLiteral("policy_preset"), m_settings.mixManPolicyPreset);
+    }
     if (m_settings.mixManTargetColorEnabled &&
             !m_settings.mixManTargetColor.trimmed().isEmpty()) {
         payload.insert(QStringLiteral("target_color"), m_settings.mixManTargetColor.trimmed());
@@ -1245,11 +1250,6 @@ void RestLibraryClient::publishMixManPolicyRefreshAction(
     if (m_settings.mixManTargetBpmEnabled) {
         payload.insert(QStringLiteral("target_bpm"), m_settings.mixManTargetBpm);
     }
-    payload.insert(
-            QStringLiteral("reroll_constraints"),
-            QJsonObject{
-                    {QStringLiteral("mode"), QStringLiteral("fuzzy")},
-                    {QStringLiteral("limit"), m_settings.recommendationLimit}});
     if (!metadata.isEmpty()) {
         payload.insert(QStringLiteral("metadata"), metadata);
     }

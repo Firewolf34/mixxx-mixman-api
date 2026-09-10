@@ -79,6 +79,15 @@ DlgRestLibrary::DlgRestLibrary(
                             m_ui->comboBoxPolicyPreset->itemData(index).toString());
                 }
             });
+    connect(m_ui->comboBoxRecommendationLens,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            [this](int index) {
+                if (index >= 0) {
+                    emit recommendationLensChanged(
+                            m_ui->comboBoxRecommendationLens->itemData(index).toString());
+                }
+            });
     connect(m_ui->checkBoxTargetEnergy,
             &QCheckBox::toggled,
             this,
@@ -120,7 +129,11 @@ DlgRestLibrary::DlgRestLibrary(
     connect(m_ui->pushButtonReroll,
             &QPushButton::clicked,
             this,
-            &DlgRestLibrary::rerollRequested);
+            &DlgRestLibrary::updateSuggestionsRequested);
+    connect(m_ui->pushButtonResetSteering,
+            &QPushButton::clicked,
+            this,
+            &DlgRestLibrary::resetSteeringRequested);
     connect(m_ui->pushButtonAutoDJ,
             &QPushButton::clicked,
             this,
@@ -173,6 +186,7 @@ DlgRestLibrary::DlgRestLibrary(
     m_targetColor = QStringLiteral("#ffffff");
     updateTargetEnergyValue(m_ui->horizontalSliderTargetEnergy->value());
     updateTargetColorButton();
+    setUpdateSuggestionsState(false, false);
     setAutoDJState(AutoDJProcessor::ADJ_DISABLED);
     setStatusText(tr("Select or play a track to load REST recommendations."));
 }
@@ -224,9 +238,11 @@ void DlgRestLibrary::setPathSummaryText(const QString& pathSummaryText) {
 
 void DlgRestLibrary::setPolicyPresets(
         const QList<RestLibraryPolicyPreset>& presets,
-        const QString& currentPreset) {
+        const QString& currentPreset,
+        bool overrideEnabled) {
     const QSignalBlocker blocker(m_ui->comboBoxPolicyPreset);
     m_ui->comboBoxPolicyPreset->clear();
+    m_ui->comboBoxPolicyPreset->addItem(tr("Follow session"), QString());
     if (presets.isEmpty()) {
         m_ui->comboBoxPolicyPreset->addItem(tr("DJ Assist"), QStringLiteral("dj_assist"));
     } else {
@@ -237,16 +253,36 @@ void DlgRestLibrary::setPolicyPresets(
         }
     }
 
-    const int presetIndex = m_ui->comboBoxPolicyPreset->findData(currentPreset);
+    setPolicySelection(currentPreset, overrideEnabled);
+}
+
+void DlgRestLibrary::setPolicySelection(const QString& currentPreset, bool overrideEnabled) {
+    const QSignalBlocker blocker(m_ui->comboBoxPolicyPreset);
+    int presetIndex = overrideEnabled
+            ? m_ui->comboBoxPolicyPreset->findData(currentPreset)
+            : 0;
     if (presetIndex >= 0) {
         m_ui->comboBoxPolicyPreset->setCurrentIndex(presetIndex);
-    } else if (!currentPreset.trimmed().isEmpty()) {
+    } else if (overrideEnabled && !currentPreset.trimmed().isEmpty()) {
         m_ui->comboBoxPolicyPreset->insertItem(
-                0,
+                1,
                 tr("%1 (configured)").arg(currentPreset.trimmed()),
                 currentPreset.trimmed());
-        m_ui->comboBoxPolicyPreset->setCurrentIndex(0);
+        m_ui->comboBoxPolicyPreset->setCurrentIndex(1);
     }
+}
+
+void DlgRestLibrary::setRecommendationLens(const QString& lens) {
+    const QSignalBlocker blocker(m_ui->comboBoxRecommendationLens);
+    const int index = m_ui->comboBoxRecommendationLens->findData(lens.trimmed().toLower());
+    m_ui->comboBoxRecommendationLens->setCurrentIndex(index >= 0 ? index : 0);
+}
+
+void DlgRestLibrary::setUpdateSuggestionsState(bool dirty, bool inFlight) {
+    m_ui->pushButtonReroll->setEnabled(dirty && !inFlight);
+    m_ui->pushButtonReroll->setText(
+            inFlight ? tr("Updating…") : tr("Update suggestions"));
+    m_ui->pushButtonResetSteering->setEnabled(!inFlight);
 }
 
 void DlgRestLibrary::setMixManTargets(

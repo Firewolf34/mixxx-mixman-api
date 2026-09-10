@@ -81,10 +81,12 @@ class RestLibraryFeature final : public LibraryFeature {
     void slotPlaybackLeaseRelease();
     void slotAuthorityReconcile();
     void slotPolicyPresetChanged(const QString& presetKey);
+    void slotRecommendationLensChanged(const QString& lens);
     void slotTargetEnergyChanged(bool enabled, int energy);
     void slotTargetColorChanged(bool enabled, const QString& color);
     void slotTargetBpmChanged(bool enabled, int bpm);
-    void slotRerollRequested();
+    void slotUpdateSuggestionsRequested();
+    void slotResetSteeringRequested();
     void slotAutoDJToggleRequested(bool enable);
     void slotAutoDJFadeNowRequested();
     void slotAutoDJSkipNextRequested();
@@ -138,10 +140,10 @@ class RestLibraryFeature final : public LibraryFeature {
     void selectMixManCandidateForTrack(const TrackPointer& pTrack);
     void requestMixManPolicyRefresh(const RestLibrarySettings& settings);
     QString selectionOriginForRemoteId(const QString& remoteId) const;
-    void updateMixManIntent(const RestLibrarySettings& settings);
     QJsonObject mixManSessionMetadata() const;
     QJsonObject mixManTrackSnapshot(const TrackPointer& pTrack, const QString& remoteId) const;
     void refreshMixManControls(const RestLibrarySettings& settings);
+    void updateMixManSuggestionsState(bool inFlight = false);
     void updateDiagnosticsText();
     void setPathSummary(const RestLibraryPolicyPath& policyPath);
     void setStatusText(const QString& statusText);
@@ -171,6 +173,9 @@ class RestLibraryFeature final : public LibraryFeature {
     RestLibraryDiagnostics m_diagnostics;
     RestLibrarySession m_mixManSession;
     RestLibrarySettings m_mixManSessionSettings;
+    RestLibrarySettings m_mixManAppliedSettings;
+    RestLibrarySettings m_mixManDraftSettings;
+    RestLibrarySettings m_mixManPendingAppliedSettings;
     RestLibrarySessionRegistration m_mixManRegistration;
     RestLibraryAuthoritativeState m_authoritativeState;
     RestLibraryPlaybackLease m_playbackLease;
@@ -204,6 +209,7 @@ class RestLibraryFeature final : public LibraryFeature {
     QJsonObject m_pendingCandidateMetadata;
     int m_recommendationCount = 0;
     int m_playbackLeaseTtlSeconds = 30;
+    quint64 m_policyRefreshPersistSequence = 0;
     double m_averageQuality = 0.0;
     bool m_followCurrentTrack = true;
     bool m_sessionCreateAttempted = false;
@@ -211,6 +217,7 @@ class RestLibraryFeature final : public LibraryFeature {
     bool m_playbackControlReleasePending = false;
     bool m_playbackLeaseOwned = false;
     bool m_shutdownStarted = false;
+    bool m_policyRefreshPersistsDraft = false;
 
   signals:
     void statusTextChanged(const QString& statusText);

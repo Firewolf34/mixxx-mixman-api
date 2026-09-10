@@ -50,7 +50,10 @@ class DlgRestLibrary final : public QWidget, public LibraryView {
     void setPathSummaryText(const QString& pathSummaryText);
     void setPolicyPresets(
             const QList<mixxx::library::rest::RestLibraryPolicyPreset>& presets,
-            const QString& currentPreset);
+            const QString& currentPreset,
+            bool overrideEnabled);
+    void setPolicySelection(const QString& currentPreset, bool overrideEnabled);
+    void setRecommendationLens(const QString& lens);
     void setMixManTargets(
             bool targetEnergyEnabled,
             int targetEnergy,
@@ -58,6 +61,7 @@ class DlgRestLibrary final : public QWidget, public LibraryView {
             const QString& targetColor,
             bool targetBpmEnabled,
             int targetBpm);
+    void setUpdateSuggestionsState(bool dirty, bool inFlight);
     void setAutoDJState(AutoDJProcessor::AutoDJState state);
     void setAutoDJPreparing(bool preparing);
 
@@ -65,10 +69,12 @@ class DlgRestLibrary final : public QWidget, public LibraryView {
     void refreshRequested();
     void followCurrentTrackChanged(bool follow);
     void policyPresetChanged(const QString& presetKey);
+    void recommendationLensChanged(const QString& lens);
     void targetEnergyChanged(bool enabled, int energy);
     void targetColorChanged(bool enabled, const QString& color);
     void targetBpmChanged(bool enabled, int bpm);
-    void rerollRequested();
+    void updateSuggestionsRequested();
+    void resetSteeringRequested();
     void autoDJToggleRequested(bool enable);
     void autoDJFadeNowRequested();
     void autoDJSkipNextRequested();

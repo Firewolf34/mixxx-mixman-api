@@ -110,6 +110,33 @@ QString conciseDiagnosticText(const RestLibraryRequestDiagnostic& diagnostic) {
     return diagnostic.summary;
 }
 
+bool sameRecommendationSteering(
+        const RestLibrarySettings& lhs,
+        const RestLibrarySettings& rhs) {
+    const bool samePolicy =
+            lhs.mixManPolicyOverrideEnabled == rhs.mixManPolicyOverrideEnabled &&
+            (!lhs.mixManPolicyOverrideEnabled ||
+                    lhs.mixManPolicyPreset == rhs.mixManPolicyPreset);
+    const bool sameEnergy =
+            lhs.mixManTargetEnergyEnabled == rhs.mixManTargetEnergyEnabled &&
+            (!lhs.mixManTargetEnergyEnabled ||
+                    lhs.mixManTargetEnergy == rhs.mixManTargetEnergy);
+    const bool sameColor =
+            lhs.mixManTargetColorEnabled == rhs.mixManTargetColorEnabled &&
+            (!lhs.mixManTargetColorEnabled ||
+                    lhs.mixManTargetColor == rhs.mixManTargetColor);
+    const bool sameBpm =
+            lhs.mixManTargetBpmEnabled == rhs.mixManTargetBpmEnabled &&
+            (!lhs.mixManTargetBpmEnabled ||
+                    lhs.mixManTargetBpm == rhs.mixManTargetBpm);
+    return samePolicy &&
+            lhs.mixManRecommendationLens == rhs.mixManRecommendationLens &&
+            sameEnergy &&
+            sameColor &&
+            sameBpm &&
+            lhs.recommendationLimit == rhs.recommendationLimit;
+}
+
 } // namespace
 
 RestLibraryFeature::RestLibraryFeature(
@@ -147,6 +174,8 @@ RestLibraryFeature::RestLibraryFeature(
           m_pCacheManager(pBackend->cacheManager()) {
     const RestLibrarySettings initialSettings =
             RestLibrarySettings::fromConfig(m_pConfig);
+    m_mixManAppliedSettings = initialSettings;
+    m_mixManDraftSettings = initialSettings;
     m_pTableModel->setCacheIdentity(
             RestLibraryCacheManager::cacheIdentity(initialSettings));
     m_sessionHeartbeatTimer.setInterval(kSessionHeartbeatIntervalMillis);
@@ -348,6 +377,10 @@ void RestLibraryFeature::bindLibraryWidget(
             this,
             &RestLibraryFeature::slotPolicyPresetChanged);
     connect(m_pRestLibraryView,
+            &DlgRestLibrary::recommendationLensChanged,
+            this,
+            &RestLibraryFeature::slotRecommendationLensChanged);
+    connect(m_pRestLibraryView,
             &DlgRestLibrary::targetEnergyChanged,
             this,
             &RestLibraryFeature::slotTargetEnergyChanged);
@@ -360,9 +393,13 @@ void RestLibraryFeature::bindLibraryWidget(
             this,
             &RestLibraryFeature::slotTargetBpmChanged);
     connect(m_pRestLibraryView,
-            &DlgRestLibrary::rerollRequested,
+            &DlgRestLibrary::updateSuggestionsRequested,
             this,
-            &RestLibraryFeature::slotRerollRequested);
+            &RestLibraryFeature::slotUpdateSuggestionsRequested);
+    connect(m_pRestLibraryView,
+            &DlgRestLibrary::resetSteeringRequested,
+            this,
+            &RestLibraryFeature::slotResetSteeringRequested);
     connect(m_pRestLibraryView,
             &DlgRestLibrary::autoDJToggleRequested,
             this,
@@ -388,7 +425,7 @@ void RestLibraryFeature::bindLibraryWidget(
         emit statusTextChanged(m_statusText);
     }
     m_pRestLibraryView->setAutoDJState(m_pAutoDJProcessor->getState());
-    refreshMixManControls(RestLibrarySettings::fromConfig(m_pConfig));
+    refreshMixManControls(m_mixManDraftSettings);
 }
 
 void RestLibraryFeature::activate() {
@@ -408,7 +445,7 @@ void RestLibraryFeature::onRightClick(const QPoint& globalPos) {
 }
 
 void RestLibraryFeature::slotRefresh() {
-    refreshForTrack(PlayerInfo::instance().getCurrentPlayingTrack(), true);
+    refreshForTrack(PlayerInfo::instance().getCurrentPlayingTrack(), true, false);
 }
 
 void RestLibraryFeature::slotFollowCurrentTrackChanged(bool follow) {
@@ -420,6 +457,12 @@ void RestLibraryFeature::slotFollowCurrentTrackChanged(bool follow) {
 
 void RestLibraryFeature::slotCurrentPlayingTrackChanged(TrackPointer pTrack) {
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
+    m_mixManAppliedSettings = settings;
+    m_mixManDraftSettings = settings;
+    refreshMixManControls(m_mixManDraftSettings);
+    if (m_pRestLibraryView) {
+        m_pRestLibraryView->setUpdateSuggestionsState(false, false);
+    }
     if (settings.isConfigured() && settings.useMixManDefaults) {
         ensureMixManSession(settings);
         const QString remoteId = remoteIdForTrack(pTrack);
@@ -469,7 +512,6 @@ void RestLibraryFeature::refreshForTrack(
         settings.mixManSessionId = generateMixManSessionId();
         m_pConfig->setValue(config::kMixManSessionIdKey, settings.mixManSessionId);
     }
-    refreshMixManControls(settings);
     if (!settings.isConfigured()) {
         m_pendingTrackLookup.reset();
         resetMixManSessionState();
@@ -628,8 +670,10 @@ void RestLibraryFeature::slotPolicyPresetsFetched(
     if (!m_pRestLibraryView) {
         return;
     }
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    m_pRestLibraryView->setPolicyPresets(presets, settings.mixManPolicyPreset);
+    m_pRestLibraryView->setPolicyPresets(
+            presets,
+            m_mixManDraftSettings.mixManPolicyPreset,
+            m_mixManDraftSettings.mixManPolicyOverrideEnabled);
 }
 
 void RestLibraryFeature::slotMixManPolicyPathFetched(const RestLibraryPolicyPath& policyPath) {
@@ -709,7 +753,8 @@ void RestLibraryFeature::slotMixManSessionInstanceRegistered(
     }
 
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    updateMixManIntent(settings);
+    m_policyRefreshPersistsDraft = false;
+    requestMixManPolicyRefresh(settings);
     if (!m_currentRemoteId.isEmpty()) {
         const int currentPlayingDeck = PlayerInfo::instance().getCurrentPlayingDeck();
         publishMixManPlayback(
@@ -794,6 +839,64 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
                     status.mutationSequence, *mutationKind)) {
         return;
     }
+    if (status.operation == kSessionPolicyRefreshOperation) {
+        const bool persistDraft =
+                m_policyRefreshPersistsDraft &&
+                status.mutationSequence == m_policyRefreshPersistSequence;
+        const bool superseded = m_policyRefreshPersistsDraft && !persistDraft;
+        if (status.success && persistDraft) {
+            m_pConfig->setValue(
+                    config::kMixManPolicyOverrideEnabledKey,
+                    m_mixManPendingAppliedSettings.mixManPolicyOverrideEnabled);
+            m_pConfig->setValue(
+                    config::kMixManPolicyPresetKey,
+                    m_mixManPendingAppliedSettings.mixManPolicyPreset);
+            m_pConfig->setValue(
+                    config::kMixManRecommendationLensKey,
+                    m_mixManPendingAppliedSettings.mixManRecommendationLens);
+            m_pConfig->setValue(
+                    config::kMixManTargetEnergyEnabledKey,
+                    m_mixManPendingAppliedSettings.mixManTargetEnergyEnabled);
+            m_pConfig->setValue(
+                    config::kMixManTargetEnergyKey,
+                    m_mixManPendingAppliedSettings.mixManTargetEnergy);
+            m_pConfig->setValue(
+                    config::kMixManTargetColorEnabledKey,
+                    m_mixManPendingAppliedSettings.mixManTargetColorEnabled);
+            m_pConfig->setValue(
+                    config::kMixManTargetColorKey,
+                    m_mixManPendingAppliedSettings.mixManTargetColor);
+            m_pConfig->setValue(
+                    config::kMixManTargetBpmEnabledKey,
+                    m_mixManPendingAppliedSettings.mixManTargetBpmEnabled);
+            m_pConfig->setValue(
+                    config::kMixManTargetBpmKey,
+                    m_mixManPendingAppliedSettings.mixManTargetBpm);
+            m_pConfig->setValue(
+                    config::kRecommendationLimitKey,
+                    m_mixManPendingAppliedSettings.recommendationLimit);
+            m_mixManAppliedSettings = m_mixManPendingAppliedSettings;
+            m_mixManDraftSettings = m_mixManAppliedSettings;
+        }
+        if (!superseded) {
+            m_policyRefreshPersistsDraft = false;
+            m_policyRefreshPersistSequence = 0;
+            if (m_pRestLibraryView) {
+                m_pRestLibraryView->setUpdateSuggestionsState(
+                        !sameRecommendationSteering(
+                                m_mixManDraftSettings, m_mixManAppliedSettings),
+                        false);
+            }
+        }
+        if (status.success) {
+            flushMixManPlaybackMutations(RestLibrarySettings::fromConfig(m_pConfig));
+            m_sessionStatusText = persistDraft
+                    ? tr("Suggestions updated")
+                    : tr("Session steering published");
+            updateDiagnosticsText();
+            return;
+        }
+    }
     if (!status.success && (status.statusCode == 401 || status.statusCode == 403)) {
         m_sessionHeartbeatTimer.stop();
         m_playbackLeaseRenewTimer.stop();
@@ -848,8 +951,7 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
         }
     } else if (status.operation == kSessionPlaybackOperation ||
             status.operation == kSessionSnapshotOperation ||
-            status.operation == kSessionCandidateSelectOperation ||
-            status.operation == kSessionPolicyRefreshOperation) {
+            status.operation == kSessionCandidateSelectOperation) {
         if (!status.success &&
                 (status.statusCode == 0 || status.statusCode == 409 ||
                         status.statusCode >= 500)) {
@@ -859,8 +961,6 @@ void RestLibraryFeature::slotMixManSessionWriteStatusUpdated(
                 m_mutationSequencer.queue(MutationKind::Snapshot);
             } else if (status.operation == kSessionCandidateSelectOperation) {
                 m_mutationSequencer.queue(MutationKind::Candidate);
-            } else if (status.operation == kSessionPolicyRefreshOperation) {
-                m_mutationSequencer.queue(MutationKind::PolicyRefresh);
             }
             if (status.statusCode == 409) {
                 m_playbackLease = {};
@@ -1039,44 +1139,62 @@ void RestLibraryFeature::slotAuthorityReconcile() {
 }
 
 void RestLibraryFeature::slotPolicyPresetChanged(const QString& presetKey) {
-    if (presetKey.trimmed().isEmpty()) {
-        return;
+    m_mixManDraftSettings.mixManPolicyOverrideEnabled = !presetKey.trimmed().isEmpty();
+    if (m_mixManDraftSettings.mixManPolicyOverrideEnabled) {
+        m_mixManDraftSettings.mixManPolicyPreset = presetKey.trimmed();
     }
-    m_pConfig->setValue(config::kMixManPolicyPresetKey, presetKey.trimmed());
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    updateMixManIntent(settings);
-    requestMixManPolicyRefresh(settings);
+    updateMixManSuggestionsState();
+}
+
+void RestLibraryFeature::slotRecommendationLensChanged(const QString& lens) {
+    m_mixManDraftSettings.mixManRecommendationLens = lens.trimmed().toLower();
+    updateMixManSuggestionsState();
 }
 
 void RestLibraryFeature::slotTargetEnergyChanged(bool enabled, int energy) {
-    m_pConfig->setValue(config::kMixManTargetEnergyEnabledKey, enabled);
-    m_pConfig->setValue(config::kMixManTargetEnergyKey, energy);
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    updateMixManIntent(settings);
-    requestMixManPolicyRefresh(settings);
+    m_mixManDraftSettings.mixManTargetEnergyEnabled = enabled;
+    m_mixManDraftSettings.mixManTargetEnergy = energy;
+    updateMixManSuggestionsState();
 }
 
 void RestLibraryFeature::slotTargetColorChanged(bool enabled, const QString& color) {
-    m_pConfig->setValue(config::kMixManTargetColorEnabledKey, enabled);
-    m_pConfig->setValue(config::kMixManTargetColorKey, color.trimmed());
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    updateMixManIntent(settings);
-    requestMixManPolicyRefresh(settings);
+    m_mixManDraftSettings.mixManTargetColorEnabled = enabled;
+    m_mixManDraftSettings.mixManTargetColor = color.trimmed();
+    updateMixManSuggestionsState();
 }
 
 void RestLibraryFeature::slotTargetBpmChanged(bool enabled, int bpm) {
-    m_pConfig->setValue(config::kMixManTargetBpmEnabledKey, enabled);
-    m_pConfig->setValue(config::kMixManTargetBpmKey, bpm);
-    requestMixManPolicyRefresh(RestLibrarySettings::fromConfig(m_pConfig));
+    m_mixManDraftSettings.mixManTargetBpmEnabled = enabled;
+    m_mixManDraftSettings.mixManTargetBpm = bpm;
+    updateMixManSuggestionsState();
 }
 
-void RestLibraryFeature::slotRerollRequested() {
-    const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
-    if (!settings.useMixManDefaults) {
+void RestLibraryFeature::slotUpdateSuggestionsRequested() {
+    if (!m_mixManDraftSettings.useMixManDefaults) {
         slotRefresh();
         return;
     }
-    requestMixManPolicyRefresh(settings);
+    if (sameRecommendationSteering(m_mixManDraftSettings, m_mixManAppliedSettings)) {
+        return;
+    }
+    m_mixManPendingAppliedSettings = m_mixManDraftSettings;
+    m_policyRefreshPersistsDraft = true;
+    m_policyRefreshPersistSequence = 0;
+    updateMixManSuggestionsState(true);
+    m_sessionStatusText = tr("Updating MixMan suggestions…");
+    updateDiagnosticsText();
+    requestMixManPolicyRefresh(m_mixManPendingAppliedSettings);
+}
+
+void RestLibraryFeature::slotResetSteeringRequested() {
+    m_mixManDraftSettings = m_mixManAppliedSettings;
+    m_mixManDraftSettings.mixManPolicyOverrideEnabled = false;
+    m_mixManDraftSettings.mixManRecommendationLens = QStringLiteral("auto");
+    m_mixManDraftSettings.mixManTargetEnergyEnabled = false;
+    m_mixManDraftSettings.mixManTargetColorEnabled = false;
+    m_mixManDraftSettings.mixManTargetBpmEnabled = false;
+    refreshMixManControls(m_mixManDraftSettings);
+    updateMixManSuggestionsState();
 }
 
 void RestLibraryFeature::slotAutoDJToggleRequested(bool enable) {
@@ -1699,8 +1817,12 @@ void RestLibraryFeature::flushMixManPlaybackMutations(
                 dispatch->sequence);
         return;
     case MutationKind::PolicyRefresh:
+        if (m_policyRefreshPersistsDraft &&
+                m_policyRefreshPersistSequence == 0) {
+            m_policyRefreshPersistSequence = dispatch->sequence;
+        }
         m_client.publishMixManPolicyRefreshAction(
-                settings,
+                m_mixManPendingAppliedSettings,
                 m_mixManSession.id,
                 m_mixManRegistration.instance.instanceId,
                 mixManSessionMetadata(),
@@ -1787,10 +1909,16 @@ void RestLibraryFeature::requestMixManPolicyRefresh(const RestLibrarySettings& s
     if (!settings.isConfigured() ||
             !settings.useMixManDefaults ||
             m_mixManSession.id.isEmpty()) {
+        if (m_policyRefreshPersistsDraft) {
+            m_policyRefreshPersistsDraft = false;
+            m_policyRefreshPersistSequence = 0;
+            updateMixManSuggestionsState();
+        }
         slotRefresh();
         return;
     }
 
+    m_mixManPendingAppliedSettings = settings;
     m_mutationSequencer.queue(MutationKind::PolicyRefresh);
     flushMixManPlaybackMutations(settings);
 }
@@ -1805,30 +1933,7 @@ QString RestLibraryFeature::selectionOriginForRemoteId(const QString& remoteId) 
             return QStringLiteral("authoritative_candidate");
         }
     }
-    return QStringLiteral("recommendation_reroll");
-}
-
-void RestLibraryFeature::updateMixManIntent(const RestLibrarySettings& settings) {
-    if (!settings.isConfigured() ||
-            !settings.useMixManDefaults ||
-            m_mixManSession.id.isEmpty()) {
-        return;
-    }
-
-    RestLibrarySessionIntent intent;
-    intent.instanceId = m_mixManRegistration.instance.instanceId;
-    const bool hasTargetEnergy = settings.mixManTargetEnergyEnabled;
-    const bool hasTargetColor = settings.mixManTargetColorEnabled &&
-            !settings.mixManTargetColor.trimmed().isEmpty();
-    intent.status = hasTargetEnergy || hasTargetColor ? QStringLiteral("active")
-                                                      : QStringLiteral("cleared");
-    intent.policyPreset = settings.mixManPolicyPreset;
-    intent.targetEnergyEnabled = settings.mixManTargetEnergyEnabled;
-    intent.targetEnergy = settings.mixManTargetEnergyNormalized();
-    intent.targetColorEnabled = settings.mixManTargetColorEnabled;
-    intent.targetColor = settings.mixManTargetColor;
-    intent.metadata = mixManSessionMetadata();
-    m_client.updateMixManSessionIntent(settings, m_mixManSession.id, intent);
+    return QStringLiteral("manual");
 }
 
 QJsonObject RestLibraryFeature::mixManSessionMetadata() const {
@@ -1858,7 +1963,10 @@ QJsonObject RestLibraryFeature::mixManTrackSnapshot(
 
     const RestLibrarySettings settings = RestLibrarySettings::fromConfig(m_pConfig);
     QJsonObject policy;
-    policy.insert(QStringLiteral("policy_preset"), settings.mixManPolicyPreset);
+    if (settings.mixManPolicyOverrideEnabled) {
+        policy.insert(QStringLiteral("policy_preset"), settings.mixManPolicyPreset);
+    }
+    policy.insert(QStringLiteral("recommendation_lens"), settings.mixManRecommendationLens);
     policy.insert(QStringLiteral("admin_approved_only"), settings.mixManAdminApprovedOnly);
     policy.insert(QStringLiteral("path_depth"), settings.mixManPathDepth);
     policy.insert(QStringLiteral("candidate_limit"), settings.recommendationLimit);
@@ -1912,6 +2020,10 @@ void RestLibraryFeature::refreshMixManControls(const RestLibrarySettings& settin
     if (!m_pRestLibraryView) {
         return;
     }
+    m_pRestLibraryView->setPolicySelection(
+            settings.mixManPolicyPreset,
+            settings.mixManPolicyOverrideEnabled);
+    m_pRestLibraryView->setRecommendationLens(settings.mixManRecommendationLens);
     m_pRestLibraryView->setMixManTargets(
             settings.mixManTargetEnergyEnabled,
             settings.mixManTargetEnergy,
@@ -1919,6 +2031,16 @@ void RestLibraryFeature::refreshMixManControls(const RestLibrarySettings& settin
             settings.mixManTargetColor,
             settings.mixManTargetBpmEnabled,
             settings.mixManTargetBpm);
+}
+
+void RestLibraryFeature::updateMixManSuggestionsState(bool inFlight) {
+    if (!m_pRestLibraryView) {
+        return;
+    }
+    m_pRestLibraryView->setUpdateSuggestionsState(
+            !sameRecommendationSteering(
+                    m_mixManDraftSettings, m_mixManAppliedSettings),
+            inFlight);
 }
 
 void RestLibraryFeature::updateDiagnosticsText() {

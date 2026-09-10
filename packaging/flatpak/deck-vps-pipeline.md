@@ -967,6 +967,13 @@ fail-closed and must not silently retry without credentials. Bearer credentials
 must remain in the OS keychain, require HTTPS outside loopback, and stay on the
 configured origin. Rapid deck changes must converge to the newest serialized
 remote mutation without affecting local playback.
+REST Recommendations steering is staged client-side. Policy, lens, energy,
+colour, BPM, Reset, and recommendation-count edits must produce no network
+write until Update suggestions sends one complete `policy_refresh` action.
+Persist the draft only after that action succeeds; preserve it after failure.
+Sync remains a read-only authoritative-state fetch, track changes discard
+unapplied edits, and recommendation controls must not write the shared session
+intent.
 
 ### Reject
 

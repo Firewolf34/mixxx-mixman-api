@@ -426,6 +426,15 @@ deployment lock.
   the OS keychain but are absent from ordinary Mixxx settings, non-loopback
   bearer URLs require HTTPS, and rapid deck changes converge to the newest
   remotely published state.
+- In REST Recommendations, confirm Policy begins with Follow session and Lens
+  offers Policy guided, Vector, Hybrid, Colour, Semantic, and Consensus.
+  Change policy, lens, energy, colour, and BPM without observing a request;
+  Update suggestions must then issue one complete `policy_refresh`. A failed
+  update must preserve the draft and saved settings, while success persists
+  the applied snapshot. Reset must only stage Follow session, Policy guided,
+  and disabled targets until Update is pressed. Sync must only fetch
+  authoritative state, and a track change must discard unapplied edits. Verify
+  recommendation controls never write the shared `/intent` resource.
 - Verify rollback launches with the same library database and controller
   configuration.
 

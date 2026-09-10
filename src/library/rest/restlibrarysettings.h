@@ -79,6 +79,12 @@ inline const ConfigKey kMixManSessionIdKey(
 inline const ConfigKey kMixManPolicyPresetKey(
         QStringLiteral("[RestLibrary]"),
         QStringLiteral("MixManPolicyPreset"));
+inline const ConfigKey kMixManPolicyOverrideEnabledKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManPolicyOverrideEnabled"));
+inline const ConfigKey kMixManRecommendationLensKey(
+        QStringLiteral("[RestLibrary]"),
+        QStringLiteral("MixManRecommendationLens"));
 inline const ConfigKey kMixManTargetEnergyKey(
         QStringLiteral("[RestLibrary]"),
         QStringLiteral("MixManTargetEnergy"));
@@ -110,6 +116,7 @@ inline const ConfigKey kDjNotePresetsKey(
 constexpr bool kDefaultEnabled = false;
 constexpr bool kDefaultCacheEnabled = true;
 constexpr bool kDefaultUseMixManDefaults = true;
+constexpr bool kDefaultMixManPolicyOverrideEnabled = false;
 constexpr bool kDefaultMixManTargetEnergyEnabled = false;
 constexpr bool kDefaultMixManTargetColorEnabled = false;
 constexpr bool kDefaultMixManTargetBpmEnabled = false;
@@ -120,7 +127,7 @@ constexpr int kMaxPageSize = 200;
 constexpr int kDefaultMaxCatalogPages = 500;
 constexpr int kDefaultMaxCatalogTracks = 10000;
 constexpr int kMinCatalogLimit = 1;
-constexpr int kDefaultRecommendationLimit = 10;
+constexpr int kDefaultRecommendationLimit = 5;
 constexpr int kMinRecommendationLimit = 1;
 constexpr int kMaxRecommendationLimit = 20;
 constexpr int kDefaultMixManPathDepth = 5;
@@ -193,6 +200,7 @@ class RestLibrarySettings final {
     bool enabled = config::kDefaultEnabled;
     bool cacheEnabled = config::kDefaultCacheEnabled;
     bool useMixManDefaults = config::kDefaultUseMixManDefaults;
+    bool mixManPolicyOverrideEnabled = config::kDefaultMixManPolicyOverrideEnabled;
     bool mixManTargetEnergyEnabled = config::kDefaultMixManTargetEnergyEnabled;
     bool mixManTargetColorEnabled = config::kDefaultMixManTargetColorEnabled;
     bool mixManTargetBpmEnabled = config::kDefaultMixManTargetBpmEnabled;
@@ -208,6 +216,7 @@ class RestLibrarySettings final {
     QString audioDownloadPathTemplate;
     QString cacheDirectoryPath;
     QString mixManPolicyPreset;
+    QString mixManRecommendationLens = QStringLiteral("auto");
     QString mixManTargetColor;
     QStringList djNotePresets;
     int pageSize = config::kDefaultPageSize;

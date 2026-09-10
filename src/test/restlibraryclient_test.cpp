@@ -47,6 +47,8 @@ RestLibrarySettings newMixManSettings() {
     settings.recommendationLimit = 10;
     settings.mixManPathDepth = 5;
     settings.mixManPolicyPreset = QStringLiteral("build_energy");
+    settings.mixManPolicyOverrideEnabled = true;
+    settings.mixManRecommendationLens = QStringLiteral("hybrid");
     settings.mixManTargetEnergyEnabled = true;
     settings.mixManTargetEnergy = 4;
     settings.mixManTargetColorEnabled = true;
@@ -2245,12 +2247,11 @@ TEST(RestLibraryClientTest, PublishesMixManPolicyRefreshAction) {
             {QStringLiteral("\"instance_id\":\"inst-1\""),
                     QStringLiteral("\"action_type\":\"policy_refresh\""),
                     QStringLiteral("\"policy_preset\":\"build_energy\""),
+                    QStringLiteral("\"recommendation_lens\":\"hybrid\""),
+                    QStringLiteral("\"candidate_limit\":10"),
                     QStringLiteral("\"target_energy\":0.8"),
                     QStringLiteral("\"target_color\":\"#ff6600\""),
-                    QStringLiteral("\"target_bpm\":132"),
-                    QStringLiteral("\"reroll_constraints\""),
-                    QStringLiteral("\"mode\":\"fuzzy\""),
-                    QStringLiteral("\"limit\":10")},
+                    QStringLiteral("\"target_bpm\":132")},
             200,
             R"json({
               "session": {"id": "session-1"},
@@ -2279,4 +2280,37 @@ TEST(RestLibraryClientTest, PublishesMixManPolicyRefreshAction) {
     EXPECT_EQ(session.authoritative.revision, 4);
     ASSERT_EQ(session.authoritative.policyPath.candidates.size(), 1);
     EXPECT_EQ(session.authoritative.policyPath.candidates.at(0).remoteId, QStringLiteral("12"));
+}
+
+TEST(RestLibraryClientTest, FollowSessionOmitsPolicyOverrideAndLegacyReroll) {
+    MockNetworkAccessManager network;
+    RestLibraryClient client(&network);
+    QSignalSpy statusSpy(&client, &RestLibraryClient::mixManSessionWriteStatusUpdated);
+    RestLibrarySettings settings = newMixManSettings();
+    settings.mixManPolicyOverrideEnabled = false;
+    settings.mixManRecommendationLens = QStringLiteral("vector");
+    settings.recommendationLimit = 5;
+    settings.mixManTargetEnergyEnabled = false;
+    settings.mixManTargetColorEnabled = false;
+    settings.mixManTargetBpmEnabled = false;
+
+    MockNetworkReply* pReply = network.ExpectPost(
+            QStringLiteral("/api/v3/sessions/session-1/actions"),
+            {},
+            {QStringLiteral("\"action_type\":\"policy_refresh\""),
+                    QStringLiteral("\"recommendation_lens\":\"vector\""),
+                    QStringLiteral("\"candidate_limit\":5")},
+            {QStringLiteral("\"policy_preset\""),
+                    QStringLiteral("\"reroll_constraints\"")},
+            200,
+            R"json({"session":{"id":"session-1"},"authoritative":{"session_id":"session-1"}})json");
+
+    client.publishMixManPolicyRefreshAction(
+            settings, QStringLiteral("session-1"), QStringLiteral("inst-1"));
+    pReply->Done();
+
+    ASSERT_EQ(statusSpy.count(), 1);
+    EXPECT_TRUE(qvariant_cast<mixxx::library::rest::RestLibrarySessionWriteStatus>(
+                        statusSpy.takeFirst().at(0))
+                        .success);
 }
