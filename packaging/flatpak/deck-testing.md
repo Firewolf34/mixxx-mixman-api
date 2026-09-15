@@ -179,6 +179,13 @@ aborts a running build. Flatpak Builder uses one job and a Release/no-debug,
 low-memory-linker manifest. If it OOMs, keep the ceiling and investigate; never
 fall back to the deck.
 
+The workflow also runs every admitted cache, preflight, SDK, build/publication,
+and cleanup command through the installed host-capacity lease guard. It renews
+the exact run/commit lease continuously and terminates the child process group
+if ownership can no longer be proved. Successful publication is explicitly
+attested, while the separate release job records the upstream build result.
+This is in addition to, not a replacement for, the runner cgroup and PSI guard.
+
 ## Laptop Setup
 
 From a current Mixxx checkout, install the lightweight client and USB rules:

@@ -415,13 +415,16 @@ incident.
 The workflow's first executable step acquires the root-owned TotalInfra
 host-capacity lease before checkout. Forgejo queues later runs of this workflow,
 and the lease client waits for application test/build/deploy work already using
-the host. The lease remains bound to the repository, commit, and workflow run
-through publication and final cleanup. Both `tools/deck_pressure_guard.sh` and
-`tools/deck_flatpak_publish.sh` validate it with the gateway before heavy work;
-direct execution without the lease fails closed. The final workflow step
-releases it, while the gateway's bounded expiry is the cancellation/crash
-fallback. The Mixxx runner still has no application deployment operation,
-Docker access, or shared runner registration.
+the host. Every cache, preflight, SDK, build/publication, and final-cleanup
+command runs through `/usr/local/bin/hosted-deploy-lease-guard`, which renews
+the repository/run/commit lease every minute and terminates the command's
+process group if renewal fails. Both `tools/deck_pressure_guard.sh` and
+`tools/deck_flatpak_publish.sh` retain their independent validation before
+heavy work. A fully green build/publication stage is explicitly attested; the
+separate release job reports the upstream build result rather than its own
+cleanup status. Gateway expiry remains the cancellation/crash fallback. The
+Mixxx runner still has no application deployment operation, Docker access, or
+shared runner registration.
 
 `tools/deck_build_preflight.sh` distinguishes cold and warm runner state. It
 requires 12 GiB free before a cold SDK setup and 6.5 GiB before a warm compile;

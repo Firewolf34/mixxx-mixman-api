@@ -266,6 +266,9 @@ Agent tool selection:
   disk, and startup PSI within the encoded thresholds.
 - Run the publisher through `tools/deck_pressure_guard.sh`; severe PSI for one
   minute must terminate the build.
+- Keep every admitted cache, preflight, SDK, build/publication, and cleanup
+  command inside `/usr/local/bin/hosted-deploy-lease-guard`; lease loss must
+  terminate that command's entire process group before any later step runs.
 - Build off-hours. If the job OOMs, keep the hard ceiling and optimize the build
   rather than bypassing preflight, raising concurrency, or using the deck.
 - Runner state and artifacts must resolve to separate filesystems and be the
