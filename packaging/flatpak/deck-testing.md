@@ -179,12 +179,16 @@ aborts a running build. Flatpak Builder uses one job and a Release/no-debug,
 low-memory-linker manifest. If it OOMs, keep the ceiling and investigate; never
 fall back to the deck.
 
-The workflow also runs every admitted cache, preflight, SDK, build/publication,
-and cleanup command through the installed host-capacity lease guard. It renews
-the exact run/commit lease continuously and terminates the child process group
-if ownership can no longer be proved. Successful publication is explicitly
-attested, while the separate release job records the upstream build result.
-This is in addition to, not a replacement for, the runner cgroup and PSI guard.
+The workflow runs every admitted cache, preflight, SDK, and build/publication
+command through the installed host-capacity lease guard. It renews the exact
+run/commit lease continuously and terminates the child process group if
+ownership can no longer be proved. Successful publication is explicitly
+attested. The separate release job records the upstream build result and makes
+three 30-second-bounded release attempts. It removes the local lease token and
+runs unguarded final cleanup only after release is confirmed; after three
+failures it exits nonzero while preserving the token and runner evidence for
+reconciliation. This is in addition to, not a replacement for, the runner
+cgroup and PSI guard.
 
 ## Laptop Setup
 

@@ -48,3 +48,21 @@ if env \
     echo "invalid gateway lease was accepted" >&2
     exit 1
 fi
+
+WORKFLOW="${SCRIPT_DIR}/../.forgejo/workflows/deck-flatpak.yml"
+RELEASE_JOB="$(sed -n '/^  release-capacity:/,$p' "${WORKFLOW}")"
+
+grep -Fq 'for attempt in 1 2 3; do' <<<"${RELEASE_JOB}"
+grep -Fq 'if [ "$attempt" -lt 3 ]; then' <<<"${RELEASE_JOB}"
+grep -Fq 'timeout 30s hosted-deploy lease.release >/dev/null' <<<"${RELEASE_JOB}"
+if grep -Fq 'hosted-deploy lease.release >/dev/null || true' <<<"${RELEASE_JOB}"; then
+    echo "capacity release failures are suppressed" >&2
+    exit 1
+fi
+if grep -Fq '/usr/local/bin/hosted-deploy-lease-guard' <<<"${RELEASE_JOB}"; then
+    echo "release cleanup is incorrectly wrapped by the lease guard" >&2
+    exit 1
+fi
+failure_line="$(grep -nF 'if [ "$release_confirmed" != true ]; then' <<<"${RELEASE_JOB}" | cut -d: -f1)"
+removal_line="$(grep -nF 'rm -f -- "$HOSTED_DEPLOY_LEASE_FILE"' <<<"${RELEASE_JOB}" | cut -d: -f1)"
+[[ -n "${failure_line}" && -n "${removal_line}" && "${failure_line}" -lt "${removal_line}" ]]

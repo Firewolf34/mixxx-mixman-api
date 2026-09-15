@@ -120,16 +120,26 @@ jobs:
       - name: Clean transient runner data and release capacity
         run: |
           if [ -s "$HOSTED_DEPLOY_LEASE_FILE" ]; then
-            /usr/local/bin/hosted-deploy-lease-guard \
-              --lease-file "$HOSTED_DEPLOY_LEASE_FILE" \
-              --run-id "$HOSTED_DEPLOY_RUN_ID" --sha "$HOSTED_DEPLOY_SHA" -- \
-              tools/deck_runner_cache_cleanup.sh --finalize
-            jq -n \
-              --arg lease "$(cat "$HOSTED_DEPLOY_LEASE_FILE")" \
-              --arg run_id "$HOSTED_DEPLOY_RUN_ID" \
-              --arg sha "$HOSTED_DEPLOY_SHA" \
-              --arg outcome "${{ needs.flatpak-x86_64.result }}" \
-              '{lease:$lease,run_id:$run_id,sha:$sha,outcome:$outcome}' |
-              hosted-deploy lease.release >/dev/null || true
+            release_confirmed=false
+            for attempt in 1 2 3; do
+              if jq -n \
+                --arg lease "$(cat "$HOSTED_DEPLOY_LEASE_FILE")" \
+                --arg run_id "$HOSTED_DEPLOY_RUN_ID" \
+                --arg sha "$HOSTED_DEPLOY_SHA" \
+                --arg outcome "${{ needs.flatpak-x86_64.result }}" \
+                '{lease:$lease,run_id:$run_id,sha:$sha,outcome:$outcome}' |
+                timeout 30s hosted-deploy lease.release >/dev/null; then
+                release_confirmed=true
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep 10
+              fi
+            done
+            if [ "$release_confirmed" != true ]; then
+              echo "::error::Capacity release could not be confirmed; preserving $HOSTED_DEPLOY_LEASE_FILE for reconciliation"
+              exit 1
+            fi
+            rm -f -- "$HOSTED_DEPLOY_LEASE_FILE"
           fi
-          rm -f -- "$HOSTED_DEPLOY_LEASE_FILE"
+          tools/deck_runner_cache_cleanup.sh --finalize
