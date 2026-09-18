@@ -84,3 +84,23 @@ license.
 [hardware compatibility]: https://manual.mixxx.org/2.3/en/hardware/manuals.html
 [zulip]: https://mixxx.zulipchat.com/
 [discourse]: https://mixxx.discourse.group/
+
+## Total Infra Developer Notes
+
+This checkout is the Total Infra Forgejo mirror/fork used for local
+Mixxx and deck-hosted workflow work. Preserve the upstream README,
+contribution, build, and licensing structure unless a change is specific
+to the hosted Total Infra integration.
+
+Local validation depends on the change area:
+
+- Use the upstream build instructions for CMake and platform builds.
+- Use `tools/deck_hosted_workflow_contract_test.py` for the hosted deck
+  workflow contract when touching that path.
+- Use the existing GitHub/Forgejo workflow files as the source of truth
+  for CI-style checks.
+
+Troubleshooting starts with the upstream documentation linked below. For
+Total Infra deployment or workflow questions, keep notes in dedicated
+docs or tool files rather than broadening the upstream user-facing
+sections.
