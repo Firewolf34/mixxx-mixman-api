@@ -48,6 +48,7 @@ class RestLibraryTableModel final : public QAbstractTableModel, public TrackMode
     RestLibraryTrack trackForRemoteId(const QString& remoteId) const;
     TrackPointer mappedTrack(const QString& remoteId) const;
     TrackPointer materializeTrack(const QString& remoteId) const;
+    TrackPointer materializeTrack(const RestLibraryTrack& track) const;
     bool rememberLocalMapping(
             const QString& remoteId,
             const TrackPointer& pTrack) const;

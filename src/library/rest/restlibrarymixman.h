@@ -140,6 +140,7 @@ struct RestLibraryPolicyPreset {
 };
 
 struct RestLibraryPathStep {
+    RestLibraryTrack track;
     QString remoteId;
     QString title;
     QString artist;
@@ -167,7 +168,7 @@ struct RestLibraryAuthoritativeState {
     RestLibraryPolicyPath policyPath;
     QJsonObject playback;
     QJsonObject pressureState;
-    int selectedCandidateId = 0;
+    QString selectedCandidateId;
     QJsonObject playbackController;
     RestLibraryPlaybackLease playbackLease;
     QJsonObject blocked;

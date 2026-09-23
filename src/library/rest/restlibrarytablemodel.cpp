@@ -654,6 +654,11 @@ TrackPointer RestLibraryTableModel::materializeTrack(const QString& remoteId) co
     return m_pTrackStore->materializeTrack(remoteTrack, m_cacheIdentity);
 }
 
+TrackPointer RestLibraryTableModel::materializeTrack(
+        const RestLibraryTrack& track) const {
+    return m_pTrackStore->materializeTrack(track, m_cacheIdentity);
+}
+
 TrackPointer RestLibraryTableModel::mappedTrack(const QString& remoteId) const {
     return m_pTrackStore->mappedTrack(m_cacheIdentity, remoteId);
 }

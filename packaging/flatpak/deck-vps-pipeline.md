@@ -974,6 +974,13 @@ fail-closed and must not silently retry without credentials. Bearer credentials
 must remain in the OS keychain, require HTTPS outside loopback, and stay on the
 configured origin. Rapid deck changes must converge to the newest serialized
 remote mutation without affecting local playback.
+The recommendation table displays first-transition candidates, while REST
+AutoDJ follows only the authoritative multi-hop path. Enabling it establishes a
+persistent feeder intent: replace future queue entries when the path fingerprint
+changes, preserve an already loaded transition, deduplicate current/repeated
+tracks, and never fill a short path with candidate siblings. Retry unavailable
+path audio three times at 1, 2, and 4 seconds, then skip it with a degraded
+status.
 REST Recommendations steering is staged client-side. Policy, lens, energy,
 colour, BPM, Reset, and recommendation-count edits must produce no network
 write until Update suggestions sends one complete `policy_refresh` action.
