@@ -260,10 +260,10 @@ Agent tool selection:
 - Pin the GitHub Flatpak action's repository to `repo` and build directory to
   `build_flatpak`; bundle creation and the headless smoke test consume those
   exact directories.
-- Require the hard-budget preflight: numeric cgroup v2 limits, no more than
-  1536 MiB combined RAM+swap, at least 512 MiB host swap, 1536 MiB currently
-  free memory-plus-swap, 15 GiB free runner data disk, 1 GiB free artifact
-  disk, and startup PSI within the encoded thresholds.
+- Require `tools/deck_build_preflight.sh` to pass for the current phase. That
+  executable is authoritative for phase-sensitive cold/warm data-disk
+  thresholds, artifact headroom, memory and swap, cgroup, filesystem-separation,
+  and startup-PSI limits; do not copy or weaken its defaults here.
 - Run the publisher through `tools/deck_pressure_guard.sh`; severe PSI for one
   minute must terminate the build.
 - Keep every admitted cache, preflight, SDK, build/publication, and cleanup
@@ -274,9 +274,9 @@ Agent tool selection:
 - Runner state and artifacts must resolve to separate filesystems and be the
   only writable binds in the systemd service; never use Docker runner volumes
   or expose another host path.
-- The fixed 25 GiB attached storage is sufficient only with shallow checkout,
-  runner-backed temporary and Flatpak Builder source state, a 512 MiB ccache,
-  two retained builds, and transient-work cleanup. Preserve those limits.
+- Preserve the bounded cache, retention, and transient-work cleanup settings
+  defined by the workflow and deck pipeline documentation; do not raise them to
+  evade preflight.
 - Caddy mounts artifacts read-only.
 - Runner is configured to reach Forgejo through its public HTTPS route and
   receives no Docker network, socket, or application/database-network

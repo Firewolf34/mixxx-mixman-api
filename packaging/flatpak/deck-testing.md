@@ -169,15 +169,12 @@ header. `SIGKILL` and abrupt host loss cannot be recorded. The file is
 intentionally outside the published artifact tree. Do not copy this diagnostic
 log to the deck, Git, or a public web route.
 
-The current VPS has only 2 GiB RAM. The workflow requires at least 512 MiB host
-swap, 1536 MiB currently free memory-plus-swap, 12 GiB free for a cold SDK
-setup or 6.5 GiB for a warm build, and 1 GiB free on a separate artifact
-filesystem. Retained SDK, Flatpak Builder source state, and ccache are capped
-at 5 GiB. The runner has a hard 768 MiB RAM plus 768 MiB swap budget. Startup
-PSI must remain below the encoded thresholds, and severe PSI for one minute
-aborts a running build. Flatpak Builder uses one job and a Release/no-debug,
-low-memory-linker manifest. If it OOMs, keep the ceiling and investigate; never
-fall back to the deck.
+`tools/deck_build_preflight.sh` is authoritative for the current phase-sensitive
+disk, artifact, memory/swap, cgroup, filesystem-separation, and startup-PSI
+thresholds. The workflow must pass it without weakened overrides. Flatpak
+Builder still uses one job and the Release/no-debug, low-memory-linker manifest;
+the pressure guard aborts sustained severe pressure. If the build OOMs, keep
+the ceiling and investigate rather than falling back to the deck.
 
 The workflow runs every admitted cache, preflight, SDK, and build/publication
 command through the installed host-capacity lease guard. It renews the exact
