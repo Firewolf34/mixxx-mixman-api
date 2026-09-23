@@ -66,3 +66,12 @@ fi
 failure_line="$(grep -nF 'if [ "$release_confirmed" != true ]; then' <<<"${RELEASE_JOB}" | cut -d: -f1)"
 removal_line="$(grep -nF 'rm -f -- "$HOSTED_DEPLOY_LEASE_FILE"' <<<"${RELEASE_JOB}" | cut -d: -f1)"
 [[ -n "${failure_line}" && -n "${removal_line}" && "${failure_line}" -lt "${removal_line}" ]]
+grep -Fq 'HOSTED_DEPLOY_LEASE_FILE: /data/locks/hosted-deploy-${{ forgejo.run_id }}.lease' "${WORKFLOW}"
+if grep -Fq 'HOSTED_DEPLOY_LEASE_FILE: /data/tmp/' "${WORKFLOW}"; then
+    echo "capacity lease is stored in transient cleanup space" >&2
+    exit 1
+fi
+checkout_line="$(grep -nF 'uses: https://data.forgejo.org/actions/checkout@' <<<"${RELEASE_JOB}" | tail -1 | cut -d: -f1)"
+cleanup_line="$(grep -nF 'tools/deck_runner_cache_cleanup.sh --finalize' <<<"${RELEASE_JOB}" | cut -d: -f1)"
+[[ -n "${checkout_line}" && -n "${cleanup_line}" && "${removal_line}" -lt "${checkout_line}" && "${checkout_line}" -lt "${cleanup_line}" ]]
+[[ "$(grep -Fc 'if: always()' <<<"${RELEASE_JOB}")" -eq 1 ]]
