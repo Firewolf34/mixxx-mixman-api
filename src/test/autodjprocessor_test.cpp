@@ -697,6 +697,57 @@ TEST_F(AutoDJProcessorTest, EnabledSuccess_DecksStopped) {
     EXPECT_EQ(AutoDJProcessor::ADJ_IDLE, pProcessor->getState());
 }
 
+TEST_F(AutoDJProcessorTest, ReplaceQueueDoesNotDuplicateLoadedTransition) {
+    const TrackId transitionId =
+            addTrackToCollection(QStringLiteral("id3-test-data/cover-test-png.mp3"));
+    const TrackId staleFutureId =
+            addTrackToCollection(QStringLiteral("id3-test-data/cover-test-jpg.mp3"));
+    const TrackId replacementId =
+            addTrackToCollection(QStringLiteral("id3-test-data/cover-test-vbr.mp3"));
+    const TrackId outgoingId =
+            addTrackToCollection(QStringLiteral("id3-test-data/artist.mp3"));
+    ASSERT_TRUE(transitionId.isValid());
+    ASSERT_TRUE(staleFutureId.isValid());
+    ASSERT_TRUE(replacementId.isValid());
+    ASSERT_TRUE(outgoingId.isValid());
+
+    PlaylistDAO& playlistDao = internalCollection()->getPlaylistDAO();
+    PlaylistTableModel* pAutoDJTableModel = pProcessor->getTableModel();
+    pAutoDJTableModel->appendTrack(transitionId);
+    pAutoDJTableModel->appendTrack(staleFutureId);
+
+    const TrackPointer pOutgoingTrack =
+            trackCollectionManager()->getTrackById(outgoingId);
+    const TrackPointer pTransitionTrack =
+            trackCollectionManager()->getTrackById(transitionId);
+    ASSERT_TRUE(pOutgoingTrack);
+    ASSERT_TRUE(pTransitionTrack);
+    deck1.slotLoadTrack(pOutgoingTrack,
+#ifdef __STEM__
+            mixxx::StemChannelSelection(),
+#endif
+            true);
+    deck2.slotLoadTrack(pTransitionTrack,
+#ifdef __STEM__
+            mixxx::StemChannelSelection(),
+#endif
+            false);
+
+    EXPECT_CALL(*pProcessor, emitLoadTrackToPlayer(_, QString("[Channel2]"), false));
+    EXPECT_CALL(*pProcessor, emitAutoDJStateChanged(AutoDJProcessor::ADJ_IDLE));
+    ASSERT_EQ(AutoDJProcessor::ADJ_OK, pProcessor->toggleAutoDJ(true));
+    ASSERT_TRUE(pProcessor->nextTrackLoaded());
+
+    playlistDao.setAutoDJProcessor(pProcessor.data());
+    playlistDao.addTracksToAutoDJQueue(
+            {transitionId, replacementId, transitionId},
+            PlaylistDAO::AutoDJSendLoc::REPLACE);
+    playlistDao.setAutoDJProcessor(nullptr);
+
+    EXPECT_EQ(playlistDao.getTrackIdsInPlaylistOrder(m_iAutoDJPlaylistId),
+            (QList<TrackId>{transitionId, replacementId}));
+}
+
 TEST_F(AutoDJProcessorTest, EnabledSuccess_DecksStopped_TrackLoadFails) {
     TrackId testId = addTrackToCollection(kTrackLocationTest);
     ASSERT_TRUE(testId.isValid());

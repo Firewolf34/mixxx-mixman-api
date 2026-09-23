@@ -1519,10 +1519,23 @@ void PlaylistDAO::addTracksToAutoDJQueue(const QList<TrackId>& trackIds, AutoDJS
     case AutoDJSendLoc::BOTTOM:
         appendTracksToPlaylist(trackIds, iAutoDJPlaylistId);
         break;
-    case AutoDJSendLoc::REPLACE:
+    case AutoDJSendLoc::REPLACE: {
+        QList<TrackId> replacementTrackIds = trackIds;
+        if (position == 2) {
+            const QList<TrackId> existingTrackIds =
+                    getTrackIdsInPlaylistOrder(iAutoDJPlaylistId);
+            if (!existingTrackIds.isEmpty()) {
+                // The first queue row is already loaded and is deliberately
+                // preserved by removing only rows at position 2 and below.
+                // Do not append that transition again if the replacement path
+                // still contains it, including duplicate occurrences.
+                replacementTrackIds.removeAll(existingTrackIds.first());
+            }
+        }
         if (removeTracksFromPlaylist(iAutoDJPlaylistId, position)) {
-            appendTracksToPlaylist(trackIds, iAutoDJPlaylistId);
+            appendTracksToPlaylist(replacementTrackIds, iAutoDJPlaylistId);
         }
         break;
+    }
     }
 }

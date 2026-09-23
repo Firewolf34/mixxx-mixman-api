@@ -1351,12 +1351,6 @@ void RestLibraryFeature::finishRecommendationsAutoDJIfReady() {
 
     PlaylistDAO& playlistDao = m_pTrackCollectionManager->internalCollection()
                                        ->getPlaylistDAO();
-    const QList<TrackId> existingTrackIds = playlistDao.getAutoDJTrackIds();
-    if (m_pAutoDJProcessor && m_pAutoDJProcessor->nextTrackLoaded() &&
-            !existingTrackIds.isEmpty() && !trackIds.isEmpty() &&
-            existingTrackIds.first() == trackIds.first()) {
-        trackIds.removeFirst();
-    }
     playlistDao.addTracksToAutoDJQueue(
             trackIds, PlaylistDAO::AutoDJSendLoc::REPLACE);
     setStatusText(failedCount > 0
