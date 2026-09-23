@@ -28,8 +28,21 @@ def main() -> None:
     release_offset = release_job.index("hosted-deploy lease.release")
     confirmed_offset = release_job.index("release_confirmed=true", release_offset)
     cleanup_offset = release_job.index(final_cleanup, confirmed_offset)
-    assert release_job.index('rm -f -- "$HOSTED_DEPLOY_LEASE_FILE"', confirmed_offset) < cleanup_offset
+    removal_offset = release_job.index(
+        'rm -f -- "$HOSTED_DEPLOY_LEASE_FILE"', confirmed_offset
+    )
+    cleanup_checkout_offset = release_job.index("actions/checkout@", removal_offset)
+    assert removal_offset < cleanup_checkout_offset < cleanup_offset
     assert GUARD not in release_job
+    assert release_job.count("if: always()") == 1
+
+    durable_lease = (
+        "HOSTED_DEPLOY_LEASE_FILE: "
+        "/data/locks/hosted-deploy-${{ forgejo.run_id }}.lease"
+    )
+    assert workflow.count(durable_lease) == 2
+    assert "/data/tmp/hosted-deploy-" not in workflow
+    assert "install -d -m 0750 /data/locks" in workflow
 
     assert "hosted-deploy test.attest" in workflow
     assert "needs: flatpak-x86_64" in workflow
