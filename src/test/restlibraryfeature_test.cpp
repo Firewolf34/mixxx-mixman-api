@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <utility>
 
 #include <QDir>
 #include <QFile>
@@ -25,6 +26,8 @@ using mixxx::library::rest::RestLibraryFeature;
 using mixxx::library::rest::RestLibraryLoudnessManager;
 using mixxx::library::rest::RestLibraryLoudnessResult;
 using mixxx::library::rest::RestLibraryLoudnessState;
+using mixxx::library::rest::RestLibraryPathStep;
+using mixxx::library::rest::RestLibraryPolicyPath;
 using mixxx::library::rest::RestLibrarySettings;
 using mixxx::library::rest::RestLibraryTrack;
 
@@ -105,7 +108,28 @@ class RestLibraryFeatureTest : public RestLibraryTest {
         m_pFeature->setRecommendationTracks(tracks);
     }
 
+    void setAutoDJTracks(const QList<RestLibraryTrack>& tracks) {
+        setPolicyPath(tracks, tracks);
+    }
+
+    void setPolicyPath(
+            const QList<RestLibraryTrack>& candidates,
+            const QList<RestLibraryTrack>& pathTracks) {
+        RestLibraryPolicyPath policyPath;
+        policyPath.candidates = candidates;
+        for (int index = 0; index < pathTracks.size(); ++index) {
+            RestLibraryPathStep step;
+            step.track = pathTracks[index];
+            step.remoteId = pathTracks[index].remoteId;
+            step.position = index + 1;
+            policyPath.path.append(std::move(step));
+        }
+        setRecommendations(candidates);
+        m_pFeature->setAutoDJPath(policyPath);
+    }
+
     void queueRecommendations() {
+        m_pFeature->m_autoDJPathIntent = true;
         m_pFeature->queueRecommendationsForAutoDJ();
     }
 
@@ -417,6 +441,54 @@ TEST_F(RestLibraryFeatureTest, TrackChangeDiscardsUnappliedSteeringDraft) {
             QStringLiteral("auto"));
 }
 
+TEST_F(RestLibraryFeatureTest, AutoDJQueuesAuthoritativePathNotCandidateSiblings) {
+    MockNetworkReply* pB = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("B")}},
+            200,
+            QByteArrayLiteral("audio B"));
+    MockNetworkReply* pE = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("E")}},
+            200,
+            QByteArrayLiteral("audio E"));
+    MockNetworkReply* pF = m_network.ExpectGet(
+            QStringLiteral("/download"),
+            {{QStringLiteral("track_id"), QStringLiteral("F")}},
+            200,
+            QByteArrayLiteral("audio F"));
+    const QList<RestLibraryTrack> candidates{
+            recommendation(QStringLiteral("B"), QStringLiteral("Candidate B")),
+            recommendation(QStringLiteral("C"), QStringLiteral("Candidate C")),
+            recommendation(QStringLiteral("D"), QStringLiteral("Candidate D"))};
+    const QList<RestLibraryTrack> path{
+            recommendation(QStringLiteral("B"), QStringLiteral("Path B")),
+            recommendation(QStringLiteral("E"), QStringLiteral("Path E")),
+            recommendation(QStringLiteral("E"), QStringLiteral("Path E duplicate")),
+            recommendation(QStringLiteral("F"), QStringLiteral("Path F"))};
+    setPolicyPath(candidates, path);
+
+    ASSERT_EQ(tableModel()->rowCount(), 3);
+    EXPECT_EQ(tableModel()->remoteIdForIndex(tableModel()->index(0, 0)),
+            QStringLiteral("B"));
+    EXPECT_EQ(tableModel()->remoteIdForIndex(tableModel()->index(1, 0)),
+            QStringLiteral("C"));
+    EXPECT_EQ(tableModel()->remoteIdForIndex(tableModel()->index(2, 0)),
+            QStringLiteral("D"));
+    queueRecommendations();
+    pF->Done(true);
+    pB->Done(true);
+    pE->Done(true);
+
+    QList<TrackId> expectedTrackIds;
+    for (const RestLibraryTrack& track : std::as_const(m_pFeature->m_autoDJPathTracks)) {
+        const TrackPointer pTrack = tableModel()->materializeTrack(track);
+        ASSERT_TRUE(pTrack);
+        expectedTrackIds.append(pTrack->getId());
+    }
+    EXPECT_EQ(autoDJTrackIds(), expectedTrackIds);
+}
+
 TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForAllDownloadsAndPreservesOrder) {
     MockNetworkReply* pFirstAudio = m_network.ExpectGet(
             QStringLiteral("/download"),
@@ -429,7 +501,7 @@ TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForAllDownloadsAndPreservesOrder)
             200,
             QByteArrayLiteral("second audio"));
 
-    setRecommendations({recommendation(QStringLiteral("12"), QStringLiteral("First")),
+    setAutoDJTracks({recommendation(QStringLiteral("12"), QStringLiteral("First")),
             recommendation(QStringLiteral("11"), QStringLiteral("Second"))});
     queueRecommendations();
 
@@ -448,7 +520,7 @@ TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForAllDownloadsAndPreservesOrder)
     EXPECT_TRUE(autoDJRemoteIds().isEmpty());
 }
 
-TEST_F(RestLibraryFeatureTest, AutoDJUsesExplicitlySortedDisplayOrder) {
+TEST_F(RestLibraryFeatureTest, AutoDJUsesAuthoritativePathInsteadOfDisplayOrder) {
     MockNetworkReply* pPrimaryAudio = m_network.ExpectGet(
             QStringLiteral("/download"),
             {{QStringLiteral("track_id"), QStringLiteral("82")}},
@@ -468,7 +540,7 @@ TEST_F(RestLibraryFeatureTest, AutoDJUsesExplicitlySortedDisplayOrder) {
             recommendation(QStringLiteral("81"), QStringLiteral("Alternate"));
     alternate.artist = QStringLiteral("Alpha");
     alternate.recommendationPosition = 2;
-    setRecommendations({primary, alternate});
+    setAutoDJTracks({primary, alternate});
 
     const int artistColumn =
             tableModel()->fieldIndex(QStringLiteral("artist"));
@@ -487,7 +559,7 @@ TEST_F(RestLibraryFeatureTest, AutoDJUsesExplicitlySortedDisplayOrder) {
     ASSERT_TRUE(pAlternate);
     ASSERT_TRUE(pPrimary);
     EXPECT_EQ(autoDJTrackIds(),
-            (QList<TrackId>{pAlternate->getId(), pPrimary->getId()}));
+            (QList<TrackId>{pPrimary->getId(), pAlternate->getId()}));
 }
 
 TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForReplayGainPreparation) {
@@ -503,7 +575,7 @@ TEST_F(RestLibraryFeatureTest, AutoDJBatchWaitsForReplayGainPreparation) {
             200,
             QByteArrayLiteral("second audio"));
 
-    setRecommendations({recommendation(QStringLiteral("52"), QStringLiteral("First")),
+    setAutoDJTracks({recommendation(QStringLiteral("52"), QStringLiteral("First")),
             recommendation(QStringLiteral("51"), QStringLiteral("Second"))});
     queueRecommendations();
     pFirstAudio->Done(true);
@@ -562,11 +634,12 @@ TEST_F(RestLibraryFeatureTest, AutoDJBatchQueuesSuccessfulTracksAfterPartialFail
             QByteArrayLiteral("temporarily unavailable"));
     QSignalSpy statusSpy(m_pFeature.get(), &RestLibraryFeature::statusTextChanged);
 
-    setRecommendations({recommendation(QStringLiteral("21"), QStringLiteral("Good")),
+    setAutoDJTracks({recommendation(QStringLiteral("21"), QStringLiteral("Good")),
             recommendation(QStringLiteral("22"), QStringLiteral("Unavailable"))});
     queueRecommendations();
     pFirstAudio->Done(true);
     EXPECT_TRUE(autoDJTrackIds().isEmpty());
+    m_pFeature->m_autoDJPathIntent = false;
     pSecondAudio->Done(true);
 
     const TrackPointer pGood =
@@ -588,7 +661,7 @@ TEST_F(RestLibraryFeatureTest, ServerLookupMappingQueuesExistingLocalTrackWithou
     ASSERT_TRUE(pLocalTrack);
 
     mapPendingTrack(pLocalTrack, QStringLiteral("77"));
-    setRecommendations({recommendation(QStringLiteral("77"), QStringLiteral("Mapped"))});
+    setAutoDJTracks({recommendation(QStringLiteral("77"), QStringLiteral("Mapped"))});
     queueRecommendations();
 
     EXPECT_EQ(autoDJTrackIds(), (QList<TrackId>{pLocalTrack->getId()}));
@@ -616,7 +689,7 @@ TEST_F(RestLibraryFeatureTest, UnchangedCandidatesDoNotCancelActiveAutoDJBatch) 
     tracks[1].recommendationPosition = 2;
     tracks[1].color = QStringLiteral("#445566");
 
-    setRecommendations(tracks);
+    setAutoDJTracks(tracks);
     queueRecommendations();
     ASSERT_EQ(autoDJRemoteIds(),
             (QStringList{QStringLiteral("31"), QStringLiteral("32")}));
@@ -650,13 +723,13 @@ TEST_F(RestLibraryFeatureTest, UnchangedCandidatesDoNotCancelActiveAutoDJBatch) 
     pSecondAudio->Done(true);
 }
 
-TEST_F(RestLibraryFeatureTest, ChangedCandidatesCancelActiveAutoDJBatch) {
+TEST_F(RestLibraryFeatureTest, ChangedPathCancelsAndRestartsActiveAutoDJBatch) {
     MockNetworkReply* pOldAudio = m_network.ExpectGet(
             QStringLiteral("/download"),
             {{QStringLiteral("track_id"), QStringLiteral("41")}},
             200,
             QByteArrayLiteral("old audio"));
-    setRecommendations(
+    setAutoDJTracks(
             {recommendation(QStringLiteral("41"), QStringLiteral("Old"))});
     queueRecommendations();
     ASSERT_FALSE(autoDJRemoteIds().isEmpty());
@@ -666,11 +739,11 @@ TEST_F(RestLibraryFeatureTest, ChangedCandidatesCancelActiveAutoDJBatch) {
             {{QStringLiteral("track_id"), QStringLiteral("42")}},
             200,
             QByteArrayLiteral("new audio"));
-    setRecommendations(
+    setAutoDJTracks(
             {recommendation(QStringLiteral("42"), QStringLiteral("New"))});
 
-    EXPECT_TRUE(autoDJRemoteIds().isEmpty());
-    EXPECT_TRUE(autoDJPendingIsEmpty());
+    EXPECT_EQ(autoDJRemoteIds(), (QStringList{QStringLiteral("42")}));
+    EXPECT_EQ(autoDJPendingCount(), 1);
     EXPECT_TRUE(pOldAudio->WasAborted());
     pNewAudio->Done(true);
 }

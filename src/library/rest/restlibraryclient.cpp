@@ -3449,7 +3449,9 @@ RestLibraryPolicyPath RestLibraryClient::parsePolicyPathDocument(const QJsonDocu
                 remoteId,
                 {rootTracksById, planTracksById, pathTracksById}));
         RestLibraryPathStep step;
+        step.track = track;
         step.remoteId = track.remoteId.isEmpty() ? remoteId : track.remoteId;
+        step.track.remoteId = step.remoteId;
         step.title = track.title;
         step.artist = track.artist;
         step.score = readDouble(stepObject, {"score"});
@@ -3496,10 +3498,8 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
     if (authoritative.value(QStringLiteral("pressure_state")).isObject()) {
         state.pressureState = authoritative.value(QStringLiteral("pressure_state")).toObject();
     }
-    if (authoritative.value(QStringLiteral("selected_candidate")).isDouble()) {
-        state.selectedCandidateId =
-                authoritative.value(QStringLiteral("selected_candidate")).toInt();
-    }
+    state.selectedCandidateId =
+            readString(authoritative, {"selected_candidate"});
     if (authoritative.value(QStringLiteral("playback_controller")).isObject()) {
         state.playbackController =
                 authoritative.value(QStringLiteral("playback_controller")).toObject();
@@ -3599,7 +3599,9 @@ RestLibraryAuthoritativeState RestLibraryClient::parseAuthoritativeDocument(
                         candidateTracksById,
                         pathTracksById}));
         RestLibraryPathStep step;
+        step.track = track;
         step.remoteId = track.remoteId.isEmpty() ? remoteId : track.remoteId;
+        step.track.remoteId = step.remoteId;
         step.title = track.title.isEmpty() ? readString(stepObject, {"title", "label"})
                                            : track.title;
         step.artist = track.artist.isEmpty() ? readString(stepObject, {"artist"})

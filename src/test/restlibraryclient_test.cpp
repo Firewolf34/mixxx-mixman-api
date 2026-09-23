@@ -543,6 +543,7 @@ TEST(RestLibraryClientTest, ParsesMixManAuthoritativeSessionState) {
             "revision": 42,
             "playback": {"revision": 7, "current_track_id": 8},
             "pressure_revision": 3,
+            "selected_candidate": "00000000-0000-0000-0000-000000000009",
             "pressure_state": {"explore": 0.25},
             "playback_controller": {"instance_id": "inst-1", "lease_id": "lease-1", "generation": 4, "active": true},
             "blocked": {"sector_change": {"reason": "beacon"}},
@@ -573,6 +574,8 @@ TEST(RestLibraryClientTest, ParsesMixManAuthoritativeSessionState) {
     EXPECT_EQ(session.authoritative.revision, 42);
     EXPECT_EQ(session.authoritative.playbackRevision, 7);
     EXPECT_EQ(session.authoritative.pressureRevision, 3);
+    EXPECT_EQ(session.authoritative.selectedCandidateId,
+            QStringLiteral("00000000-0000-0000-0000-000000000009"));
     EXPECT_EQ(session.authoritative.intents.size(), 1);
     EXPECT_EQ(session.authoritative.queue.size(), 1);
     EXPECT_FALSE(session.authoritative.blocked.isEmpty());
@@ -584,6 +587,8 @@ TEST(RestLibraryClientTest, ParsesMixManAuthoritativeSessionState) {
     EXPECT_TRUE(session.authoritative.policyPath.candidates.at(0).reasonCodes.isEmpty());
     ASSERT_EQ(session.authoritative.policyPath.path.size(), 1);
     EXPECT_EQ(session.authoritative.policyPath.path.at(0).remoteId, QStringLiteral("9"));
+    EXPECT_EQ(session.authoritative.policyPath.path.at(0).track.remoteId,
+            QStringLiteral("9"));
 }
 
 TEST(RestLibraryClientTest, HydratesAuthoritativeCandidatesFromNestedTrackMap) {

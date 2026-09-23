@@ -123,6 +123,7 @@ class RestLibraryFeature final : public LibraryFeature {
     void rememberRemoteId(const QString& remoteId);
     QStringList recentRemoteIdsForRequest(const QString& remoteId) const;
     void setRecommendationTracks(const QList<RestLibraryTrack>& tracks);
+    void setAutoDJPath(const RestLibraryPolicyPath& policyPath);
     void ensureMixManSession(const RestLibrarySettings& settings);
     void resetMixManSessionState();
     QString mixManSessionConfigKey(const RestLibrarySettings& settings) const;
@@ -150,6 +151,9 @@ class RestLibraryFeature final : public LibraryFeature {
     void updateReadyStatus();
     void queueRecommendationsForAutoDJ();
     void finishRecommendationsAutoDJIfReady();
+    void retryAutoDJPathTrack(
+            const QString& remoteId,
+            const QString& pathFingerprint);
     void cancelRecommendationsAutoDJ();
     RestLibraryLoudnessResult prepareTrackForPlayback(
             const TrackPointer& pTrack,
@@ -189,6 +193,9 @@ class RestLibraryFeature final : public LibraryFeature {
     QStringList m_autoDJRemoteIds;
     QSet<QString> m_autoDJPendingIds;
     QSet<QString> m_autoDJFailedIds;
+    QList<RestLibraryTrack> m_autoDJPathTracks;
+    QHash<QString, int> m_autoDJRetryCounts;
+    QString m_autoDJPathFingerprint;
     TrackPointer m_pPendingDefaultLoadTrack;
     QString m_pendingDefaultLoadRemoteId;
     QHash<QString, PlayerLoadIntent> m_pendingPlayerLoads;
@@ -218,6 +225,7 @@ class RestLibraryFeature final : public LibraryFeature {
     bool m_playbackLeaseOwned = false;
     bool m_shutdownStarted = false;
     bool m_policyRefreshPersistsDraft = false;
+    bool m_autoDJPathIntent = false;
 
   signals:
     void statusTextChanged(const QString& statusText);

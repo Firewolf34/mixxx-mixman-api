@@ -443,6 +443,14 @@ deployment lock.
   and disabled targets until Update is pressed. Sync must only fetch
   authoritative state, and a track change must discard unapplied edits. Verify
   recommendation controls never write the shared `/intent` resource.
+- Enable AutoDJ from REST Recommendations with candidates `B/C/D` and an
+  authoritative path `B/E/F`. Confirm the visible table remains `B/C/D` while
+  AutoDJ queues `B/E/F`, preserves an already loaded transition, and replaces
+  only the future queue when the path changes. Candidate-only refreshes must not
+  restart preparation. Confirm an empty or short path stays empty/short, a UUID
+  `selected_candidate` is retained as an explicit commitment, and an unavailable
+  path track retries after 1, 2, and 4 seconds before being skipped with a
+  degraded diagnostic.
 - Verify rollback launches with the same library database and controller
   configuration.
 
