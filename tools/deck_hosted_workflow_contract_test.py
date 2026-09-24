@@ -12,6 +12,11 @@ GUARD = "/usr/local/bin/hosted-deploy-lease-guard"
 def main() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
+    concurrency = workflow.split("concurrency:", 1)[1].split("jobs:", 1)[0]
+    assert "group: mixxx-deck" in concurrency
+    assert "cancel-in-progress: false" in concurrency
+    assert "${{" not in concurrency
+
     assert workflow.count(GUARD) == 5
     for command in (
         "tools/deck_runner_cache_cleanup.sh --prepare",
