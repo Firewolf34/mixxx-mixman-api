@@ -13,7 +13,12 @@ def main() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     concurrency = workflow.split("concurrency:", 1)[1].split("jobs:", 1)[0]
-    assert "group: mixxx-deck" in concurrency
+    groups = [
+        line.split(":", 1)[1].strip()
+        for line in concurrency.splitlines()
+        if line.strip().startswith("group:")
+    ]
+    assert groups == ["mixxx-deck"]
     assert "cancel-in-progress: false" in concurrency
     assert "${{" not in concurrency
 
