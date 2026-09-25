@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mixxx-deck-${{ forgejo.ref }}
+  group: mixxx-deck
   cancel-in-progress: false
 
 jobs:
