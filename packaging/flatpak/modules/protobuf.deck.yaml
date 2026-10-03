@@ -1,0 +1,26 @@
+name: protobuf
+buildsystem: cmake-ninja
+config-opts:
+  # protobuf's descriptor translation unit exceeds the deck runner's guarded
+  # memory envelope with the SDK's debug flags. Keep the runner limits intact
+  # and make only this dependency's compile deliberately low-memory.
+  - -DCMAKE_BUILD_TYPE=Release
+  - "-DCMAKE_C_FLAGS_RELEASE=-O1 -g0 -DNDEBUG"
+  - "-DCMAKE_CXX_FLAGS_RELEASE=-O1 -g0 -DNDEBUG"
+  - -Dprotobuf_BUILD_TESTS=OFF
+sources:
+  - type: archive
+    url: https://github.com/protocolbuffers/protobuf/archive/refs/tags/v33.1.tar.gz
+    sha256: 0c98bb704ceb4e68c92f93907951ca3c36130bc73f87264e8c0771a80362ac97
+    x-checker-data:
+      type: anitya
+      project-id: 3715
+      stable-only: true
+      url-template: https://github.com/protocolbuffers/protobuf/archive/refs/tags/v$version.tar.gz
+cleanup:
+  - /bin
+  - /include
+  - /lib/cmake
+  - /lib/pkgconfig
+post-install:
+  - install -Dm644 -t ${FLATPAK_DEST}/share/licenses/protobuf LICENSE
