@@ -58,7 +58,7 @@ modules:
   - modules/googletest.yaml
   - modules/benchmark.yaml
   - modules/gsl.yaml
-  - modules/protobuf.yaml
+  - modules/protobuf.deck.yaml
   - modules/portaudio.yaml
   - modules/portmidi.yaml
   - modules/hidapi.yaml

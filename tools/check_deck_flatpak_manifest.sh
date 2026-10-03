@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 NORMAL_MANIFEST="${REPO_ROOT}/packaging/flatpak/org.mixxx.Mixxx.yaml"
 DECK_MANIFEST="${REPO_ROOT}/packaging/flatpak/org.mixxx.Mixxx.deck.yaml"
+NORMAL_PROTOBUF_MODULE="${REPO_ROOT}/packaging/flatpak/modules/protobuf.yaml"
+DECK_PROTOBUF_MODULE="${REPO_ROOT}/packaging/flatpak/modules/protobuf.deck.yaml"
 CMAKE_FILE="${REPO_ROOT}/CMakeLists.txt"
 QML_CONTROLS_REGISTRATION_SOURCE="${REPO_ROOT}/src/qml/qmlcontrolsregistration.cpp"
 DECK_DEPLOY_SCRIPT="${REPO_ROOT}/tools/deck_flatpak_deploy.sh"
@@ -26,9 +28,11 @@ DECK_UPDATE_SERVICE="${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.se
 DECK_UPDATE_TIMER="${REPO_ROOT}/packaging/flatpak/systemd/mixxx-deck-update.timer"
 NORMALIZED_NORMAL_MANIFEST="$(mktemp)"
 NORMALIZED_MANIFEST="$(mktemp)"
+NORMALIZED_DECK_PROTOBUF="$(mktemp)"
 
 cleanup() {
-    rm -f -- "${NORMALIZED_NORMAL_MANIFEST}" "${NORMALIZED_MANIFEST}"
+    rm -f -- "${NORMALIZED_NORMAL_MANIFEST}" "${NORMALIZED_MANIFEST}" \
+        "${NORMALIZED_DECK_PROTOBUF}"
 }
 trap cleanup EXIT
 
@@ -100,6 +104,10 @@ awk '
         print
         next
     }
+    $0 == "  - modules/protobuf.deck.yaml" {
+        print "  - modules/protobuf.yaml"
+        next
+    }
     $0 == "      - -DCMAKE_BUILD_TYPE=Release" {
         print "      - -DCMAKE_BUILD_TYPE=RelWithDebInfo"
         next
@@ -118,6 +126,23 @@ awk '
 
 if ! diff -u "${NORMALIZED_NORMAL_MANIFEST}" "${NORMALIZED_MANIFEST}"; then
     echo "Error: deck and normal Flatpak manifests have undocumented drift." >&2
+    exit 1
+fi
+
+awk '
+    $0 ~ /^  #/ { next }
+    $0 == "  - -DCMAKE_BUILD_TYPE=Release" {
+        print "  - -DCMAKE_BUILD_TYPE=RelWithDebInfo"
+        next
+    }
+    $0 == "  - \"-DCMAKE_C_FLAGS_RELEASE=-O1 -g0 -DNDEBUG\"" ||
+    $0 == "  - \"-DCMAKE_CXX_FLAGS_RELEASE=-O1 -g0 -DNDEBUG\"" {
+        next
+    }
+    { print }
+' "${DECK_PROTOBUF_MODULE}" >"${NORMALIZED_DECK_PROTOBUF}"
+if ! diff -u "${NORMAL_PROTOBUF_MODULE}" "${NORMALIZED_DECK_PROTOBUF}"; then
+    echo "Error: deck protobuf module has undocumented drift." >&2
     exit 1
 fi
 
