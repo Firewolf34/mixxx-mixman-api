@@ -457,7 +457,9 @@ manifest except for these intentional low-memory changes:
 - Mixxx itself remains a Release `-O2` build with no debug information;
 - the deck-only protobuf module uses Release `-O1 -g0 -DNDEBUG` to reduce
   compiler memory below the bounded runner's pressure envelope; the normal
-  manifest continues to use the unmodified protobuf module;
+  manifest continues to use the unmodified protobuf module. Its distinct
+  `protobuf-deck` module name prevents a retained normal-manifest CMake cache
+  from silently restoring `RelWithDebInfo` flags;
 - Flatpak debug extraction disabled and binaries stripped;
 - interprocedural optimization/LTO explicitly disabled;
 - GNU BFD forced for executable and shared-library links;

@@ -1,9 +1,11 @@
-name: protobuf
+name: protobuf-deck
 buildsystem: cmake-ninja
 config-opts:
   # protobuf's descriptor translation unit exceeds the deck runner's guarded
   # memory envelope with the SDK's debug flags. Keep the runner limits intact
-  # and make only this dependency's compile deliberately low-memory.
+  # and make only this dependency's compile deliberately low-memory. The
+  # deck-specific module name prevents Flatpak Builder from reusing a
+  # protobuf-1 CMake cache configured by the normal manifest.
   - -DCMAKE_BUILD_TYPE=Release
   - "-DCMAKE_C_FLAGS_RELEASE=-O1 -g0 -DNDEBUG"
   - "-DCMAKE_CXX_FLAGS_RELEASE=-O1 -g0 -DNDEBUG"
