@@ -176,7 +176,9 @@ Builder still uses one job and the Release/no-debug, low-memory-linker manifest.
 Mixxx remains at Release `-O2`; only the deck protobuf module is compiled with
 Release `-O1 -g0 -DNDEBUG` because run 40 showed sustained host pressure while
 compiling protobuf inside the bounded runner. The normal manifest keeps its
-unmodified protobuf module. The pressure guard aborts sustained severe
+unmodified protobuf module. The deck module is named `protobuf-deck` so the
+persistent Flatpak Builder state cannot reuse the normal module's stale
+`RelWithDebInfo` CMake cache. The pressure guard aborts sustained severe
 pressure. If the build OOMs, keep the ceiling and investigate rather than
 falling back to the deck.
 

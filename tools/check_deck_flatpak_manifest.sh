@@ -131,6 +131,10 @@ fi
 
 awk '
     $0 ~ /^  #/ { next }
+    $0 == "name: protobuf-deck" {
+        print "name: protobuf"
+        next
+    }
     $0 == "  - -DCMAKE_BUILD_TYPE=Release" {
         print "  - -DCMAKE_BUILD_TYPE=RelWithDebInfo"
         next
@@ -143,6 +147,11 @@ awk '
 ' "${DECK_PROTOBUF_MODULE}" >"${NORMALIZED_DECK_PROTOBUF}"
 if ! diff -u "${NORMAL_PROTOBUF_MODULE}" "${NORMALIZED_DECK_PROTOBUF}"; then
     echo "Error: deck protobuf module has undocumented drift." >&2
+    exit 1
+fi
+
+if ! grep -Fxq 'name: protobuf-deck' "${DECK_PROTOBUF_MODULE}"; then
+    echo "Error: deck protobuf must use an isolated Flatpak Builder module name." >&2
     exit 1
 fi
 
