@@ -454,7 +454,10 @@ seconds. Six consecutive samples above either 60% `some avg10` or 20%
 Deck publication uses `org.mixxx.Mixxx.deck.yaml`, synchronized with the normal
 manifest except for these intentional low-memory changes:
 
-- Release `-O2` build with no debug information;
+- Mixxx itself remains a Release `-O2` build with no debug information;
+- the deck-only protobuf module uses Release `-O1 -g0 -DNDEBUG` to reduce
+  compiler memory below the bounded runner's pressure envelope; the normal
+  manifest continues to use the unmodified protobuf module;
 - Flatpak debug extraction disabled and binaries stripped;
 - interprocedural optimization/LTO explicitly disabled;
 - GNU BFD forced for executable and shared-library links;

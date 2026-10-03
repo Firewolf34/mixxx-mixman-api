@@ -172,9 +172,13 @@ log to the deck, Git, or a public web route.
 `tools/deck_build_preflight.sh` is authoritative for the current phase-sensitive
 disk, artifact, memory/swap, cgroup, filesystem-separation, and startup-PSI
 thresholds. The workflow must pass it without weakened overrides. Flatpak
-Builder still uses one job and the Release/no-debug, low-memory-linker manifest;
-the pressure guard aborts sustained severe pressure. If the build OOMs, keep
-the ceiling and investigate rather than falling back to the deck.
+Builder still uses one job and the Release/no-debug, low-memory-linker manifest.
+Mixxx remains at Release `-O2`; only the deck protobuf module is compiled with
+Release `-O1 -g0 -DNDEBUG` because run 40 showed sustained host pressure while
+compiling protobuf inside the bounded runner. The normal manifest keeps its
+unmodified protobuf module. The pressure guard aborts sustained severe
+pressure. If the build OOMs, keep the ceiling and investigate rather than
+falling back to the deck.
 
 The workflow runs every admitted cache, preflight, SDK, and build/publication
 command through the installed host-capacity lease guard. It renews the exact
