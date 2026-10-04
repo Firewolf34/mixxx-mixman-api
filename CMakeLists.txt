@@ -424,6 +424,11 @@ option(
   "Reduce controller-preferences compiler memory for the constrained deck candidate"
   OFF
 )
+option(
+  MIXXX_DECK_LOW_MEMORY_CORE_SERVICES_COMPILATION
+  "Reduce core-services compiler memory for the constrained deck candidate"
+  OFF
+)
 
 if(QT6)
   set(QOPENGL ON CACHE INTERNAL "Forced ON because QT6=ON")
@@ -1867,6 +1872,17 @@ if(MIXXX_DECK_LOW_MEMORY_CONTROLLER_PREFERENCES_COMPILATION)
   # compiler-specific so normal builds and the rest of mixxx-lib are unchanged.
   set_property(
     SOURCE src/controllers/dlgprefcontroller.cpp
+    APPEND
+    PROPERTY COMPILE_OPTIONS
+      "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>>:-O1;-g0>"
+  )
+endif()
+if(MIXXX_DECK_LOW_MEMORY_CORE_SERVICES_COMPILATION)
+  # This translation unit is a measured memory hotspot on the bounded deck
+  # runner. Keep the workaround source-, configuration-, language-, and
+  # compiler-specific so normal builds and the rest of mixxx-lib are unchanged.
+  set_property(
+    SOURCE src/coreservices.cpp
     APPEND
     PROPERTY COMPILE_OPTIONS
       "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>>:-O1;-g0>"

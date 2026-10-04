@@ -137,6 +137,9 @@ awk '
     in_mixxx_config_opts && $0 == "      - -DMIXXX_DECK_LOW_MEMORY_CONTROLLER_PREFERENCES_COMPILATION=ON" {
         next
     }
+    in_mixxx_config_opts && $0 == "      - -DMIXXX_DECK_LOW_MEMORY_CORE_SERVICES_COMPILATION=ON" {
+        next
+    }
     $0 == "      - \"-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG\"" ||
     $0 == "      - \"-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG\"" ||
     $0 == "      - \"-DCMAKE_EXE_LINKER_FLAGS_RELEASE=-fuse-ld=bfd -Wl,--no-keep-memory,--reduce-memory-overheads\"" ||
@@ -236,6 +239,58 @@ if ! awk '
     [ "$(grep -Fc -- '-DMIXXX_DECK_LOW_MEMORY_CONTROLLER_PREFERENCES_COMPILATION=ON' "${DECK_MANIFEST}")" -ne 1 ] ||
     grep -Fq -- '-DMIXXX_DECK_LOW_MEMORY_CONTROLLER_PREFERENCES_COMPILATION=ON' "${NORMAL_MANIFEST}"; then
     echo "Error: the deck-only controller-preferences low-memory compile contract is incomplete." >&2
+    exit 1
+fi
+
+if ! awk '
+    $0 == "  MIXXX_DECK_LOW_MEMORY_CORE_SERVICES_COMPILATION" {
+        getline
+        getline
+        if ($0 == "  OFF") {
+            default_off++
+        }
+    }
+    END { exit default_off == 1 ? 0 : 1 }
+' "${CMAKE_FILE}" ||
+    ! awk '
+        $0 == "if(MIXXX_DECK_LOW_MEMORY_CORE_SERVICES_COMPILATION)" {
+            in_contract = 1
+            next
+        }
+        in_contract && $0 == "  set_property(" {
+            in_property = 1
+            source = 0
+            append = 0
+            compile_options = 0
+            flags = 0
+            next
+        }
+        in_property && $0 == "    SOURCE src/coreservices.cpp" {
+            source = 1
+            next
+        }
+        in_property && $0 == "    APPEND" { append = 1; next }
+        in_property && $0 == "    PROPERTY COMPILE_OPTIONS" {
+            compile_options = 1
+            next
+        }
+        in_property && $0 == "      \"$<$<AND:$<CONFIG:Release>,$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>>:-O1;-g0>\"" {
+            flags = 1
+            next
+        }
+        in_property && $0 == "  )" {
+            if (source && append && compile_options && flags) {
+                exact_contract++
+            }
+            in_property = 0
+            next
+        }
+        in_contract && $0 == "endif()" { in_contract = 0 }
+        END { exit exact_contract == 1 ? 0 : 1 }
+    ' "${CMAKE_FILE}" ||
+    [ "$(grep -Fc -- '-DMIXXX_DECK_LOW_MEMORY_CORE_SERVICES_COMPILATION=ON' "${DECK_MANIFEST}")" -ne 1 ] ||
+    grep -Fq -- '-DMIXXX_DECK_LOW_MEMORY_CORE_SERVICES_COMPILATION=ON' "${NORMAL_MANIFEST}"; then
+    echo "Error: the deck-only core-services low-memory compile contract is incomplete." >&2
     exit 1
 fi
 

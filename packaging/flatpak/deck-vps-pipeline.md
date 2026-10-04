@@ -460,8 +460,11 @@ manifest except for these intentional low-memory changes:
   compiler pressure spike;
 - only `src/controllers/dlgprefcontroller.cpp` in `mixxx-lib` also uses
   `-O1 -g0` after two bounded candidate runs independently reached it and then
-  crossed the pressure guard; normal builds and every other source keep their
-  existing flags;
+  crossed the pressure guard;
+- only `src/coreservices.cpp` in `mixxx-lib` also uses `-O1 -g0` after the next
+  bounded candidate completed the controller-preferences source but spent about
+  47 minutes swap-thrashing on core services; normal builds and every other
+  source keep their existing flags;
 - the deck-only protobuf module uses Release `-O1 -g0 -DNDEBUG` to reduce
   compiler memory below the bounded runner's pressure envelope; the normal
   manifest continues to use the unmodified protobuf module. Its distinct
