@@ -186,7 +186,10 @@ The deck manifest also enables a default-off CMake switch that compiles only
 for GNU/Clang Release builds. A second default-off switch applies the same
 override only to `src/controllers/dlgprefcontroller.cpp`, after two candidate
 runs independently reached that translation unit and then crossed the pressure
-guard. Normal builds and every other source retain their existing flags.
+guard. A third default-off switch applies it only to `src/coreservices.cpp`,
+after the next candidate completed controller preferences but spent about 47
+minutes swap-thrashing on core services. Normal builds and every other source
+retain their existing flags.
 
 The workflow runs every admitted cache, preflight, SDK, and build/publication
 command through the installed host-capacity lease guard. It renews the exact
