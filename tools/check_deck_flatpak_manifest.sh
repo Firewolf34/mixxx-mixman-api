@@ -140,6 +140,9 @@ awk '
     in_mixxx_config_opts && $0 == "      - -DMIXXX_DECK_LOW_MEMORY_CORE_SERVICES_COMPILATION=ON" {
         next
     }
+    in_mixxx_config_opts && $0 == "      - -DMIXXX_DECK_LOW_MEMORY_KEYWHEEL_COMPILATION=ON" {
+        next
+    }
     $0 == "      - \"-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG\"" ||
     $0 == "      - \"-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG\"" ||
     $0 == "      - \"-DCMAKE_EXE_LINKER_FLAGS_RELEASE=-fuse-ld=bfd -Wl,--no-keep-memory,--reduce-memory-overheads\"" ||
@@ -300,6 +303,67 @@ if ! awk '
     [ "$(grep -Fc -- '-DMIXXX_DECK_LOW_MEMORY_CORE_SERVICES_COMPILATION=ON' "${DECK_MANIFEST}")" -ne 1 ] ||
     grep -Fq -- '-DMIXXX_DECK_LOW_MEMORY_CORE_SERVICES_COMPILATION=ON' "${NORMAL_MANIFEST}"; then
     echo "Error: the deck-only core-services low-memory compile contract is incomplete." >&2
+    exit 1
+fi
+
+if ! awk '
+    $0 == "  MIXXX_DECK_LOW_MEMORY_KEYWHEEL_COMPILATION" {
+        getline
+        getline
+        if ($0 == "  OFF") {
+            default_off++
+        }
+    }
+    END { exit default_off == 1 ? 0 : 1 }
+' "${CMAKE_FILE}" ||
+    ! awk '
+        $0 == "if(MIXXX_DECK_LOW_MEMORY_KEYWHEEL_COMPILATION)" {
+            contract_count++
+            if (in_contract || contract_count != 1) {
+                invalid = 1
+            }
+            in_contract = 1
+            step = 0
+            next
+        }
+        in_contract && step == 0 && $0 ~ /^  #/ { next }
+        in_contract && step == 0 && $0 == "  set_property(" {
+            step = 1
+            next
+        }
+        in_contract && step == 1 && $0 == "    SOURCE src/dialog/dlgkeywheel.cpp" {
+            step = 2
+            next
+        }
+        in_contract && step == 2 && $0 == "    APPEND" {
+            step = 3
+            next
+        }
+        in_contract && step == 3 && $0 == "    PROPERTY COMPILE_OPTIONS" {
+            step = 4
+            next
+        }
+        in_contract && step == 4 && $0 == "      \"$<$<AND:$<CONFIG:Release>,$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>>:-O1;-g0>\"" {
+            step = 5
+            next
+        }
+        in_contract && step == 5 && $0 == "  )" {
+            step = 6
+            next
+        }
+        in_contract && step == 6 && $0 == "endif()" {
+            exact_contract++
+            in_contract = 0
+            next
+        }
+        in_contract { invalid = 1 }
+        END {
+            exit contract_count == 1 && exact_contract == 1 && !in_contract && !invalid ? 0 : 1
+        }
+    ' "${CMAKE_FILE}" ||
+    [ "$(grep -Fc -- '-DMIXXX_DECK_LOW_MEMORY_KEYWHEEL_COMPILATION=ON' "${DECK_MANIFEST}")" -ne 1 ] ||
+    grep -Fq -- '-DMIXXX_DECK_LOW_MEMORY_KEYWHEEL_COMPILATION=ON' "${NORMAL_MANIFEST}"; then
+    echo "Error: the deck-only keywheel low-memory compile contract is incomplete." >&2
     exit 1
 fi
 
