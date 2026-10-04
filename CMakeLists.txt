@@ -414,6 +414,11 @@ option(
   "Keep Qt QML C++ registration when Flatpak Builder typeinfo generation fails"
   OFF
 )
+option(
+  MIXXX_DECK_LOW_MEMORY_QML_COMPILATION
+  "Reduce Mixxx QML C++ compiler memory for the constrained deck candidate"
+  OFF
+)
 
 if(QT6)
   set(QOPENGL ON CACHE INTERNAL "Forced ON because QT6=ON")
@@ -3937,6 +3942,16 @@ if(QML)
   set(QT_QML_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml)
   qt_add_library(mixxx-qml-lib STATIC)
   mixxx_target_warnings_fatal(mixxx-qml-lib PUBLIC)
+  if(MIXXX_DECK_LOW_MEMORY_QML_COMPILATION)
+    # AUTOMOC sources, including the large generated mocs_compilation.cpp, are
+    # compiled as part of this target. Keep the constrained deck workaround
+    # target-, configuration-, language-, and compiler-specific.
+    target_compile_options(
+      mixxx-qml-lib
+      PRIVATE
+        "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>>:-O1;-g0>"
+    )
+  endif()
 
   if(WIN32)
     target_compile_definitions(mixxx-qml-lib PUBLIC __WINDOWS__)

@@ -74,6 +74,8 @@ awk '
     BEGIN {
         started = 0
         in_top_build_options = 0
+        in_mixxx_module = 0
+        in_mixxx_config_opts = 0
         modules_seen = 0
     }
     !started {
@@ -104,12 +106,32 @@ awk '
         print
         next
     }
+    $0 == "  - name: mixxx" {
+        in_mixxx_module = 1
+        print
+        next
+    }
+    in_mixxx_module && /^  - name:/ {
+        in_mixxx_module = 0
+        in_mixxx_config_opts = 0
+    }
+    in_mixxx_module && $0 == "    config-opts:" {
+        in_mixxx_config_opts = 1
+        print
+        next
+    }
+    in_mixxx_config_opts && $0 !~ /^      - / {
+        in_mixxx_config_opts = 0
+    }
     $0 == "  - modules/protobuf.deck.yaml" {
         print "  - modules/protobuf.yaml"
         next
     }
     $0 == "      - -DCMAKE_BUILD_TYPE=Release" {
         print "      - -DCMAKE_BUILD_TYPE=RelWithDebInfo"
+        next
+    }
+    in_mixxx_config_opts && $0 == "      - -DMIXXX_DECK_LOW_MEMORY_QML_COMPILATION=ON" {
         next
     }
     $0 == "      - \"-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG\"" ||
@@ -159,6 +181,60 @@ if ! grep -Fq 'set(MIXXX_QML_CONTROLS_OPTIONS)' "${CMAKE_FILE}" ||
     ! grep -Fq '${MIXXX_QML_CONTROLS_OPTIONS}' "${CMAKE_FILE}" ||
     ! grep -Fq 'src/qml/qmlcontrolsregistration.cpp' "${CMAKE_FILE}"; then
     echo "Error: the Flatpak Mixxx.Controls registration workaround is incomplete." >&2
+    exit 1
+fi
+
+if ! awk '
+    $0 == "  MIXXX_DECK_LOW_MEMORY_QML_COMPILATION" {
+        getline
+        getline
+        if ($0 == "  OFF") {
+            default_off++
+        }
+    }
+    END { exit default_off == 1 ? 0 : 1 }
+' "${CMAKE_FILE}" ||
+    ! awk '
+        $0 == "  if(MIXXX_DECK_LOW_MEMORY_QML_COMPILATION)" {
+            in_contract = 1
+            next
+        }
+        in_contract && $0 == "    target_compile_options(" {
+            in_options = 1
+            target = 0
+            private_scope = 0
+            flags = 0
+            next
+        }
+        in_options && $0 == "      mixxx-qml-lib" { target = 1; next }
+        in_options && $0 == "      PRIVATE" { private_scope = 1; next }
+        in_options && $0 == "        \"$<$<AND:$<CONFIG:Release>,$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>>:-O1;-g0>\"" {
+            flags = 1
+            next
+        }
+        in_options && $0 == "    )" {
+            if (target && private_scope && flags) {
+                exact_contract++
+            }
+            in_options = 0
+            next
+        }
+        in_contract && $0 == "  endif()" { in_contract = 0 }
+        END { exit exact_contract == 1 ? 0 : 1 }
+    ' "${CMAKE_FILE}" ||
+    ! awk '
+        $0 == "  - name: mixxx" { in_mixxx = 1; next }
+        in_mixxx && /^  - name:/ { in_mixxx = 0; in_config = 0 }
+        in_mixxx && $0 == "    config-opts:" { in_config = 1; next }
+        in_config && $0 !~ /^      - / { in_config = 0 }
+        in_config && $0 == "      - -DMIXXX_DECK_LOW_MEMORY_QML_COMPILATION=ON" {
+            exact_option++
+        }
+        END { exit exact_option == 1 ? 0 : 1 }
+    ' "${DECK_MANIFEST}" ||
+    [ "$(grep -Fc -- '-DMIXXX_DECK_LOW_MEMORY_QML_COMPILATION=ON' "${DECK_MANIFEST}")" -ne 1 ] ||
+    grep -Fq -- '-DMIXXX_DECK_LOW_MEMORY_QML_COMPILATION=ON' "${NORMAL_MANIFEST}"; then
+    echo "Error: the deck-only Mixxx QML low-memory compile contract is incomplete." >&2
     exit 1
 fi
 
