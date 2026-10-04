@@ -419,6 +419,11 @@ option(
   "Reduce Mixxx QML C++ compiler memory for the constrained deck candidate"
   OFF
 )
+option(
+  MIXXX_DECK_LOW_MEMORY_CONTROLLER_PREFERENCES_COMPILATION
+  "Reduce controller-preferences compiler memory for the constrained deck candidate"
+  OFF
+)
 
 if(QT6)
   set(QOPENGL ON CACHE INTERNAL "Forced ON because QT6=ON")
@@ -1855,6 +1860,18 @@ add_library(
   src/controllers/scripting/javascriptplayerproxy.cpp
   src/controllers/scripting/javascriptplayerproxy.h
 )
+
+if(MIXXX_DECK_LOW_MEMORY_CONTROLLER_PREFERENCES_COMPILATION)
+  # This translation unit is a measured memory hotspot on the bounded deck
+  # runner. Keep the workaround source-, configuration-, language-, and
+  # compiler-specific so normal builds and the rest of mixxx-lib are unchanged.
+  set_property(
+    SOURCE src/controllers/dlgprefcontroller.cpp
+    APPEND
+    PROPERTY COMPILE_OPTIONS
+      "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>>:-O1;-g0>"
+  )
+endif()
 set(MIXXX_COMMON_PRECOMPILED_HEADER src/util/assert.h)
 set(
   MIXXX_LIB_PRECOMPILED_HEADER
