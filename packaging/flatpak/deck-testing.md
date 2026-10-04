@@ -183,8 +183,10 @@ pressure. If the build OOMs, keep the ceiling and investigate rather than
 falling back to the deck.
 The deck manifest also enables a default-off CMake switch that compiles only
 `mixxx-qml-lib` (including its generated `mocs_compilation.cpp`) with `-O1 -g0`
-for GNU/Clang Release builds. Normal builds and every other target retain their
-existing flags.
+for GNU/Clang Release builds. A second default-off switch applies the same
+override only to `src/controllers/dlgprefcontroller.cpp`, after two candidate
+runs independently reached that translation unit and then crossed the pressure
+guard. Normal builds and every other source retain their existing flags.
 
 The workflow runs every admitted cache, preflight, SDK, and build/publication
 command through the installed host-capacity lease guard. It renews the exact
