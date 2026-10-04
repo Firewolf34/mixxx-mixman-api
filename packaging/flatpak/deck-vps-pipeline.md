@@ -455,6 +455,10 @@ Deck publication uses `org.mixxx.Mixxx.deck.yaml`, synchronized with the normal
 manifest except for these intentional low-memory changes:
 
 - Mixxx itself remains a Release `-O2` build with no debug information;
+- only the `mixxx-qml-lib` target, including its generated MOC translation
+  unit, uses `-O1 -g0` in GNU/Clang Release builds to reduce the observed
+  compiler pressure spike; normal builds and every other target keep their
+  existing flags;
 - the deck-only protobuf module uses Release `-O1 -g0 -DNDEBUG` to reduce
   compiler memory below the bounded runner's pressure envelope; the normal
   manifest continues to use the unmodified protobuf module. Its distinct
